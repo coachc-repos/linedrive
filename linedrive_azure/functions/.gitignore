@@ -1,0 +1,27 @@
+# Azure Function specific files
+.vscode/
+.azure/
+.env
+local.settings.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Azure
+.azure/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+.python_packages
+.venv

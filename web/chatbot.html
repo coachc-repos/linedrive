@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LineDrive AI Tournament Assistant</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: white;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            background: #f8f9fa;
+            color: #1e3a8a;
+            padding: 12px 16px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            border-bottom: 3px solid #1e3a8a;
+            flex-shrink: 0;
+        }
+
+        .header h1 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .header p {
+            opacity: 0.8;
+            font-size: 0.8rem;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 12px;
+            overflow-y: auto;
+            background: white;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-height: 200px;
+            max-height: none;
+        }
+
+        .message {
+            max-width: 90%;
+            padding: 8px 12px;
+            border-radius: 16px;
+            font-size: 13px;
+            line-height: 1.4;
+            word-wrap: break-word;
+            border: 1px solid #e5e7eb;
+        }
+
+        .message.user {
+            background: #1e3a8a;
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+            border-color: #1e3a8a;
+        }
+
+        .message.bot {
+            background: #f8f9fa;
+            color: #374151;
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+            border-color: #d1d5db;
+        }
+
+        /* Citation links styling */
+        .message.bot a {
+            color: #1e3a8a;
+            text-decoration: underline;
+            font-weight: 500;
+            transition: color 0.2s ease;
+        }
+
+        .message.bot a:hover {
+            color: #3b82f6;
+            text-decoration: underline;
+        }
+
+        .message.bot a:visited {
+            color: #7c3aed;
+        }
+
+        .message.typing {
+            background: #f3f4f6;
+            color: #374151;
+            align-self: flex-start;
+            font-style: italic;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+
+        .chat-input-container {
+            padding: 12px;
+            background: white;
+            flex-shrink: 0;
+        }
+
+        .chat-input-group {
+            display: flex;
+            gap: 8px;
+            align-items: flex-end;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 10px 14px;
+            border: 2px solid #d1d5db;
+            border-radius: 16px;
+            font-size: 13px;
+            resize: none;
+            min-height: 60px;
+            max-height: 120px;
+            transition: border-color 0.3s ease;
+            background: white;
+        }
+
+        .chat-input:focus {
+            outline: none;
+            border-color: #1e3a8a;
+            background: white;
+        }
+
+        .send-button {
+            background: #1e3a8a;
+            color: white;
+            border: 2px solid #1e3a8a;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        .send-button:hover:not(:disabled) {
+            background: #3b82f6;
+            border-color: #3b82f6;
+            transform: scale(1.05);
+        }
+
+        .send-button:disabled {
+            background: #e5e7eb;
+            border-color: #d1d5db;
+            color: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .welcome-message {
+            text-align: center;
+            color: #374151;
+            font-style: italic;
+            padding: 20px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            background: #f8f9fa;
+            font-size: 13px;
+        }
+
+        .error-message {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 2px solid #dc2626;
+            border-radius: 12px;
+            padding: 12px;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+
+        /* Scrollbar styling */
+        .chat-messages::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chat-messages::-webkit-scrollbar-track {
+            background: #f3f4f6;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: #d1d5db;
+            border-radius: 3px;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb:hover {
+            background: #1e3a8a;
+        }
+
+        .clear-button {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            background: white;
+            border: 2px solid #d1d5db;
+            color: #374151;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .clear-button:hover {
+            background: #f3f4f6;
+            border-color: #1e3a8a;
+            color: #1e3a8a;
+        }
+
+        .chat-header {
+            position: relative;
+        }
+
+        /* Table formatting for bot responses */
+        .message.bot table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 10px 0;
+            font-size: 13px;
+        }
+
+        .message.bot table th,
+        .message.bot table td {
+            border: 1px solid #1e3a8a;
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .message.bot table th {
+            background-color: #1e3a8a;
+            color: white;
+            font-weight: 600;
+        }
+
+        .message.bot table tr:nth-child(even) {
+            background-color: #f8fafc;
+        }
+
+        .message.bot table tr:hover {
+            background-color: #e2e8f0;
+        }
+
+        .message.bot pre {
+            background-color: #f1f5f9;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            padding: 12px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin: 8px 0;
+        }
+
+        .message.bot code {
+            background-color: #f1f5f9;
+            border: 1px solid #cbd5e1;
+            border-radius: 3px;
+            padding: 2px 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .message.bot ul, .message.bot ol {
+            margin: 8px 0;
+            padding-left: 20px;
+        }
+
+        .message.bot li {
+            margin: 4px 0;
+        }
+
+        /* Bold text formatting */
+        .message.bot strong {
+            font-weight: 700;
+            color: #1e3a8a;
+        }
+
+        .message.user strong {
+            font-weight: 700;
+            color: #fbbf24;
+        }
+
+        /* Mobile and Small Screen Responsive Design */
+        @media (max-width: 600px) {
+            .header {
+                padding: 8px 12px;
+            }
+            
+            .header h1 {
+                font-size: 1.1rem;
+                margin-bottom: 2px;
+            }
+            
+            .header p {
+                font-size: 0.75rem;
+            }
+            
+            .chat-messages {
+                padding: 8px;
+                gap: 8px;
+            }
+            
+            .message {
+                max-width: 95%;
+                padding: 6px 10px;
+                font-size: 12px;
+                border-radius: 12px;
+            }
+            
+            .chat-input-container {
+                padding: 8px;
+            }
+            
+            .chat-input {
+                padding: 8px 12px;
+                font-size: 12px;
+                min-height: 50px;
+                max-height: 100px;
+                border-radius: 12px;
+            }
+            
+            .send-button {
+                width: 32px;
+                height: 32px;
+                font-size: 14px;
+            }
+            
+            .clear-button {
+                top: 8px;
+                right: 12px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            
+            .welcome-message {
+                padding: 16px 8px;
+                font-size: 12px;
+            }
+        }
+
+        /* Extra small screens and iframes */
+        @media (max-width: 400px) {
+            .header {
+                padding: 6px 8px;
+            }
+            
+            .header h1 {
+                font-size: 1rem;
+                margin-bottom: 2px;
+            }
+            
+            .header p {
+                font-size: 0.7rem;
+            }
+            
+            .chat-messages {
+                padding: 6px;
+                gap: 6px;
+            }
+            
+            .message {
+                padding: 5px 8px;
+                font-size: 11px;
+                border-radius: 10px;
+            }
+            
+            .chat-input-container {
+                padding: 6px;
+            }
+            
+            .chat-input {
+                padding: 6px 10px;
+                font-size: 11px;
+                min-height: 40px;
+                max-height: 80px;
+                border-radius: 10px;
+            }
+            
+            .send-button {
+                width: 28px;
+                height: 28px;
+                font-size: 12px;
+            }
+            
+            .clear-button {
+                top: 6px;
+                right: 8px;
+                padding: 3px 6px;
+                font-size: 10px;
+            }
+            
+            .welcome-message {
+                padding: 12px 6px;
+                font-size: 11px;
+            }
+            
+            .message.bot table {
+                font-size: 10px;
+            }
+            
+            .message.bot table th,
+            .message.bot table td {
+                padding: 4px 6px;
+            }
+        }
+
+        /* Container height adjustments for iframe usage */
+        @media (max-height: 400px) {
+            .header {
+                padding: 4px 8px;
+            }
+            
+            .header h1 {
+                font-size: 0.9rem;
+                margin-bottom: 1px;
+            }
+            
+            .header p {
+                display: none; /* Hide subtitle in very short containers */
+            }
+            
+            .chat-messages {
+                min-height: 150px;
+                padding: 6px;
+            }
+            
+            .chat-input {
+                min-height: 36px;
+                max-height: 60px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1>⚾ LineDrive AI Assistant</h1>
+        <p>Your baseball knowledge and script creation companion</p>
+    </div>
+
+    <div class="chat-messages" id="chatMessages">
+        <!-- Welcome message will be handled by React component -->
+        <div style="padding: 20px; background: yellow; color: black; font-size: 18px;">
+            🔍 TEST: If you see this yellow message, the HTML is loading but React might have issues.
+        </div>
+    </div>
+    
+    <div class="chat-input-container">
+        <div class="chat-input-group">
+            <textarea 
+                id="chatInput" 
+                class="chat-input" 
+                placeholder="Ask about baseball players, teams, stats, or anything baseball-related..."
+                rows="3"
+            ></textarea>
+            <button id="sendButton" class="send-button" title="Send message">
+                ➤
+            </button>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Function to format message content with proper table rendering and bold text
+        const formatMessageContent = (content, sources = []) => {
+            if (typeof content !== 'string') return content;
+
+            // First, let's handle markdown-style tables and other common table formats
+            let processedContent = content;
+
+            // Check if content contains table-like structure
+            const lines = content.split('\n');
+            let formattedContent = '';
+            let inTable = false;
+            let tableRows = [];
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                
+                // Detect table rows (lines with multiple pipes or tabs)
+                const pipeCount = (line.match(/\|/g) || []).length;
+                const tabCount = (line.match(/\t/g) || []).length;
+                
+                if ((pipeCount >= 2) || (tabCount >= 2 && line.length > 10)) {
+                    if (!inTable) {
+                        inTable = true;
+                        tableRows = [];
+                    }
+                    tableRows.push(line);
+                } else if (line.includes('|') && pipeCount >= 1 && inTable) {
+                    // Continue table if we have at least one pipe and we're already in a table
+                    tableRows.push(line);
+                } else {
+                    // If we were in a table, process it
+                    if (inTable && tableRows.length > 1) { // Need at least 2 rows for a table
+                        formattedContent += formatTable(tableRows, sources);
+                        tableRows = [];
+                        inTable = false;
+                    } else if (inTable) {
+                        // False alarm, add the accumulated rows as regular text
+                        tableRows.forEach(row => {
+                            formattedContent += `<p>${formatTextWithBold(row, sources)}</p>`;
+                        });
+                        tableRows = [];
+                        inTable = false;
+                    }
+                    
+                    // Add the non-table line
+                    if (line) {
+                        formattedContent += `<p>${formatTextWithBold(line, sources)}</p>`;
+                    } else {
+                        formattedContent += '<br>';
+                    }
+                }
+            }
+
+            // Handle any remaining table at the end
+            if (inTable && tableRows.length > 1) {
+                formattedContent += formatTable(tableRows, sources);
+            } else if (inTable) {
+                // Add remaining rows as regular text
+                tableRows.forEach(row => {
+                    formattedContent += `<p>${formatTextWithBold(row, sources)}</p>`;
+                });
+            }
+
+            return formattedContent;
+        };
+
+        // Function to convert pipe-separated or tab-separated text to HTML table
+        const formatTable = (rows, sources = []) => {
+            if (rows.length === 0) return '';
+
+            let tableHtml = '<table>';
+            let isFirstRowHeader = true;
+            
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i];
+                let cells;
+                
+                // Determine separator (prefer pipes over tabs)
+                if (row.includes('|')) {
+                    cells = row.split('|').map(cell => cell.trim()).filter(cell => cell !== '');
+                } else {
+                    cells = row.split('\t').map(cell => cell.trim()).filter(cell => cell !== '');
+                }
+                
+                // Skip separator rows (like |---|---|)
+                if (cells.every(cell => cell.match(/^-+$/))) {
+                    continue;
+                }
+                
+                // Skip rows with too few cells
+                if (cells.length < 2) {
+                    continue;
+                }
+                
+                const isHeader = isFirstRowHeader && i === 0;
+                const tag = isHeader ? 'th' : 'td';
+                
+                tableHtml += '<tr>';
+                cells.forEach(cell => {
+                    const cleanCell = cell.replace(/^\|+|\|+$/g, '').trim(); // Remove leading/trailing pipes
+                    tableHtml += `<${tag}>${formatTextWithBold(cleanCell, sources)}</${tag}>`;
+                });
+                tableHtml += '</tr>';
+                
+                if (isHeader) isFirstRowHeader = false;
+            }
+            
+            tableHtml += '</table>';
+            return tableHtml;
+        };
+
+        // Function to convert URLs in text to clickable links and format citations
+        const convertUrlsToLinks = (text, sources = []) => {
+            let processedText = text;
+            
+            // First, handle citation markers like 【3:0†source】 and convert them to clickable links
+            const citationRegex = /【(\d+):(\d+)†source】/g;
+            processedText = processedText.replace(citationRegex, (match, doc, chunk) => {
+                const sourceId = `${doc}:${chunk}`;
+                const source = sources.find(s => s.id === sourceId);
+                
+                if (source && source.url) {
+                    return `<sup><a href="${source.url}" target="_blank" rel="noopener noreferrer" style="color: #1e3a8a; font-weight: bold; text-decoration: none;">[Source ${doc}:${chunk}]</a></sup>`;
+                } else {
+                    return `<sup style="color: #1e3a8a; font-weight: bold;">[Source ${doc}:${chunk}]</sup>`;
+                }
+            });
+            
+            // Then handle regular URLs, but avoid URLs that are already inside HTML tags
+            const urlRegex = /(?<!href=["'])(https?:\/\/[^\s<>"]+)(?![^<]*>)/g;
+            processedText = processedText.replace(urlRegex, (url) => {
+                // Create a clean display text for the URL
+                let displayText = url;
+                
+                // For Perfect Game URLs, show a clean name
+                if (url.includes('perfectgame.org')) {
+                    displayText = 'Perfect Game Schedule';
+                } else {
+                    // For other URLs, try to extract a clean domain name
+                    try {
+                        const urlObj = new URL(url);
+                        displayText = urlObj.hostname.replace('www.', '');
+                    } catch (e) {
+                        // If URL parsing fails, just use the last part of the path or domain
+                        displayText = url.split('/').pop() || url.replace(/https?:\/\/(www\.)?/, '').split('/')[0];
+                    }
+                }
+                
+                return `<a href="${url}" target="_blank" rel="noopener noreferrer">${displayText}</a>`;
+            });
+            
+            // Clean up any malformed markdown-style links that might interfere
+            // Remove patterns like ]([Source X:Y]." target="_blank"...)
+            processedText = processedText.replace(/\]\(\[Source \d+:\d+\]\." target="_blank"[^)]*\)/g, '');
+            
+            return processedText;
+        };
+
+        // Function to escape HTML and format bold text and clickable links
+        const formatTextWithBold = (text, sources = []) => {
+            // First escape HTML to prevent XSS
+            const div = document.createElement('div');
+            div.textContent = text;
+            let escapedText = div.innerHTML;
+            
+            // Then process **bold** formatting
+            escapedText = escapedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            
+            // Convert URLs to clickable links and format citations
+            escapedText = convertUrlsToLinks(escapedText, sources);
+            
+            return escapedText;
+        };
+
+        // Function to escape HTML to prevent XSS (for non-formatted text)
+        const escapeHtml = (text) => {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        };
+
+        function ChatBot() {
+            const [messages, setMessages] = useState([]);
+            const [input, setInput] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
+            const [currentThreadId, setCurrentThreadId] = useState(null);
+            const [userId] = useState(() => {
+                let id = localStorage.getItem('linedrive_user_id');
+                if (!id) {
+                    id = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                    localStorage.setItem('linedrive_user_id', id);
+                }
+                return id;
+            });
+
+            const messagesEndRef = useRef(null);
+            const inputRef = useRef(null);
+            const functionUrl = 'https://linedrive-functionapp-hhdxhefehafkeybm.eastus-01.azurewebsites.net';
+
+            // Load persisted thread ID on page load for conversation continuity
+            useEffect(() => {
+                const savedThreadId = localStorage.getItem('linedrive_thread_id');
+                if (savedThreadId) {
+                    setCurrentThreadId(savedThreadId);
+                    console.log('Restored thread ID from localStorage:', savedThreadId);
+                } else {
+                    console.log('No saved thread ID found - will start fresh conversation');
+                }
+            }, []);
+
+            // Note: Chat history is not saved to localStorage - fresh start on each page load
+            // This is intentional to ensure users start with a clean conversation
+
+            // Set up clear history button event listener
+            useEffect(() => {
+                const clearBtn = document.getElementById('clearHistoryBtn');
+                if (clearBtn) {
+                    clearBtn.onclick = (e) => {
+                        e.preventDefault();
+                        clearChatHistory();
+                    };
+                }
+                return () => {
+                    if (clearBtn) {
+                        clearBtn.onclick = null;
+                    }
+                };
+            }, []);
+
+            // Scroll to bottom only when new messages are added, not on every render
+            useEffect(() => {
+                if (messages.length > 0) {
+                    setTimeout(() => {
+                        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+                    }, 100);
+                }
+            }, [messages.length]); // Only trigger when message count changes
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!input.trim() || isLoading) return;
+
+                const userMessage = input.trim();
+                setInput('');
+                setIsLoading(true);
+
+                // Add user message
+                const newUserMessage = {
+                    id: Date.now(),
+                    type: 'user',
+                    content: userMessage,
+                    timestamp: new Date().toISOString()
+                };
+
+                setMessages(prev => [...prev, newUserMessage]);
+
+                // Add typing indicator
+                const typingMessage = {
+                    id: Date.now() + 1,
+                    type: 'typing',
+                    content: 'AI is thinking...',
+                    timestamp: new Date().toISOString()
+                };
+
+                setMessages(prev => [...prev, typingMessage]);
+
+                try {
+                    // Check if this is a tournament-related query
+                    const isTournamentQuery = checkIfTournamentQuery(userMessage);
+                    let tournamentData = null;
+
+                    if (isTournamentQuery) {
+                        // Extract parameters from the message
+                        const params = extractTournamentParams(userMessage);
+                        
+                        // Fetch real tournament data
+                        try {
+                            const tournamentResponse = await fetch(`${functionUrl}/api/scraper`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify(params)
+                            });
+
+                            if (tournamentResponse.ok) {
+                                tournamentData = await tournamentResponse.json();
+                                console.log('Fetched tournament data:', tournamentData);
+                            }
+                        } catch (error) {
+                            console.warn('Failed to fetch tournament data:', error);
+                        }
+                    }
+
+                    // Get full conversation history for context (excluding typing indicators)
+                    // Include the new user message in the history for proper context
+                    const currentConversation = [...messages.filter(msg => msg.type !== 'typing'), newUserMessage];
+                    const conversationHistory = currentConversation.map(msg => ({
+                        role: msg.type === 'user' ? 'user' : 'assistant',
+                        content: msg.content,
+                        timestamp: msg.timestamp
+                    }));
+
+                    console.log('Sending message with conversation history:', {
+                        message: userMessage,
+                        historyLength: conversationHistory.length,
+                        history: conversationHistory,
+                        hasTournamentData: !!tournamentData
+                    });
+
+                    // Prepare the request body
+                    const requestBody = {
+                        message: userMessage,
+                        conversation_history: conversationHistory,
+                        user_id: userId,
+                        include_full_context: true
+                    };
+
+                    // Add tournament data to context if available
+                    if (tournamentData && tournamentData.tournaments) {
+                        requestBody.tournament_context = {
+                            query_type: 'tournament_search',
+                            tournaments: tournamentData.tournaments,
+                            filters: tournamentData.filters,
+                            total_found: tournamentData.total_found
+                        };
+                    }
+
+                    console.log('Making fetch request to:', `${functionUrl}/api/ai_agent`);
+                    console.log('Request body:', {
+                        message: requestBody.message,
+                        thread_id: currentThreadId
+                    });
+
+                    const response = await fetch(`${functionUrl}/api/ai_agent`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            message: requestBody.message,
+                            thread_id: currentThreadId
+                        })
+                    });
+
+                    console.log('Fetch response:', {
+                        ok: response.ok,
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: Object.fromEntries(response.headers.entries())
+                    });
+
+                    const data = await response.json();
+                    
+                    // Handle rate limiting with retry logic
+                    if (response.status === 202 && data.error === 'rate_limit_retry') {
+                        // Show user feedback about waiting
+                        setMessages(prev => {
+                            const withoutTyping = prev.filter(msg => msg.type !== 'typing');
+                            return [...withoutTyping, {
+                                id: Date.now() + 2,
+                                type: 'bot',
+                                content: data.response || "System is still thinking, just a few more seconds...",
+                                timestamp: new Date().toISOString()
+                            }];
+                        });
+
+                        // Wait for the suggested delay, then retry
+                        const retryDelay = (data.retry_info?.next_delay || 20) * 1000; // Convert to milliseconds
+                        console.log(`Rate limited, retrying in ${retryDelay/1000} seconds...`);
+                        
+                        setTimeout(async () => {
+                            try {
+                                // Add typing indicator for retry
+                                setMessages(prev => [...prev, {
+                                    id: Date.now() + 3,
+                                    type: 'typing',
+                                    content: 'Retrying your request...',
+                                    timestamp: new Date().toISOString()
+                                }]);
+
+                                // Retry the request
+                                const retryResponse = await fetch(`${functionUrl}/api/ai_agent`, {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                    },
+                                    body: JSON.stringify({
+                                        message: requestBody.message,
+                                        thread_id: currentThreadId
+                                    })
+                                });
+
+                                const retryData = await retryResponse.json();
+                                
+                                // Update thread ID if provided
+                                if (retryData.thread_id) {
+                                    setCurrentThreadId(retryData.thread_id);
+                                    localStorage.setItem('linedrive_thread_id', retryData.thread_id);
+                                }
+
+                                let finalMessage = retryData.response || retryData.message;
+                                let sources = retryData.sources || [];
+
+                                // Remove typing indicator and replace with final response
+                                setMessages(prev => {
+                                    const withoutTyping = prev.filter(msg => msg.type !== 'typing');
+                                    return [...withoutTyping, {
+                                        id: Date.now() + 4,
+                                        type: 'bot',
+                                        content: finalMessage,
+                                        sources: sources,
+                                        timestamp: new Date().toISOString()
+                                    }];
+                                });
+
+                            } catch (retryError) {
+                                console.error('Retry failed:', retryError);
+                                setMessages(prev => {
+                                    const withoutTyping = prev.filter(msg => msg.type !== 'typing');
+                                    return [...withoutTyping, {
+                                        id: Date.now() + 4,
+                                        type: 'bot',
+                                        content: 'Sorry, the system is currently overloaded. Please try again in a few minutes.',
+                                        timestamp: new Date().toISOString()
+                                    }];
+                                });
+                            } finally {
+                                setIsLoading(false);
+                            }
+                        }, retryDelay);
+                        
+                        return; // Exit here, don't process further
+                    }
+
+                    // Handle rate limit exceeded (no more retries)
+                    if (response.status === 429 || data.error === 'rate_limit_exceeded') {
+                        setMessages(prev => {
+                            const withoutTyping = prev.filter(msg => msg.type !== 'typing');
+                            return [...withoutTyping, {
+                                id: Date.now() + 2,
+                                type: 'bot',
+                                content: data.response || "The system is experiencing high demand. Please try again in a few minutes.",
+                                timestamp: new Date().toISOString()
+                            }];
+                        });
+                        return; // Exit here
+                    }
+
+                    // Handle other HTTP errors
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    
+                    // Update thread ID if provided
+                    if (data.thread_id) {
+                        setCurrentThreadId(data.thread_id);
+                        localStorage.setItem('linedrive_thread_id', data.thread_id);
+                        console.log('Thread ID saved:', data.thread_id);
+                    }
+
+                    // Use the AI Agent response
+                    let finalMessage = data.response || data.message;
+                    let sources = data.sources || [];
+
+                    // Remove typing indicator and add bot response
+                    setMessages(prev => {
+                        const withoutTyping = prev.filter(msg => msg.type !== 'typing');
+                        return [...withoutTyping, {
+                            id: Date.now() + 2,
+                            type: 'bot',
+                            content: finalMessage,
+                            sources: sources,
+                            timestamp: new Date().toISOString()
+                        }];
+                    });
+
+                } catch (error) {
+                    console.error('Chat error:', error);
+                    console.error('Error details:', {
+                        name: error.name,
+                        message: error.message,
+                        stack: error.stack
+                    });
+                    
+                    // Remove typing indicator and add error message
+                    setMessages(prev => {
+                        const withoutTyping = prev.filter(msg => msg.type !== 'typing');
+                        return [...withoutTyping, {
+                            id: Date.now() + 2,
+                            type: 'bot',
+                            content: `Sorry, I encountered an error: ${error.message}. Please check the browser console for more details.`,
+                            timestamp: new Date().toISOString()
+                        }];
+                    });
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            // Function to check if a message is tournament-related
+            const checkIfTournamentQuery = (message) => {
+                const tournamentKeywords = [
+                    'tournament', 'tournaments', 'perfect game', 'pg', 'showcase', 'championship',
+                    'travel ball', 'baseball tournament', 'competition', 'event', 'games',
+                    '10u', '11u', '12u', '13u', '14u', '15u', '16u', '17u', '18u',
+                    'texas', 'austin', 'houston', 'dallas', 'san antonio'
+                ];
+                
+                const messageLower = message.toLowerCase();
+                return tournamentKeywords.some(keyword => messageLower.includes(keyword));
+            };
+
+            // Function to extract tournament search parameters from user message
+            const extractTournamentParams = (message) => {
+                const params = {};
+                const messageLower = message.toLowerCase();
+                
+                // Extract age group
+                const ageMatch = messageLower.match(/(\d+u)/);
+                if (ageMatch) {
+                    params.age_group = ageMatch[1].toUpperCase();
+                }
+                
+                // Extract Texas cities
+                const texasCities = ['austin', 'houston', 'dallas', 'san antonio', 'fort worth', 'arlington', 'plano'];
+                for (const city of texasCities) {
+                    if (messageLower.includes(city)) {
+                        params.city = city.charAt(0).toUpperCase() + city.slice(1);
+                        params.state = 'TX';
+                        break;
+                    }
+                }
+                
+                // Default to Texas if mentioned
+                if (messageLower.includes('texas') || messageLower.includes('tx')) {
+                    params.state = 'TX';
+                }
+                
+                return params;
+            };
+
+            // Function to format tournament data into a readable response
+            const formatTournamentResponse = (query, tournamentData) => {
+                if (!tournamentData.tournaments || tournamentData.tournaments.length === 0) {
+                    return "**No tournaments found** matching your criteria. Try adjusting your search parameters.";
+                }
+
+                let response = `**Found ${tournamentData.total_found} tournaments** matching your search:\n\n`;
+                
+                tournamentData.tournaments.slice(0, 5).forEach((tournament, index) => {
+                    response += `**${index + 1}. ${tournament.name}**\n`;
+                    response += `📍 **Location**: ${tournament.location}\n`;
+                    response += `👶 **Age Groups**: ${tournament.age_group}\n`;
+                    response += `📅 **Date**: ${tournament.date}\n`;
+                    if (tournament.teams && tournament.teams !== 'TBD') {
+                        response += `👥 **Teams**: ${tournament.teams}\n`;
+                    }
+                    if (tournament.entry_fee && tournament.entry_fee !== 'TBD') {
+                        response += `💰 **Entry Fee**: ${tournament.entry_fee}\n`;
+                    }
+                    response += `🏆 **Status**: ${tournament.status}\n`;
+                    if (tournament.url) {
+                        response += `🔗 **More Info**: ${tournament.url}\n`;
+                    }
+                    response += `\n`;
+                });
+
+                if (tournamentData.total_found > 5) {
+                    response += `*Showing first 5 results. ${tournamentData.total_found - 5} more tournaments available.*\n\n`;
+                }
+
+                response += `*Data sourced from Perfect Game - Real tournament information*`;
+                return response;
+            };
+
+            const handleKeyPress = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSubmit(e);
+                }
+            };
+
+            const handleInputChange = (e) => {
+                setInput(e.target.value);
+                // Auto-resize textarea but don't scroll the page
+                const target = e.target;
+                target.style.height = 'auto';
+                target.style.height = Math.min(target.scrollHeight, 200) + 'px';
+            };
+
+            const clearChatHistory = () => {
+                // Confirm before clearing
+                if (messages.length > 0 && !confirm('Are you sure you want to clear the current conversation?')) {
+                    return;
+                }
+                
+                // Clear current conversation and reset thread
+                setMessages([]);
+                setCurrentThreadId(null); // Reset thread ID to start fresh conversation
+                localStorage.removeItem('linedrive_thread_id'); // Clear persisted thread ID
+                console.log('Current conversation, thread, and localStorage cleared');
+                
+                // Show feedback to user after a brief delay
+                setTimeout(() => {
+                    setMessages([{
+                        id: Date.now(),
+                        type: 'bot',
+                        content: 'Conversation cleared. How can I help you today?',
+                        timestamp: new Date().toISOString()
+                    }]);
+                }, 200);
+            };
+
+            return (
+                <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <div className="chat-messages" id="chatMessages">
+                        {messages.length === 0 && (
+                            <div className="welcome-message">
+                                👋 Welcome! Ask me anything about baseball - player stats, team performance, game analysis, or general baseball questions!
+                                <br /><br />
+                                💬 <em>I'll remember our conversation until you click "Clear" or start a new session.</em>
+                            </div>
+                        )}
+                        
+                        {messages.map((message) => (
+                            <div
+                                key={message.id}
+                                className={`message ${message.type}`}
+                            >
+                                {message.type === 'bot' ? (
+                                    <div dangerouslySetInnerHTML={{ 
+                                        __html: formatMessageContent(message.content, message.sources) 
+                                    }} />
+                                ) : (
+                                    message.content
+                                )}
+                            </div>
+                        ))}
+                        <div ref={messagesEndRef} />
+                    </div>
+                    
+                    <div className="chat-input-container">
+                        <form onSubmit={handleSubmit} className="chat-input-group">
+                            <textarea
+                                ref={inputRef}
+                                value={input}
+                                onChange={handleInputChange}
+                                onKeyPress={handleKeyPress}
+                                className="chat-input"
+                                placeholder="Ask about baseball players, teams, stats, or anything baseball-related..."
+                                rows="3"
+                                disabled={isLoading}
+                            />
+                            <button 
+                                type="submit" 
+                                className="send-button"
+                                disabled={isLoading || !input.trim()}
+                                title="Send message"
+                            >
+                                ➤
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        // Render the ChatBot component into the chat-container
+        ReactDOM.render(<ChatBot />, document.querySelector('.chat-container'));
+    </script>
+</body>
+</html>

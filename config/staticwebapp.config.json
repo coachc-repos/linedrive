@@ -1,0 +1,26 @@
+{
+  "routes": [
+    {
+      "route": "/",
+      "rewrite": "/web/chatbot.html"
+    },
+    {
+      "route": "/chatbot",
+      "rewrite": "/web/chatbot.html"
+    },
+    {
+      "route": "/scriptcraft",
+      "rewrite": "/web/chatbot.html"
+    }
+  ],
+  "responseOverrides": {
+    "404": {
+      "rewrite": "/web/chatbot.html"
+    }
+  },
+  "mimeTypes": {
+    ".html": "text/html",
+    ".js": "text/javascript", 
+    ".css": "text/css"
+  }
+}

@@ -1,0 +1,11 @@
+name: linedrive-web
+metadata:
+  template: containerapp-python
+services:
+  web:
+    project: ./scriptcraft-app
+    language: python
+    host: containerapp
+    docker:
+      path: ./scriptcraft-app/Dockerfile
+      context: ./scriptcraft-app

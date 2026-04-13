@@ -1,0 +1,41 @@
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+.venv
+.pytest_cache
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+
+# Development
+.vscode
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+.env
+.env.*
+
+# Git
+.git*
+.gitignore
+
+# Azure Functions
+local.settings.json
+.python_packages
+
+# Test files
+test_*.py
+*_test.py
+
+# Build/Deploy artifacts
+*.zip
+*.tar.gz
+deployment*.zip

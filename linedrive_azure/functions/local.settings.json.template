@@ -1,0 +1,14 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AzureWebJobsFeatureFlags": "EnableWorkerIndexing",
+    "AZURE_AI_PROJECT_ENDPOINT": "https://<YOUR_AI_FOUNDRY_RESOURCE>.services.ai.azure.com/api/projects/christhi-linedrive-chat",
+    "AZURE_AI_AGENT_ID": "asst_Af0WH4FzLQz9ynOFirN0yiqe"
+  },
+  "Host": {
+    "CORS": "*",
+    "CORSCredentials": false
+  }
+}

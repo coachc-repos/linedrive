@@ -1,0 +1,47 @@
+# ScriptCraft Web App Docker Compose Configuration
+# Production deployment for AI-powered script creation
+
+version: '3.8'
+
+services:
+  scriptcraft-web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: scriptcraft-web-app
+    environment:
+      - PYTHONPATH=/app
+      - FLASK_ENV=production
+      # Azure credentials (provide via .env file or environment)
+      - AZURE_CLIENT_ID=${AZURE_CLIENT_ID:-}
+      - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET:-}
+      - AZURE_TENANT_ID=${AZURE_TENANT_ID:-}
+      # Azure CLI support
+      - AZURE_CONFIG_DIR=/home/scriptcraft/.azure
+    volumes:
+      # Persistent storage for output files
+      - scriptcraft-output:/app/output
+      - scriptcraft-logs:/app/logs
+      # Mount Azure CLI config for authentication (if available)
+      - ${HOME}/.azure:/home/scriptcraft/.azure:ro
+    ports:
+      - "5007:5007"  # ScriptCraft web interface
+    restart: unless-stopped
+    networks:
+      - scriptcraft-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5007/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  scriptcraft-output:
+    driver: local
+  scriptcraft-logs:
+    driver: local
+
+networks:
+  scriptcraft-network:
+    driver: bridge

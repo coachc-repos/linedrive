@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloud Cost Assistant</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .chat-container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+            height: 600px;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .chat-header {
+            background: #2d3748;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background: #f7fafc;
+        }
+        
+        .message {
+            margin-bottom: 15px;
+            padding: 12px 16px;
+            border-radius: 10px;
+            max-width: 80%;
+        }
+        
+        .user-message {
+            background: #4299e1;
+            color: white;
+            margin-left: auto;
+        }
+        
+        .assistant-message {
+            background: white;
+            color: #2d3748;
+            border: 1px solid #e2e8f0;
+        }
+        
+        .input-area {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e2e8f0;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .input-field {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 25px;
+            outline: none;
+            font-size: 14px;
+        }
+        
+        .input-field:focus {
+            border-color: #4299e1;
+        }
+        
+        .send-button {
+            padding: 12px 24px;
+            background: #4299e1;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        
+        .send-button:hover {
+            background: #3182ce;
+        }
+        
+        .send-button:disabled {
+            background: #a0aec0;
+            cursor: not-allowed;
+        }
+        
+        .thinking {
+            color: #718096;
+            font-style: italic;
+        }
+        
+        .examples {
+            margin-top: 20px;
+            color: white;
+            text-align: center;
+        }
+        
+        .example-queries {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        
+        .example-query {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.2s;
+        }
+        
+        .example-query:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        
+        pre {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌩️ Cloud Cost Assistant</h1>
+            <p>AI-powered Azure & GCP cost optimization</p>
+        </div>
+        
+        <div class="chat-container">
+            <div class="chat-header">
+                <h3>💬 Ask me anything about your cloud costs!</h3>
+            </div>
+            
+            <div class="chat-messages" id="chatMessages">
+                <div class="message assistant-message">
+                    <strong>🤖 Cloud Cost Assistant:</strong><br>
+                    Hi! I'm here to help you optimize your Azure and Google Cloud costs. I can:
+                    <ul>
+                        <li>📊 Analyze your current cloud spending</li>
+                        <li>🔍 Identify cost savings opportunities</li>
+                        <li>⚡ Execute optimization commands</li>
+                        <li>📈 Provide cost estimates and recommendations</li>
+                    </ul>
+                    What would you like to know about your cloud costs?
+                </div>
+            </div>
+            
+            <div class="input-area">
+                <input type="text" 
+                       class="input-field" 
+                       id="messageInput" 
+                       placeholder="Ask me about your cloud costs..."
+                       onkeypress="handleKeyPress(event)">
+                <button class="send-button" id="sendButton" onclick="sendMessage()">
+                    Send
+                </button>
+            </div>
+        </div>
+        
+        <div class="examples">
+            <p><strong>Try asking:</strong></p>
+            <div class="example-queries">
+                <span class="example-query" onclick="setMessage('What are my most expensive Azure services?')">
+                    What are my most expensive Azure services?
+                </span>
+                <span class="example-query" onclick="setMessage('How can I reduce my storage costs?')">
+                    How can I reduce my storage costs?
+                </span>
+                <span class="example-query" onclick="setMessage('Show me my GCP billing breakdown')">
+                    Show me my GCP billing breakdown
+                </span>
+                <span class="example-query" onclick="setMessage('Optimize my Azure Functions costs')">
+                    Optimize my Azure Functions costs
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let conversationHistory = [];
+        
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+        
+        function setMessage(message) {
+            document.getElementById('messageInput').value = message;
+            document.getElementById('messageInput').focus();
+        }
+        
+        function addMessage(content, isUser = false) {
+            const messagesContainer = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
+            
+            if (isUser) {
+                messageDiv.innerHTML = `<strong>You:</strong><br>${content}`;
+            } else {
+                messageDiv.innerHTML = `<strong>🤖 Assistant:</strong><br>${content}`;
+            }
+            
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            
+            return messageDiv;
+        }
+        
+        function addThinkingMessage() {
+            const thinkingDiv = addMessage('<span class="thinking">Thinking...</span>', false);
+            thinkingDiv.id = 'thinking-message';
+            return thinkingDiv;
+        }
+        
+        function removeThinkingMessage() {
+            const thinkingMessage = document.getElementById('thinking-message');
+            if (thinkingMessage) {
+                thinkingMessage.remove();
+            }
+        }
+        
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const sendButton = document.getElementById('sendButton');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            
+            // Disable input
+            input.disabled = true;
+            sendButton.disabled = true;
+            
+            // Add user message
+            addMessage(message, true);
+            conversationHistory.push({role: 'user', content: message});
+            
+            // Clear input
+            input.value = '';
+            
+            // Show thinking message
+            const thinkingMessage = addThinkingMessage();
+            
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        history: conversationHistory
+                    }),
+                });
+                
+                const data = await response.json();
+                
+                // Remove thinking message
+                removeThinkingMessage();
+                
+                // Add assistant response
+                const assistantMessage = data.response.replace(/\n/g, '<br>');
+                addMessage(assistantMessage, false);
+                conversationHistory.push({role: 'assistant', content: data.response});
+                
+            } catch (error) {
+                removeThinkingMessage();
+                addMessage(`Sorry, I encountered an error: ${error.message}`, false);
+            }
+            
+            // Re-enable input
+            input.disabled = false;
+            sendButton.disabled = false;
+            input.focus();
+        }
+    </script>
+</body>
+</html>

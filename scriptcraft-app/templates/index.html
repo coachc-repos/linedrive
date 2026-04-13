@@ -1,0 +1,3306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>🎬 ScriptCraft - Web GUI</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            min-height: 100vh;
+            padding: 10px;
+            font-size: 12px;
+            color: #e2e8f0;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: #1e293b;
+            border-radius: 10px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+            overflow: hidden;
+            border: 1px solid #334155;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+            color: white;
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            border-bottom: 2px solid #38bdf8;
+        }
+        
+        .header-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .header-logo .logo-icon {
+            font-size: 2em;
+            line-height: 1;
+            filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));
+        }
+        
+        .header-logo .logo-text h1 {
+            font-size: 1.3em;
+            margin: 0;
+            font-weight: 600;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .header-logo .logo-text p {
+            font-size: 0.7em;
+            margin: 0;
+            opacity: 0.9;
+        }
+        
+        .footer {
+            background: #0f172a;
+            color: #64748b;
+            padding: 8px;
+            text-align: center;
+            font-size: 0.65em;
+            border-top: 1px solid #1e293b;
+            position: relative;
+        }
+        
+        .footer-progress {
+            display: none;
+            margin-top: 8px;
+            padding: 0 20px;
+        }
+        
+        .footer-progress.active {
+            display: block;
+        }
+        
+        .footer-progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #1e293b;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 5px;
+        }
+        
+        .footer-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #0ea5e9 0%, #0284c7 100%);
+            border-radius: 2px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+        
+        .footer-progress-text {
+            font-size: 0.9em;
+            color: #0ea5e9;
+            font-weight: 500;
+        }
+        
+        .main-content {
+            padding: 15px;
+            background: #1e293b;
+        }
+        
+        .form-group {
+            margin-bottom: 8px;
+        }
+        
+        .form-group label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 3px;
+            color: #cbd5e1;
+            font-size: 0.85em;
+        }
+        
+        .form-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        
+        .form-row .form-group {
+            flex: 1;
+        }
+        
+        input[type="text"],
+        select {
+            width: 100%;
+            padding: 4px 6px;
+            border: 1px solid #475569;
+            border-radius: 4px;
+            font-size: 12px;
+            background: #0f172a;
+            color: #e2e8f0;
+            height: 28px;
+        }
+        
+        select:focus,
+        input[type="text"]:focus {
+            border-color: #0ea5e9;
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.2);
+        }
+        
+        textarea {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #475569;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.3;
+            resize: vertical;
+            min-height: 100px;
+            background: #0f172a;
+            color: #e2e8f0;
+            overflow-y: auto;
+        }
+        
+        textarea:focus {
+            border-color: #0ea5e9;
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.2);
+        }
+        
+        /* Markdown content styling */
+        .markdown-content {
+            width: 100%;
+            padding: 15px;
+            border: 1px solid #475569;
+            border-radius: 4px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 13px;
+            line-height: 1.6;
+            background: #0f172a;
+            color: #e2e8f0;
+            overflow-y: auto;
+            max-height: 600px;
+        }
+        
+        .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+            color: #38bdf8;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        
+        .markdown-content h1 { font-size: 1.8em; border-bottom: 2px solid #38bdf8; padding-bottom: 5px; }
+        .markdown-content h2 { font-size: 1.5em; }
+        .markdown-content h3 { font-size: 1.2em; }
+        
+        .markdown-content p {
+            margin-bottom: 10px;
+        }
+        
+        .markdown-content ul, .markdown-content ol {
+            margin-left: 25px;
+            margin-bottom: 10px;
+        }
+        
+        .markdown-content li {
+            margin-bottom: 5px;
+        }
+        
+        .markdown-content code {
+            background: #1e293b;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 0.9em;
+            color: #f472b6;
+        }
+        
+        .markdown-content pre {
+            background: #1e293b;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            margin-bottom: 10px;
+        }
+        
+        .markdown-content pre code {
+            background: none;
+            padding: 0;
+            color: #e2e8f0;
+        }
+        
+        .markdown-content table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 15px 0;
+            background: #1e293b;
+            border: 1px solid #475569;
+        }
+        
+        .markdown-content th {
+            background: #334155;
+            color: #38bdf8;
+            font-weight: bold;
+            text-align: left;
+            padding: 10px;
+            border: 1px solid #475569;
+        }
+        
+        .markdown-content td {
+            padding: 10px;
+            border: 1px solid #475569;
+            color: #e2e8f0;
+        }
+        
+        .markdown-content tr:nth-child(even) {
+            background: #1a2332;
+        }
+        
+        .markdown-content tr:hover {
+            background: #2d3748;
+        }
+        
+        .markdown-content blockquote {
+            border-left: 4px solid #38bdf8;
+            padding-left: 15px;
+            margin: 10px 0;
+            color: #94a3b8;
+            font-style: italic;
+        }
+        
+        .markdown-content hr {
+            border: none;
+            border-top: 2px solid #475569;
+            margin: 20px 0;
+        }
+        
+        .buttons {
+            display: flex;
+            gap: 6px;
+            margin: 8px 0;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.4);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: linear-gradient(135deg, #059669 0%, #047857 100%);
+        }
+        
+        .btn-secondary {
+            background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: linear-gradient(135deg, #475569 0%, #334155 100%);
+        }
+        
+        .btn-warning {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white;
+        }
+        
+        .btn-warning:hover {
+            background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+        }
+        
+        /* Icon Toolbar Styles */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 20px;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border-bottom: 2px solid #334155;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            flex-wrap: wrap;
+        }
+        
+        .toolbar-section {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .toolbar-label {
+            font-size: 0.65em;
+            color: #64748b;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-right: 4px;
+        }
+        
+        .toolbar-divider {
+            width: 1px;
+            height: 25px;
+            background: #334155;
+        }
+        
+        .toolbar-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            padding: 5px 8px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            min-width: 50px;
+        }
+        
+        .toolbar-btn:hover {
+            background: #334155;
+            border-color: #0ea5e9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(14, 165, 233, 0.2);
+        }
+        
+        .toolbar-btn:active {
+            transform: translateY(0);
+        }
+        
+        .toolbar-icon {
+            font-size: 1.2em;
+            line-height: 1;
+        }
+        
+        .toolbar-text {
+            font-size: 0.65em;
+            color: #ffffff;
+            font-weight: 500;
+        }
+        
+        .toolbar-btn:hover .toolbar-text {
+            color: #0ea5e9;
+        }
+        
+        /* Responsive toolbar */
+        @media (max-width: 768px) {
+            .toolbar {
+                justify-content: center;
+            }
+            
+            .toolbar-divider {
+                display: none;
+            }
+            
+            .toolbar-section {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            
+            .toolbar-label {
+                width: 100%;
+                text-align: center;
+                margin-bottom: 5px;
+            }
+        }
+        
+        .progress {
+            display: none;
+            padding: 8px;
+            background: #0f172a;
+            border-radius: 6px;
+            margin: 8px 0;
+            border: 1px solid #334155;
+        }
+        
+        .progress-header {
+            text-align: center;
+            margin-bottom: 6px;
+            font-size: 0.85em;
+            color: #cbd5e1;
+        }
+        
+        .spinner {
+            border: 2px solid #334155;
+            border-top: 2px solid #0ea5e9;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 6px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .progress-log {
+            max-height: 150px;
+            overflow-y: auto;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            padding: 6px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 10px;
+        }
+        
+        .progress-log-item {
+            padding: 2px 0;
+            border-bottom: 1px solid #334155;
+            word-wrap: break-word;
+            line-height: 1.2;
+            color: #94a3b8;
+        }
+        
+        .progress-log-item:last-child {
+            border-bottom: none;
+        }
+        
+        .progress-log-item.debug {
+            color: #64748b;
+        }
+        
+        .progress-log-item.info {
+            color: #0ea5e9;
+        }
+        
+        .progress-log-item.success {
+            color: #10b981;
+            font-weight: bold;
+        }
+        
+        .progress-log-item.error {
+            color: #ef4444;
+            font-weight: bold;
+        }
+        
+        .result {
+            margin-top: 8px;
+            padding: 8px;
+            background: #065f46;
+            border: 1px solid #10b981;
+            border-radius: 4px;
+            border-left: 3px solid #10b981;
+            font-size: 12px;
+            color: #d1fae5;
+        }
+        
+        .result.error {
+            background: #7f1d1d;
+            border-color: #ef4444;
+            border-left-color: #ef4444;
+            color: #fecaca;
+        }
+        
+        /* Tab Styles */
+        .tab-container {
+            background: #1e293b;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        
+        .tab-header {
+            display: flex;
+            background: #0f172a;
+            border-bottom: 2px solid #334155;
+        }
+        
+        .tab-button {
+            flex: 1;
+            padding: 12px 15px;
+            background: #0f172a;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: 500;
+            transition: all 0.3s;
+            border-right: 1px solid #334155;
+        }
+        
+        .tab-button:last-child {
+            border-right: none;
+        }
+        
+        .tab-button:hover {
+            background: #1e293b;
+            color: #cbd5e1;
+        }
+        
+        .tab-button.active {
+            background: #1e293b;
+            color: #0ea5e9;
+            border-bottom: 3px solid #0ea5e9;
+            margin-bottom: -2px;
+        }
+        
+        .tab-content {
+            display: none;
+            padding: 15px;
+            background: #1e293b;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .tab-content textarea {
+            width: 100%;
+            min-height: 400px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            padding: 15px;
+            background: #0f172a;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            font-size: 12px;
+            resize: vertical;
+        }
+        
+        /* Thumbnail Gallery Styles */
+        .thumbnail-gallery {
+            margin-top: 20px;
+            padding: 15px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+        }
+        
+        .thumbnail-gallery h3 {
+            margin-bottom: 15px;
+            color: #38bdf8;
+            font-size: 1.2em;
+        }
+        
+        .thumbnail-viewer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .thumbnail-main {
+            width: 100%;
+            max-width: 800px;
+            background: #1e293b;
+            border: 2px solid #334155;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .thumbnail-main img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .thumbnail-info {
+            padding: 10px 15px;
+            background: #0f172a;
+            color: #cbd5e1;
+            font-size: 0.9em;
+        }
+        
+        .thumbnail-info strong {
+            color: #38bdf8;
+        }
+        
+        .thumbnail-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .thumbnail-nav-btn {
+            padding: 8px 16px;
+            background: #0ea5e9;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        
+        .thumbnail-nav-btn:hover:not(:disabled) {
+            background: #0284c7;
+        }
+        
+        .thumbnail-nav-btn:disabled {
+            background: #334155;
+            color: #64748b;
+            cursor: not-allowed;
+        }
+        
+        .thumbnail-counter {
+            flex: 1;
+            text-align: center;
+            color: #cbd5e1;
+            font-size: 0.9em;
+        }
+        
+        .thumbnail-thumbnails {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #334155;
+        }
+        
+        .thumbnail-thumb {
+            width: 120px;
+            height: 68px;
+            border: 2px solid #334155;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            overflow: hidden;
+        }
+        
+        .thumbnail-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .thumbnail-thumb:hover {
+            border-color: #0ea5e9;
+            transform: scale(1.05);
+        }
+        
+        .thumbnail-thumb.active {
+            border-color: #38bdf8;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
+        }
+        
+        /* B-roll Table Styling */
+        .broll-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: #1e293b;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        
+        .broll-table thead {
+            background: linear-gradient(135deg, #0ea5e9 0%, #3b82f6 100%);
+        }
+        
+        .broll-table th {
+            padding: 12px 16px;
+            text-align: left;
+            color: #ffffff;
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .broll-table tbody tr {
+            border-bottom: 1px solid #334155;
+            transition: background-color 0.2s;
+        }
+        
+        .broll-table tbody tr:hover {
+            background: #2d3748;
+        }
+        
+        .broll-table tbody tr:last-child {
+            border-bottom: none;
+        }
+        
+        .broll-table td {
+            padding: 12px 16px;
+            color: #e2e8f0;
+            font-size: 14px;
+        }
+        
+        .broll-table td:first-child {
+            color: #38bdf8;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-logo">
+                <div class="logo-icon">🎬</div>
+                <div class="logo-text">
+                    <h1>ScriptCraft</h1>
+                    <p>AI-Powered Script Creation & Polishing</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Icon Toolbar -->
+        <div class="toolbar">
+            <div class="toolbar-section">
+                <span class="toolbar-label">Actions</span>
+                <button class="toolbar-btn" id="primaryBtn" onclick="processWorkflow()" title="Generate selected outputs">
+                    <span class="toolbar-icon">🚀</span>
+                    <span class="toolbar-text">Generate</span>
+                </button>
+            </div>
+            
+            <div class="toolbar-divider"></div>
+            
+            <div class="toolbar-section">
+                <span class="toolbar-label">Export</span>
+                <button class="toolbar-btn" onclick="exportToWord()" id="wordBtn" style="display:none;" title="Export to Word">
+                    <span class="toolbar-icon">📄</span>
+                    <span class="toolbar-text">Word</span>
+                </button>
+                <button class="toolbar-btn" onclick="createResolveProject()" id="davinciBtn" style="display:none;" title="Create DaVinci Project">
+                    <span class="toolbar-icon">🎬</span>
+                    <span class="toolbar-text">DaVinci</span>
+                </button>
+                <button class="toolbar-btn" onclick="exportToMarkdown()" id="markdownBtn" style="display:none;" title="Export to Markdown">
+                    <span class="toolbar-icon">📝</span>
+                    <span class="toolbar-text">Markdown</span>
+                </button>
+                <button class="toolbar-btn" onclick="exportHeyGenCurls()" id="heygenBtn" style="display:none;" title="Export HeyGen Curls">
+                    <span class="toolbar-icon">🎬</span>
+                    <span class="toolbar-text">HeyGen</span>
+                </button>
+                <button class="toolbar-btn" onclick="openComparisonFile()" id="comparisonBtn" style="display:none;" title="View Chapter Comparison Report">
+                    <span class="toolbar-icon">📊</span>
+                    <span class="toolbar-text">Comparison</span>
+                </button>
+                <button class="toolbar-btn" onclick="saveResult()" id="saveBtn" style="display:none;" title="Save Result">
+                    <span class="toolbar-icon">💾</span>
+                    <span class="toolbar-text">Save</span>
+                </button>
+            </div>
+            
+            <div class="toolbar-divider"></div>
+            
+            <div class="toolbar-section">
+                <span class="toolbar-label">Tools</span>
+                <button class="toolbar-btn" onclick="loadSample()" title="Load Sample">
+                    <span class="toolbar-icon">📄</span>
+                    <span class="toolbar-text">Sample</span>
+                </button>
+                <button class="toolbar-btn" onclick="document.getElementById('fileInput').click()" title="Load File">
+                    <span class="toolbar-icon">📁</span>
+                    <span class="toolbar-text">Load</span>
+                </button>
+                <button class="toolbar-btn" onclick="testThumbnails()" id="testThumbBtn" title="Test Thumbnails">
+                    <span class="toolbar-icon">🖼️</span>
+                    <span class="toolbar-text">Thumbnails</span>
+                </button>
+                <!-- Test Compare button hidden - not needed for production
+                <button class="toolbar-btn" onclick="testComparisons()" id="testCompBtn" title="Test Comparisons Tab">
+                    <span class="toolbar-icon">📊</span>
+                    <span class="toolbar-text">Test Compare</span>
+                </button>
+                -->
+                <button class="toolbar-btn" onclick="clearContent()" title="Clear">
+                    <span class="toolbar-icon">🗑️</span>
+                    <span class="toolbar-text">Clear</span>
+                </button>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <!-- Workflow Selection Checkboxes -->
+            <div class="form-group" style="background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; margin-bottom: 10px;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 4px;">
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
+                        <input type="checkbox" id="checkScript" onclick="toggleScriptInput()" checked style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">📝 Script</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
+                        <input type="checkbox" id="checkYouTubeDetails" style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">📺 YouTube</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
+                        <input type="checkbox" id="checkHeyGenReady" style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">🎬 HeyGen</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
+                        <input type="checkbox" id="checkBRollTable" style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">🎥 B-Roll</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
+                        <input type="checkbox" id="checkBRollImages" style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">🎨 B-Roll Img</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
+                        <input type="checkbox" id="checkHookSummary" style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">🎯 Hook</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
+                        <input type="checkbox" id="checkFlowAnalysis" style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">🔄 Flow</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
+                        <input type="checkbox" id="checkThumbnails" style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">🖼️ Thumb</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
+                        <input type="checkbox" id="checkDemoScript" style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">🎯 Demo</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- HeyGen Configuration -->
+            <div class="form-group" style="background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; margin-bottom: 10px;">
+                <div style="display: flex; gap: 15px; align-items: center;">
+                    <label for="heygenTemplateId" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;">Template ID:</label>
+                    <input type="text" id="heygenTemplateId" value="92c09f8e9a1c4f078f7ae53886b7ad80" style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
+                    <label for="heygenApiKey" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap; margin-left: 10px;">API Key:</label>
+                    <input type="text" id="heygenApiKey" value="ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==" style="width: 350px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
+                </div>
+            </div>
+
+            <!-- Mode Selector - Now simpler since checkboxes control workflow -->
+            
+            <!-- Script Input (shown when Script checkbox is NOT checked) -->
+            <div id="scriptInputSection" style="display: none;">
+                <div class="form-group">
+                    <label for="scriptInput">📝 Enter Your Script (Required when Script checkbox is unchecked):</label>
+                    <textarea id="scriptInput" placeholder="Paste or type your script content here, or click 'Load' button above to load a .md or .txt file..."></textarea>
+                </div>
+            </div>
+
+            <!-- Topic Input (shown when Script checkbox IS checked) -->
+            <div id="topicInputSection">
+                <div class="form-group">
+                    <label for="createTopic">💡 Topic/Subject:</label>
+                    <textarea id="createTopic" placeholder="Enter the topic or subject you want to create a script about...">Top 5 AI Tools for Consumers</textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="createDescription">📝 Description (Optional):</label>
+                    <textarea id="createDescription" placeholder="Provide additional details, context, or specific requirements for your script..."></textarea>
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="scriptDuration">⏱️ Script Duration:</label>
+                    <select id="scriptDuration">
+                        <option value="5">5 minutes</option>
+                        <option value="10" selected>10 minutes</option>
+                        <option value="15">15 minutes</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="audience">🎯 Target Audience:</label>
+                    <select id="audience">
+                        <option value="general">General Audience</option>
+                        <option value="beginners" selected>Beginners</option>
+                        <option value="professionals">Professionals</option>
+                        <option value="students">Students</option>
+                        <option value="experts">Experts</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="tone">🎭 Tone:</label>
+                    <select id="tone">
+                        <option value="professional">Professional</option>
+                        <option value="casual" selected>Casual</option>
+                        <option value="enthusiastic">Enthusiastic</option>
+                        <option value="informative">Informative</option>
+                        <option value="humorous">Humorous</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="productionType">🎥 Production Type:</label>
+                    <select id="productionType">
+                        <option value="video">Video</option>
+                        <option value="podcast">Podcast</option>
+                        <option value="live-stream">Live Stream</option>
+                        <option value="webinar">Webinar</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="technicalLevel">🎓 Technical Level:</label>
+                    <select id="technicalLevel">
+                        <option value="100" selected>Level 100</option>
+                        <option value="200">Level 200</option>
+                        <option value="300">Level 300</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="quickTest" style="width: auto; margin-right: 8px;">
+                        ⚡ Quick Test Mode (1 chapter, no thumbnails/YouTube details - ~2 min)
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Hidden file input -->
+            <input type="file" id="fileInput" accept=".md,.txt,.markdown" style="display: none;" onchange="loadFile(event)">
+            
+            <div id="progress" class="progress">
+                <div class="progress-header">
+                    <div class="spinner"></div>
+                    <p id="progressText">🔄 Processing...</p>
+                </div>
+                <div id="progressLog" class="progress-log">
+                    <!-- Progress messages will be appended here -->
+                </div>
+            </div>
+            
+            <div id="debugLog" class="progress" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0;">📋 Execution Log</h3>
+                    <button onclick="clearDebugLog()" style="padding: 2px 8px; font-size: 0.7em; background: #ef4444; border: 1px solid #dc2626; border-radius: 4px; color: white; cursor: pointer;">Clear Log</button>
+                </div>
+                <div id="debugLogContent" class="progress-log">
+                    <!-- Final debug log will be copied here -->
+                </div>
+            </div>
+            
+            <div id="result" style="display: none;">
+                <!-- Tabbed interface will be inserted here dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Check if we're in test mode and inject test data
+        {% if test_mode %}
+        window.addEventListener('DOMContentLoaded', function() {
+            console.log('🧪 Test mode active - loading mock comparison data');
+            
+            const mockScript = `# Test Script
+
+This is a test script to demonstrate the Comparisons tab.
+
+## Chapter 1
+Welcome to our channel content here...
+
+## Chapter 2  
+First principle content here...
+
+## Chapter 3
+Time management content here...`;
+
+            const mockComparisons = {{ test_comparisons | tojson }};
+            const mockThumbnails = {{ test_thumbnails | tojson }};
+            
+            // Display the tabbed interface with mock data
+            const tabbedHTML = createTabbedInterface(
+                mockScript,
+                null,  // No demo packages
+                mockThumbnails,
+                mockComparisons,
+                null,  // No flowOriginal
+                null,  // No flowImproved
+                null,  // No flowAnalysis
+                null,  // No edlContent
+                null,  // No edlFilename
+                null,  // No curlCommands
+                null   // No brollImages
+            );
+            
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = `
+                <h3>🧪 Test Mode: Chapter Comparisons Preview</h3>
+                <p style="color: #94a3b8; margin-bottom: 20px;">This is mock data to preview the Comparisons tab without running a full workflow.</p>
+                ${tabbedHTML}
+            `;
+            resultDiv.className = 'result success';
+            resultDiv.style.display = 'block';
+            
+            console.log('✅ Test data loaded successfully');
+        });
+        {% endif %}
+        
+        // Helper function to update footer progress
+        function updateFooterProgress(percentage, message) {
+            const footerProgress = document.getElementById('footerProgress');
+            const footerProgressFill = document.getElementById('footerProgressFill');
+            const footerProgressText = document.getElementById('footerProgressText');
+            
+            if (percentage > 0 && percentage < 100) {
+                footerProgress.classList.add('active');
+                footerProgressFill.style.width = percentage + '%';
+                footerProgressText.textContent = message || `${percentage}% complete`;
+            } else if (percentage >= 100) {
+                footerProgressFill.style.width = '100%';
+                footerProgressText.textContent = '✅ Complete!';
+                setTimeout(() => {
+                    footerProgress.classList.remove('active');
+                    footerProgressFill.style.width = '0%';
+                    footerProgressText.textContent = 'Ready';
+                }, 3000);
+            } else {
+                footerProgress.classList.remove('active');
+                footerProgressFill.style.width = '0%';
+                footerProgressText.textContent = 'Ready';
+            }
+        }
+        
+        // Helper function to add message to progress log
+        function addProgressMessage(message, type = 'info') {
+            const progressLog = document.getElementById('progressLog');
+            const logItem = document.createElement('div');
+            logItem.className = `progress-log-item ${type}`;
+            
+            // Add timestamp
+            const timestamp = new Date().toLocaleTimeString();
+            logItem.textContent = `[${timestamp}] ${message}`;
+            
+            progressLog.appendChild(logItem);
+            
+            // Auto-scroll to bottom
+            progressLog.scrollTop = progressLog.scrollHeight;
+        }
+        
+        // Helper function to clear progress log
+        function clearProgressLog() {
+            const progressLog = document.getElementById('progressLog');
+            progressLog.innerHTML = '';
+        }
+        
+        // Helper function to preserve debug log after completion
+        function preserveDebugLog() {
+            const progressLog = document.getElementById('progressLog');
+            const debugLogContent = document.getElementById('debugLogContent');
+            const debugLogDiv = document.getElementById('debugLog');
+            
+            // Copy all log items to the debug log
+            debugLogContent.innerHTML = progressLog.innerHTML;
+            
+            // Show the debug log section
+            debugLogDiv.style.display = 'block';
+        }
+        
+        // Helper function to clear debug log
+        function clearDebugLog() {
+            const debugLogContent = document.getElementById('debugLogContent');
+            debugLogContent.innerHTML = '';
+        }
+        
+        // Helper function to add message to debug log
+        function addToDebugLog(message) {
+            const debugLogContent = document.getElementById('debugLogContent');
+            const debugLogDiv = document.getElementById('debugLog');
+            const timestamp = new Date().toLocaleTimeString();
+            
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-item';
+            logEntry.innerHTML = `<span class="log-time">${timestamp}</span> ${message}`;
+            
+            debugLogContent.appendChild(logEntry);
+            debugLogDiv.style.display = 'block';
+            
+            // Auto-scroll to bottom
+            debugLogContent.scrollTop = debugLogContent.scrollHeight;
+        }
+        
+        // Global variable to track current thumbnail
+        let currentThumbnailIndex = 0;
+        let thumbnailData = [];
+        
+        // Function to render thumbnail gallery
+        function renderThumbnailGallery(thumbnails) {
+            if (!thumbnails || thumbnails.length === 0) {
+                return '';
+            }
+            
+            thumbnailData = thumbnails;
+            currentThumbnailIndex = 0;
+            
+            return `
+                <div class="thumbnail-gallery">
+                    <h3>🖼️ Generated Thumbnails (${thumbnails.length} variations)</h3>
+                    <div class="thumbnail-viewer">
+                        <div class="thumbnail-main">
+                            <img id="mainThumbnail" src="/thumbnails/${thumbnails[0].filename}" alt="${thumbnails[0].emotion}">
+                            <div class="thumbnail-info">
+                                <strong>Emotion:</strong> <span id="thumbnailEmotion">${thumbnails[0].emotion}</span><br>
+                                <strong>Text:</strong> <span id="thumbnailText">${thumbnails[0].text}</span>
+                            </div>
+                        </div>
+                        <div class="thumbnail-controls">
+                            <button class="thumbnail-nav-btn" onclick="previousThumbnail()" id="prevBtn">← Previous</button>
+                            <div class="thumbnail-counter">
+                                <span id="thumbnailCounter">1 of ${thumbnails.length}</span>
+                            </div>
+                            <button class="thumbnail-nav-btn" onclick="nextThumbnail()" id="nextBtn">Next →</button>
+                        </div>
+                        <div class="thumbnail-thumbnails">
+                            ${thumbnails.map((thumb, index) => `
+                                <div class="thumbnail-thumb ${index === 0 ? 'active' : ''}" onclick="showThumbnail(${index})" data-index="${index}">
+                                    <img src="/thumbnails/${thumb.filename}" alt="${thumb.emotion}">
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Function to show specific thumbnail
+        function showThumbnail(index) {
+            if (index < 0 || index >= thumbnailData.length) return;
+            
+            currentThumbnailIndex = index;
+            const thumb = thumbnailData[index];
+            
+            // Update main image
+            document.getElementById('mainThumbnail').src = `/thumbnails/${thumb.filename}`;
+            document.getElementById('thumbnailEmotion').textContent = thumb.emotion;
+            document.getElementById('thumbnailText').textContent = thumb.text;
+            document.getElementById('thumbnailCounter').textContent = `${index + 1} of ${thumbnailData.length}`;
+            
+            // Update thumbnail borders
+            document.querySelectorAll('.thumbnail-thumb').forEach((el, i) => {
+                if (i === index) {
+                    el.classList.add('active');
+                } else {
+                    el.classList.remove('active');
+                }
+            });
+            
+            // Update button states
+            document.getElementById('prevBtn').disabled = (index === 0);
+            document.getElementById('nextBtn').disabled = (index === thumbnailData.length - 1);
+        }
+        
+        // Function to go to next thumbnail
+        function nextThumbnail() {
+            if (currentThumbnailIndex < thumbnailData.length - 1) {
+                showThumbnail(currentThumbnailIndex + 1);
+            }
+        }
+        
+        // Function to go to previous thumbnail
+        function previousThumbnail() {
+            if (currentThumbnailIndex > 0) {
+                showThumbnail(currentThumbnailIndex - 1);
+            }
+        }
+        
+        // B-roll gallery variables and functions
+        let brollData = [];
+        let currentBrollIndex = 0;
+        
+        function renderBRollGallery(brollImages) {
+            if (!brollImages || brollImages.length === 0) return '';
+            
+            brollData = brollImages;
+            currentBrollIndex = 0;
+            const firstImage = brollImages[0];
+            const filename = firstImage.filename.split('/').pop();
+            
+            return `
+                <div class="thumbnail-gallery">
+                    <h3>🎨 Generated B-Roll Images (${brollImages.length} images)</h3>
+                    <div class="thumbnail-viewer">
+                        <div class="thumbnail-main">
+                            <img id="mainBRoll" src="/broll-images/${filename}" alt="${firstImage.search_term}">
+                            <div class="thumbnail-info">
+                                <strong>Search Term:</strong> <span id="brollSearchTerm">${firstImage.search_term}</span><br>
+                                <strong>Description:</strong> <span id="brollDescription">${firstImage.description}</span>
+                            </div>
+                        </div>
+                        <div class="thumbnail-controls">
+                            <button class="thumbnail-nav-btn" onclick="previousBRoll()" id="prevBRollBtn">← Previous</button>
+                            <div class="thumbnail-counter">
+                                <span id="brollCounter">1 of ${brollImages.length}</span>
+                            </div>
+                            <button class="thumbnail-nav-btn" onclick="nextBRoll()" id="nextBRollBtn">Next →</button>
+                        </div>
+                        <div class="thumbnail-thumbnails">
+                            ${brollImages.map((img, index) => {
+                                const fname = img.filename.split('/').pop();
+                                return `<div class="thumbnail-thumb ${index === 0 ? 'active' : ''}" onclick="showBRoll(${index})" data-index="${index}">
+                                    <img src="/broll-images/${fname}" alt="${img.search_term}">
+                                </div>`;
+                            }).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function showBRoll(index) {
+            if (index < 0 || index >= brollData.length) return;
+            
+            currentBrollIndex = index;
+            const img = brollData[index];
+            const filename = img.filename.split('/').pop();
+            
+            document.getElementById('mainBRoll').src = `/broll-images/${filename}`;
+            document.getElementById('brollSearchTerm').textContent = img.search_term;
+            document.getElementById('brollDescription').textContent = img.description;
+            document.getElementById('brollCounter').textContent = `${index + 1} of ${brollData.length}`;
+            
+            document.querySelectorAll('.thumbnail-thumb').forEach((el, i) => {
+                el.classList.toggle('active', i === index);
+            });
+            
+            document.getElementById('prevBRollBtn').disabled = (index === 0);
+            document.getElementById('nextBRollBtn').disabled = (index === brollData.length - 1);
+        }
+        
+        function nextBRoll() {
+            if (currentBrollIndex < brollData.length - 1) {
+                showBRoll(currentBrollIndex + 1);
+            }
+        }
+        
+        function previousBRoll() {
+            if (currentBrollIndex > 0) {
+                showBRoll(currentBrollIndex - 1);
+            }
+        }
+        
+        // Function to render content WITHOUT markdown heading parsing
+        // Only convert **bold** and markdown tables, keep everything else as plain text
+        function renderMarkdownContent(mainScript, demoPackages, flowOriginal, flowImproved) {
+            // Render main script
+            const mainScriptDiv = document.getElementById('mainScriptContent');
+            console.log('renderMarkdownContent called:', {
+                mainScriptDiv: !!mainScriptDiv,
+                mainScriptLength: mainScript ? mainScript.length : 0,
+                demoPackages: !!demoPackages,
+                flowOriginal: !!flowOriginal,
+                flowImproved: !!flowImproved
+            });
+            
+            if (mainScriptDiv && mainScript) {
+                // Helper function to parse markdown tables
+                function parseTable(tableText) {
+                    const lines = tableText.trim().split('\n');
+                    if (lines.length < 2) return tableText;
+                    
+                    // Check if it's a valid table (has pipes)
+                    if (!lines[0].includes('|')) return tableText;
+                    
+                    let html = '<table class="broll-table"><thead><tr>';
+                    
+                    // Parse header row
+                    const headers = lines[0].split('|').map(h => h.trim()).filter(h => h);
+                    headers.forEach(header => {
+                        html += `<th>${header}</th>`;
+                    });
+                    html += '</tr></thead><tbody>';
+                    
+                    // Skip separator line (line 1), parse data rows (line 2+)
+                    for (let i = 2; i < lines.length; i++) {
+                        if (!lines[i].includes('|')) continue;
+                        
+                        html += '<tr>';
+                        const cells = lines[i].split('|').map(c => c.trim()).filter(c => c);
+                        cells.forEach(cell => {
+                            html += `<td>${cell}</td>`;
+                        });
+                        html += '</tr>';
+                    }
+                    
+                    html += '</tbody></table>';
+                    return html;
+                }
+                
+                // MANUAL PARSING - Handle bold and tables, no headings
+                let html = mainScript;
+                
+                // First, extract and convert tables
+                const tableRegex = /(\|[^\n]+\|\n\|[-:|]+\|\n(?:\|[^\n]+\|\n?)+)/g;
+                const tables = [];
+                html = html.replace(tableRegex, (match) => {
+                    const placeholder = `<TABLE_${tables.length}>`;
+                    tables.push(parseTable(match));
+                    return placeholder;
+                });
+                
+                // Now process the rest
+                html = html
+                    // Convert **bold** to <strong> BEFORE escaping
+                    .replace(/\*\*([^*]+)\*\*/g, '<BOLD>$1</BOLD>')
+                    // Escape HTML
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    // Restore bold markers
+                    .replace(/&lt;BOLD&gt;/g, '<strong>')
+                    .replace(/&lt;\/BOLD&gt;/g, '</strong>')
+                    // Convert double newlines to paragraph breaks
+                    .replace(/\n\n+/g, '</p><p>')
+                    // Convert single newlines to <br>
+                    .replace(/\n/g, '<br>')
+                    // Wrap in paragraphs
+                    .replace(/^/, '<p>')
+                    .replace(/$/, '</p>')
+                    // Convert --- to hr
+                    .replace(/<p><br>---<br><\/p>/g, '<hr>');
+                
+                // Restore tables
+                tables.forEach((table, i) => {
+                    html = html.replace(`&lt;TABLE_${i}&gt;`, table);
+                });
+                    
+                mainScriptDiv.innerHTML = html;
+                console.log('Content rendered (no markdown headings, with tables)');
+            } else {
+                console.error('Failed to render:', { mainScriptDiv: !!mainScriptDiv, mainScript: !!mainScript });
+            }
+            
+            // Render demo packages if they exist
+            const demoPackagesDiv = document.getElementById('demoPackagesContent');
+            if (demoPackagesDiv && demoPackages) {
+                let html = demoPackages
+                    .replace(/\*\*([^*]+)\*\*/g, '<BOLD>$1</BOLD>')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/&lt;BOLD&gt;/g, '<strong>')
+                    .replace(/&lt;\/BOLD&gt;/g, '</strong>')
+                    .replace(/\n\n+/g, '</p><p>')
+                    .replace(/\n/g, '<br>')
+                    .replace(/^/, '<p>')
+                    .replace(/$/, '</p>')
+                    .replace(/<p><br>---<br><\/p>/g, '<hr>');
+                demoPackagesDiv.innerHTML = html;
+            }
+            
+            // Render flow original script if it exists
+            const flowOriginalDiv = document.getElementById('flowOriginalContent');
+            if (flowOriginalDiv && flowOriginal) {
+                let html = flowOriginal
+                    .replace(/\*\*([^*]+)\*\*/g, '<BOLD>$1</BOLD>')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/&lt;BOLD&gt;/g, '<strong>')
+                    .replace(/&lt;\/BOLD&gt;/g, '</strong>')
+                    .replace(/\n\n+/g, '</p><p>')
+                    .replace(/\n/g, '<br>')
+                    .replace(/^/, '<p>')
+                    .replace(/$/, '</p>')
+                    .replace(/<p><br>---<br><\/p>/g, '<hr>');
+                flowOriginalDiv.innerHTML = html;
+            }
+            
+            // Render flow improved script if it exists
+            const flowImprovedDiv = document.getElementById('flowImprovedContent');
+            if (flowImprovedDiv && flowImproved) {
+                let html = flowImproved
+                    .replace(/\*\*([^*]+)\*\*/g, '<BOLD>$1</BOLD>')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/&lt;BOLD&gt;/g, '<strong>')
+                    .replace(/&lt;\/BOLD&gt;/g, '</strong>')
+                    .replace(/\n\n+/g, '</p><p>')
+                    .replace(/\n/g, '<br>')
+                    .replace(/^/, '<p>')
+                    .replace(/$/, '</p>')
+                    .replace(/<p><br>---<br><\/p>/g, '<hr>');
+                flowImprovedDiv.innerHTML = html;
+            }
+        }
+        
+        // Function to switch tabs
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.classList.remove('active');
+            });
+            
+            // Show selected tab content
+            const selectedTab = document.getElementById(tabName + 'Tab');
+            if (selectedTab) {
+                selectedTab.classList.add('active');
+            }
+            
+            // Activate selected tab button
+            const selectedButton = document.querySelector(`[onclick="switchTab('${tabName}')"]`);
+            if (selectedButton) {
+                selectedButton.classList.add('active');
+            }
+            
+            // Check for videos when switching to curl commands tab
+            if (tabName === 'curl') {
+                checkArollVideos();
+            }
+        }
+        
+        // Function to render chapter comparisons as HTML table
+        function renderChapterComparisons(comparisons) {
+            let html = '<div style="padding: 20px;">';
+            html += '<h3>📊 Chapter Comparisons</h3>';
+            html += '<p style="color: #94a3b8; margin-bottom: 20px;">Side-by-side comparison of original vs revised chapters</p>';
+            
+            comparisons.forEach((comp, index) => {
+                html += `<div style="margin-bottom: 40px; border: 1px solid #334155; border-radius: 8px; padding: 20px; background: #1e293b;">`;
+                html += `<h4 style="color: #38bdf8; margin-bottom: 15px;">Chapter ${comp.chapter_num}</h4>`;
+                
+                // Feedback section
+                if (comp.feedback && comp.feedback !== "No feedback provided") {
+                    html += `<div style="background: #0f172a; padding: 15px; border-radius: 6px; margin-bottom: 20px;">`;
+                    html += `<h5 style="color: #fbbf24; margin-bottom: 10px;">📝 Reviewer Feedback</h5>`;
+                    html += `<pre style="color: #e2e8f0; white-space: pre-wrap; font-family: monospace; margin: 0;">${escapeHtml(comp.feedback)}</pre>`;
+                    html += `</div>`;
+                }
+                
+                // Comparison table with synchronized scrolling
+                html += `<div style="max-height: 400px; overflow-y: auto; overflow-x: hidden; border: 1px solid #334155; border-radius: 6px;">`;
+                html += `<table style="width: 100%; border-collapse: collapse; background: #0f172a; table-layout: fixed;">`;
+                html += `<thead style="position: sticky; top: 0; z-index: 10;">`;
+                html += `<tr style="background: #1e293b;">`;
+                html += `<th style="width: 50%; padding: 12px; text-align: left; border: 1px solid #334155; color: #38bdf8;">📄 Original</th>`;
+                html += `<th style="width: 50%; padding: 12px; text-align: left; border: 1px solid #334155; color: #10b981;">✏️ Revised</th>`;
+                html += `</tr>`;
+                html += `</thead>`;
+                html += `<tbody>`;
+                html += `<tr>`;
+                html += `<td style="padding: 15px; border: 1px solid #334155; vertical-align: top;">`;
+                html += `<pre style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace; margin: 0; font-size: 13px; line-height: 1.6;">${escapeHtml(comp.original)}</pre>`;
+                html += `</td>`;
+                html += `<td style="padding: 15px; border: 1px solid #334155; vertical-align: top;">`;
+                html += `<pre style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace; margin: 0; font-size: 13px; line-height: 1.6;">${escapeHtml(comp.revised)}</pre>`;
+                html += `</td>`;
+                html += `</tr>`;
+                html += `</tbody>`;
+                html += `</table>`;
+                html += `</div>`;
+                
+                html += `</div>`;
+            });
+            
+            html += '</div>';
+            return html;
+        }
+        
+        // Helper function to escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Function to create tabbed interface
+        function createTabbedInterface(mainScript, demoPackages, thumbnails, chapterComparisons, flowOriginal, flowImproved, flowAnalysis, edlContent, edlFilename, curlCommands, brollImages) {
+            let html = '<div class="tab-container">';
+            
+            // Tab Headers
+            html += '<div class="tab-header">';
+            html += '<button class="tab-button active" onclick="switchTab(\'mainScript\')">📝 Main Script</button>';
+            
+            if (demoPackages) {
+                html += '<button class="tab-button" onclick="switchTab(\'demoPackages\')">🎥 Demo Packages</button>';
+            }
+            
+            if (thumbnails && thumbnails.length > 0) {
+                html += '<button class="tab-button" onclick="switchTab(\'thumbnails\')">🖼️ Thumbnails</button>';
+            }
+            
+            if (brollImages && brollImages.length > 0) {
+                html += '<button class="tab-button" onclick="switchTab(\'brollImages\')">🎨 B-Roll Images</button>';
+            }
+            
+            if (chapterComparisons && chapterComparisons.length > 0) {
+                html += '<button class="tab-button" onclick="switchTab(\'comparisons\')">📊 Comparisons</button>';
+            }
+            
+            // Add flow analysis tabs if available
+            if (flowOriginal && flowImproved) {
+                html += '<button class="tab-button" onclick="switchTab(\'flowOriginal\')">📄 Original (Before Flow)</button>';
+                html += '<button class="tab-button" onclick="switchTab(\'flowImproved\')">✨ Revised (After Flow)</button>';
+            }
+            
+            // Add EDL tab if available
+            if (edlContent) {
+                html += '<button class="tab-button" onclick="switchTab(\'edl\')">🎬 EDL File</button>';
+            }
+            
+            // Add curl commands tab if available
+            if (curlCommands) {
+                html += '<button class="tab-button" onclick="switchTab(\'curl\')">🚀 Curl Commands</button>';
+            }
+            
+            html += '</div>'; // End tab-header
+            
+            // Tab Contents
+            html += '<div class="tab-contents">';
+            
+            // Main Script Tab
+            html += '<div id="mainScriptTab" class="tab-content active">';
+            html += '<h3>✅ Main Script</h3>';
+            html += `<div class="markdown-content" id="mainScriptContent"></div>`;
+            html += '</div>';
+            
+            // Demo Packages Tab
+            if (demoPackages) {
+                html += '<div id="demoPackagesTab" class="tab-content">';
+                html += '<h3>🎥 Demo Packages</h3>';
+                html += '<p style="margin-bottom: 10px; color: #94a3b8;">Production-ready demo scripts for different audiences</p>';
+                html += `<div class="markdown-content" id="demoPackagesContent"></div>`;
+                html += '</div>';
+            }
+            
+            // Thumbnails Tab
+            if (thumbnails && thumbnails.length > 0) {
+                html += '<div id="thumbnailsTab" class="tab-content">';
+                html += renderThumbnailGallery(thumbnails);
+                html += '</div>';
+            }
+            
+            // B-Roll Images Tab
+            if (brollImages && brollImages.length > 0) {
+                html += '<div id="brollImagesTab" class="tab-content">';
+                html += renderBRollGallery(brollImages);
+                html += '</div>';
+            }
+            
+            // Chapter Comparisons Tab
+            if (chapterComparisons && chapterComparisons.length > 0) {
+                html += '<div id="comparisonsTab" class="tab-content">';
+                html += renderChapterComparisons(chapterComparisons);
+                html += '</div>';
+            }
+            
+            // Flow Analysis Tabs
+            if (flowOriginal && flowImproved) {
+                // Original Script Tab
+                html += '<div id="flowOriginalTab" class="tab-content">';
+                html += '<h3>📄 Original Script (Before Flow Analysis)</h3>';
+                html += '<p style="margin-bottom: 10px; color: #94a3b8;">This is the script before flow and repetition improvements</p>';
+                html += `<div class="markdown-content" id="flowOriginalContent"></div>`;
+                html += '</div>';
+                
+                // Improved Script Tab
+                html += '<div id="flowImprovedTab" class="tab-content">';
+                html += '<h3>✨ Revised Script (After Flow Analysis)</h3>';
+                html += '<p style="margin-bottom: 10px; color: #94a3b8;">This is the improved script with repetitions removed and flow enhanced</p>';
+                if (flowAnalysis) {
+                    html += `<div class="markdown-content" style="background: #1e293b; padding: 15px; border-radius: 6px; margin-bottom: 20px;">${marked.parse(flowAnalysis)}</div>`;
+                }
+                html += `<div class="markdown-content" id="flowImprovedContent"></div>`;
+                html += '</div>';
+            }
+            
+            // EDL Tab
+            if (edlContent) {
+                html += '<div id="edlTab" class="tab-content">';
+                html += '<h3>🎬 EDL File (DaVinci Resolve Markers)</h3>';
+                html += '<p style="margin-bottom: 10px; color: #94a3b8;">CMX 3600 EDL file for importing timeline markers into DaVinci Resolve</p>';
+                if (edlFilename) {
+                    html += `<p style="margin-bottom: 15px; color: #60a5fa;"><strong>Filename:</strong> ${edlFilename}</p>`;
+                }
+                html += '<div style="margin-bottom: 15px;">';
+                html += '<button onclick="exportEDL()" style="background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 10px 20px; border-radius: 6px; cursor: pointer; margin-right: 10px; font-weight: 500; transition: all 0.2s;" onmouseover="this.style.background=\'#0f172a\'; this.style.borderColor=\'#38bdf8\';" onmouseout="this.style.background=\'#1e293b\'; this.style.borderColor=\'#334155\';">💾 Download EDL File</button>';
+                html += '<button onclick="copyEDLToClipboard()" style="background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 10px 20px; border-radius: 6px; cursor: pointer; margin-right: 10px; font-weight: 500; transition: all 0.2s;" onmouseover="this.style.background=\'#0f172a\'; this.style.borderColor=\'#38bdf8\';" onmouseout="this.style.background=\'#1e293b\'; this.style.borderColor=\'#334155\';">📋 Copy to Clipboard</button>';
+                html += '<button onclick="createResolveProject()" style="background: #10b981; color: #0f172a; border: 1px solid #059669; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 500; transition: all 0.2s;" onmouseover="this.style.background=\'#059669\'; this.style.color=\'#ffffff\';" onmouseout="this.style.background=\'#10b981\'; this.style.color=\'#0f172a\';">🎬 Create DaVinci Project</button>';
+                html += '</div>';
+                html += '<div style="background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 15px; margin-top: 15px;">';
+                html += '<h4 style="color: #94a3b8; margin-top: 0;">📋 EDL Content Preview:</h4>';
+                html += `<pre id="edlContent" style="color: #e2e8f0; overflow: auto; max-height: 400px; white-space: pre; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.6; margin: 0; padding: 10px; background: #020617; border-radius: 4px;">${escapeHtml(edlContent)}</pre>`;
+                html += '</div>';
+                html += '<div style="margin-top: 20px; background: #1e293b; padding: 15px; border-radius: 6px;">';
+                html += '<h4 style="color: #94a3b8; margin-top: 0;">📖 Import Instructions:</h4>';
+                html += '<ol style="color: #cbd5e1; line-height: 1.8;">';
+                html += '<li>Open DaVinci Resolve</li>';
+                html += '<li>Create or open your timeline</li>';
+                html += '<li>Go to <strong>File → Import → Timeline Markers from EDL</strong></li>';
+                html += '<li>Select the downloaded EDL file</li>';
+                html += '<li>Red markers will appear at the specified timecodes</li>';
+                html += '<li>Each marker shows the B-roll search term and description</li>';
+                html += '</ol>';
+                html += '</div>';
+                html += '</div>';
+            }
+            
+            // Curl Commands Tab
+            if (curlCommands) {
+                html += '<div id="curlTab" class="tab-content">';
+                html += '<div style="margin-bottom: 15px; display: flex; gap: 10px; flex-wrap: wrap;">';
+                html += '<button onclick="downloadCurlCommands()" class="toolbar-btn" style="display: flex;"><span class="toolbar-icon">💾</span><span class="toolbar-text">Download All</span></button>';
+                html += '<button onclick="copyCurlToClipboard()" class="toolbar-btn" style="display: flex;"><span class="toolbar-icon">📋</span><span class="toolbar-text">Copy All</span></button>';
+                html += '<button onclick="executeSelectedCurls()" class="toolbar-btn" style="display: flex;"><span class="toolbar-icon">▶️</span><span class="toolbar-text">Execute Selected</span></button>';
+                html += '<button onclick="toggleAllCurlCheckboxes()" class="toolbar-btn" style="display: flex;"><span class="toolbar-icon">☑️</span><span class="toolbar-text">Select All</span></button>';
+                html += '<button onclick="createDaVinciWithVideos()" id="davinciButton" class="toolbar-btn" style="display: flex;" disabled title="Execute curl commands and download videos first"><span class="toolbar-icon">🎬</span><span class="toolbar-text">Create DaVinci Project</span></button>';
+                html += '</div>';
+                
+                // Parse curl commands into individual commands
+                html += '<div style="background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 15px; margin-top: 15px;">';
+                html += '<table id="curlCommandsTable" style="width: 100%; border-collapse: collapse; color: #e2e8f0;">';
+                html += '<thead>';
+                html += '<tr style="border-bottom: 2px solid #334155;">';
+                html += '<th style="padding: 12px; text-align: center; width: 50px;"><input type="checkbox" id="selectAllCurls" onclick="toggleAllCurlCheckboxesFromHeader()" checked style="width: 18px; height: 18px; cursor: pointer;" title="Select/Unselect All"></th>';
+                html += '<th style="padding: 12px; text-align: left; width: 100px;">Chapter</th>';
+                html += '<th style="padding: 12px; text-align: left;">Curl Command</th>';
+                html += '<th style="padding: 12px; text-align: center; width: 120px;">Status</th>';
+                html += '<th style="padding: 12px; text-align: center; width: 120px;">Video Status</th>';
+                html += '</tr>';
+                html += '</thead>';
+                html += '<tbody>';
+                
+                // Split curl commands by double newline
+                const curlArray = curlCommands.split('\n\n').filter(cmd => cmd.trim() && cmd.includes('curl'));
+                curlArray.forEach((cmd, index) => {
+                    // Extract title from curl command JSON (e.g., "1234-Ch1p1")
+                    const titleMatch = cmd.match(/"title":\s*"([^"]+)"/);
+                    const videoTitle = titleMatch ? titleMatch[1] : `Command ${index + 1}`;
+                    
+                    // Display a shortened version for the table
+                    const displayName = videoTitle.includes('-Ch') ? 
+                        videoTitle.substring(videoTitle.lastIndexOf('-Ch') + 1) : videoTitle;
+                    
+                    html += '<tr style="border-bottom: 1px solid #1e293b;">';
+                    html += `<td style="padding: 12px; text-align: center;"><input type="checkbox" id="curlCheck${index}" class="curl-checkbox" checked style="width: 18px; height: 18px; cursor: pointer;"></td>`;
+                    html += `<td style="padding: 12px; color: #60a5fa; font-weight: 500;">${escapeHtml(displayName)}</td>`;
+                    html += `<td style="padding: 12px;"><pre id="curlCmd${index}" style="margin: 0; white-space: pre-wrap; word-wrap: break-word; font-size: 11px; line-height: 1.4; background: #1e293b; padding: 8px; border-radius: 4px; max-height: 150px; overflow-y: auto;" data-video-title="${escapeHtml(videoTitle)}">${escapeHtml(cmd.trim())}</pre></td>`;
+                    html += `<td id="curlStatus${index}" style="padding: 12px; text-align: center; font-size: 12px;">⏸️ Ready</td>`;
+                    html += `<td id="videoStatus${index}" style="padding: 12px; text-align: center; font-size: 12px;">-</td>`;
+                    html += '</tr>';
+                });
+                
+                html += '</tbody>';
+                html += '</table>';
+                html += '</div>';
+                
+                html += '<div style="margin-top: 20px; background: #1e293b; padding: 15px; border-radius: 6px;">';
+                html += '<h4 style="color: #94a3b8; margin-top: 0;">📖 Usage Instructions:</h4>';
+                html += '<ol style="color: #cbd5e1; line-height: 1.8;">';
+                html += '<li>Check the boxes next to the commands you want to execute</li>';
+                html += '<li>Click "Execute Selected" to run the checked commands</li>';
+                html += '<li><strong>Important:</strong> Replace <code style="background: #0f172a; padding: 2px 6px; border-radius: 3px; color: #60a5fa;">your_api_key_here</code> with your actual HeyGen API key before executing</li>';
+                html += '<li>Update the <code style="background: #0f172a; padding: 2px 6px; border-radius: 3px; color: #60a5fa;">avatar_id</code> with your preferred HeyGen avatar ID</li>';
+                html += '<li>Watch the <strong>Status</strong> column for execution progress</li>';
+                html += '<li>Watch the <strong>Video Status</strong> column for real-time video generation progress</li>';
+                html += '<li>Videos are automatically checked every 5 seconds until complete</li>';
+                html += '<li>Click the <strong>Download</strong> link when the video is ready</li>';
+                html += '<li>Use "Download All" to save all commands as a shell script</li>';
+                html += '</ol>';
+                html += '<div style="margin-top: 15px; padding: 10px; background: #0f172a; border-radius: 4px; border-left: 4px solid #3b82f6;">';
+                html += '<p style="margin: 0; color: #94a3b8; font-size: 13px;"><strong>Status Indicators:</strong></p>';
+                html += '<ul style="color: #cbd5e1; font-size: 12px; margin: 8px 0 0 20px; line-height: 1.6;">';
+                html += '<li>⏸️ <strong>Ready</strong> - Not yet executed</li>';
+                html += '<li>⏳ <strong>Running</strong> - Executing curl command</li>';
+                html += '<li>✅ <strong>Success</strong> - Curl executed successfully</li>';
+                html += '<li>🎬 <strong>Processing/Pending</strong> - HeyGen is generating your video</li>';
+                html += '<li>📹 <strong>Download</strong> - Video is ready! Click to download</li>';
+                html += '<li>❌ <strong>Failed</strong> - An error occurred (hover for details)</li>';
+                html += '</ul>';
+                html += '</div>';
+                html += '</div>';
+                html += '</div>';
+            }
+            
+            html += '</div>'; // End tab-contents
+            html += '</div>'; // End tab-container
+            
+            return html;
+        }
+        
+        // Function to go to previous thumbnail
+        function previousThumbnail() {
+            if (currentThumbnailIndex > 0) {
+                showThumbnail(currentThumbnailIndex - 1);
+            }
+        }
+        
+        function toggleScriptInput() {
+            const scriptChecked = document.getElementById('checkScript')?.checked || false;
+            const scriptInputSection = document.getElementById('scriptInputSection');
+            const topicInputSection = document.getElementById('topicInputSection');
+            const primaryBtn = document.getElementById('primaryBtn');
+            
+            if (scriptChecked) {
+                // Script will be generated, show topic inputs
+                scriptInputSection.style.display = 'none';
+                topicInputSection.style.display = 'block';
+                primaryBtn.onclick = processWorkflow;
+                primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Generate</span>';
+                primaryBtn.title = 'Generate selected outputs from topic';
+            } else {
+                // Script must be provided, show script input
+                scriptInputSection.style.display = 'block';
+                topicInputSection.style.display = 'none';
+                primaryBtn.onclick = processWorkflow;
+                primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Process</span>';
+                primaryBtn.title = 'Process script with selected outputs';
+            }
+            
+            // If "All" is checked, uncheck it since individual selection changed
+            const allCheckbox = document.getElementById('checkAll');
+            if (allCheckbox.checked) {
+                allCheckbox.checked = false;
+            }
+        }
+        
+        function toggleAllCheckboxes() {
+            const allChecked = document.getElementById('checkAll')?.checked || false;
+            const checkboxes = [
+                'checkScript',
+                'checkYouTubeDetails',
+                'checkHeyGenReady',
+                'checkCurlCommands',
+                'checkBRollTable',
+                'checkHookSummary',
+                'checkFlowAnalysis',
+                'checkThumbnails',
+                'checkDemoScript'
+            ];
+            
+            checkboxes.forEach(id => {
+                const checkbox = document.getElementById(id);
+                if (checkbox) {
+                    checkbox.checked = allChecked;
+                }
+            });
+            
+            // Update script input visibility based on Script checkbox
+            toggleScriptInput();
+        }
+        
+        function toggleMode() {
+            // Legacy function - now handled by checkbox system
+            // Keep for backwards compatibility but redirect to checkbox logic
+            toggleScriptInput();
+            document.getElementById('wordBtn').style.display = 'none';
+            document.getElementById('davinciBtn').style.display = 'none';
+            document.getElementById('saveBtn').style.display = 'none';
+        }
+
+        async function processWorkflow() {
+            // New unified workflow handler based on checkboxes
+            const scriptChecked = document.getElementById('checkScript')?.checked || false;
+            
+            // Get which checkboxes are selected
+            const youtubeChecked = document.getElementById('checkYouTubeDetails')?.checked || false;
+            const heygenChecked = document.getElementById('checkHeyGenReady')?.checked || false;
+            const brollChecked = document.getElementById('checkBRollTable')?.checked || false;
+            const hookSummaryChecked = document.getElementById('checkHookSummary')?.checked || false;
+            const flowAnalysisChecked = document.getElementById('checkFlowAnalysis')?.checked || false;
+            const thumbnailsChecked = document.getElementById('checkThumbnails')?.checked || false;
+            const demoChecked = document.getElementById('checkDemoScript')?.checked || false;
+            
+            // Validate: at least one checkbox must be selected
+            if (!scriptChecked && !youtubeChecked && !heygenChecked && 
+                !brollChecked && !hookSummaryChecked && !flowAnalysisChecked && !thumbnailsChecked && !demoChecked) {
+                alert('Please select at least one output to generate!');
+                return;
+            }
+            
+            if (scriptChecked) {
+                // Script will be generated - call createScript which handles full workflow
+                await createScript();
+            } else {
+                // Script already exists - process it with selected outputs
+                await processExistingScript();
+            }
+        }
+
+        async function processExistingScript() {
+            // Get the script content
+            const scriptInput = document.getElementById('scriptInput');
+            const script = scriptInput.value.trim();
+            
+            if (!script) {
+                alert('Please enter a script to process!');
+                return;
+            }
+            
+            // Get checkbox selections (curl auto-enabled with heygen)
+            const heygenChecked = document.getElementById('checkHeyGenReady')?.checked || false;
+            const brollChecked = document.getElementById('checkBRollTable')?.checked || false;
+            const brollImagesEl = document.getElementById('checkBRollImages');
+            const checkboxes = {
+                youtube_details: document.getElementById('checkYouTubeDetails')?.checked || false,
+                heygen: heygenChecked,
+                curl: heygenChecked,  // Auto-enable curl with heygen
+                broll: brollChecked,
+                broll_images: brollChecked && brollImagesEl && brollImagesEl.checked,  // Requires B-Roll table
+                davinci: false,  // DaVinci removed from checkboxes, handled by button
+                hook_summary: document.getElementById('checkHookSummary')?.checked || false,
+                flow_analysis: document.getElementById('checkFlowAnalysis')?.checked || false,
+                thumbnails: document.getElementById('checkThumbnails')?.checked || false,
+                demo: document.getElementById('checkDemoScript')?.checked || false
+            };
+            
+            // Get metadata
+            const topic = document.getElementById('createTopic').value.trim() || 'Video Script';
+            const audience = document.getElementById('audience').value;
+            const videoLength = document.getElementById('scriptDuration').value + ' minutes';
+            
+            // Show progress
+            const progressDiv = document.getElementById('progress');
+            const progressText = document.getElementById('progressText');
+            const resultDiv = document.getElementById('result');
+            progressDiv.style.display = 'block';
+            progressText.textContent = '🔄 Starting script processing...';
+            resultDiv.style.display = 'none';
+            clearProgressLog();
+            addProgressMessage('Starting script processing...', 'info');
+            updateFooterProgress(5, 'Starting...');
+            
+            try {
+                // Get HeyGen configuration
+                const heygenTemplateId = document.getElementById('heygenTemplateId').value;
+                const heygenApiKey = document.getElementById('heygenApiKey').value;
+                
+                // Start the processing job and get session ID
+                const response = await fetch('/process-script', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        script: script,
+                        topic: topic,
+                        audience: audience,
+                        videoLength: videoLength,
+                        checkboxes: checkboxes,
+                        heygen_template_id: heygenTemplateId,
+                        heygen_api_key: heygenApiKey
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success || !data.session_id) {
+                    progressDiv.style.display = 'none';
+                    resultDiv.innerHTML = `<h3>❌ Processing Failed</h3><p>${data.error || 'Failed to start script processing'}</p>`;
+                    resultDiv.className = 'result error';
+                    resultDiv.style.display = 'block';
+                    updateFooterProgress(0, 'Ready');
+                    return;
+                }
+                
+                // Connect to SSE progress stream
+                const sessionId = data.session_id;
+                const eventSource = new EventSource(`/progress/${sessionId}`);
+                
+                eventSource.onmessage = function(event) {
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.status === 'progress') {
+                        const msgText = message.message || '🔄 Processing your script...';
+                        progressText.textContent = msgText;
+                        
+                        // Update footer progress if percentage is provided
+                        if (message.progress !== undefined) {
+                            updateFooterProgress(message.progress, msgText);
+                        }
+                        
+                        // Determine message type based on content
+                        let msgType = 'info';
+                        if (msgText.includes('✅') || msgText.includes('completed')) {
+                            msgType = 'success';
+                        } else if (msgText.includes('❌') || msgText.includes('ERROR')) {
+                            msgType = 'error';
+                        }
+                        
+                        addProgressMessage(msgText, msgType);
+                    } else if (message.status === 'complete') {
+                        eventSource.close();
+                        const processedScript = message.script || '';
+                        const scriptTitle = message.script_title || 'Processed Script';
+                        addProgressMessage('✅ Script processing completed!', 'success');
+                        
+                        // Update footer progress to 100%
+                        updateFooterProgress(100, '✅ Complete!');
+                        
+                        // Preserve the debug log before hiding progress
+                        preserveDebugLog();
+                        progressDiv.style.display = 'none';
+                        
+                        if (processedScript) {
+                            // Extract EDL data from message
+                            const edlContent = message.edl_content || null;
+                            const edlFilename = message.edl_filename || null;
+                            const curlCommands = message.curl_commands || null;
+                            const brollImages = message.broll_images || null;
+                            
+                            // Store script globally for export functions
+                            window.currentScript = processedScript;
+                            window.currentFlowOriginal = null;
+                            window.currentFlowImproved = null;
+                            window.currentEDLContent = edlContent;
+                            window.currentEDLFilename = edlFilename;
+                            window.currentCurlCommands = curlCommands;
+                            window.currentScriptTitle = scriptTitle;
+                            
+                            // Create tabbed interface for results with EDL support
+                            const tabbedHTML = createTabbedInterface(
+                                processedScript,
+                                null,  // demo_packages not yet implemented
+                                null,  // thumbnails not yet implemented
+                                null,  // chapter_comparisons not applicable for process workflow
+                                null,  // flowOriginal not applicable
+                                null,  // flowImproved not applicable
+                                null,  // flowAnalysis not applicable
+                                edlContent,  // EDL content if B-roll was generated
+                                edlFilename,  // EDL filename if available
+                                curlCommands,  // Curl commands if generated
+                                brollImages  // B-roll images if generated
+                            );
+                            
+                            let resultHTML = `
+                                <h3>✅ Script Processed Successfully!</h3>
+                                <p><strong>Title:</strong> <span id="displayedScriptTitle">${scriptTitle}</span></p>
+                                ${tabbedHTML}
+                            `;
+                            
+                            resultDiv.innerHTML = resultHTML;
+                            resultDiv.className = 'result';
+                            resultDiv.style.display = 'block';
+                            
+                            // Render markdown content - use setTimeout to ensure DOM is ready
+                            setTimeout(() => {
+                                // Store original markdown for Word export
+                                const contentDiv = document.getElementById('mainScriptContent');
+                                if (contentDiv) {
+                                    contentDiv.setAttribute('data-original-markdown', processedScript);
+                                }
+                                renderMarkdownContent(processedScript, null);
+                                console.log('Rendered markdown for script length:', processedScript ? processedScript.length : 0);
+                            }, 100);
+                            
+                            addProgressMessage('✅ Script processing complete!', 'success');
+                            
+                            // Show toolbar buttons
+                            document.getElementById('wordBtn').style.display = 'inline-block';
+                            document.getElementById('markdownBtn').style.display = 'inline-block';
+                            document.getElementById('heygenBtn').style.display = 'inline-block';
+                            document.getElementById('saveBtn').style.display = 'inline-block';
+                            
+                            // DaVinci button is now in Curl Commands tab, not here
+                            // (Removed auto-creation logic - user clicks button manually)
+                            
+                            // Check for existing aRoll videos ONLY if HeyGen/curl commands were generated
+                            if (curlCommands) {
+                                setTimeout(() => {
+                                    checkArollVideos();
+                                }, 500);
+                            }
+                            
+                            // Scroll to results
+                            resultDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        } else {
+                            resultDiv.innerHTML = `<h3>❌ Processing Failed</h3><p>No script content received</p>`;
+                            resultDiv.className = 'result error';
+                            resultDiv.style.display = 'block';
+                            updateFooterProgress(0, 'Ready');
+                        }
+                    } else if (message.status === 'error') {
+                        eventSource.close();
+                        
+                        // Reset footer progress on error
+                        updateFooterProgress(0, 'Ready');
+                        
+                        // Preserve the debug log before hiding progress
+                        preserveDebugLog();
+                        progressDiv.style.display = 'none';
+                        resultDiv.innerHTML = `<h3>❌ Processing Failed</h3><p>${message.error || 'Unknown error occurred'}</p>`;
+                        resultDiv.className = 'result error';
+                        resultDiv.style.display = 'block';
+                        addProgressMessage('❌ Processing failed: ' + message.error, 'error');
+                    }
+                };
+                
+                eventSource.onerror = function(error) {
+                    console.error('SSE Error:', error);
+                    eventSource.close();
+                    updateFooterProgress(0, 'Ready');
+                    progressDiv.style.display = 'none';
+                    resultDiv.innerHTML = `<h3>❌ Connection Error</h3><p>Lost connection to server. Please try again.</p>`;
+                    resultDiv.className = 'result error';
+                    resultDiv.style.display = 'block';
+                    addProgressMessage('❌ Connection error', 'error');
+                };
+                
+            } catch (error) {
+                updateFooterProgress(0, 'Ready');
+                progressDiv.style.display = 'none';
+                alert('Error processing script: ' + error.message);
+                addProgressMessage('❌ Error: ' + error.message, 'error');
+            }
+        }
+
+        async function createScript() {
+            const topicInput = document.getElementById('createTopic');
+            const descriptionInput = document.getElementById('createDescription');
+            const durationSelect = document.getElementById('scriptDuration');
+            const audienceSelect = document.getElementById('audience');
+            const productionSelect = document.getElementById('productionType');
+            const progressDiv = document.getElementById('progress');
+            const progressText = document.getElementById('progressText');
+            const resultDiv = document.getElementById('result');
+            
+            const topic = topicInput.value.trim();
+            const description = descriptionInput.value.trim();
+            const duration = durationSelect.value;
+            const audience = audienceSelect.value;
+            const tone = document.getElementById('tone').value;
+            const productionType = productionSelect.value;
+            const quickTest = document.getElementById('quickTest').checked;
+            
+            if (!topic) {
+                alert('Please enter a topic to create a script about!');
+                return;
+            }
+            
+            progressDiv.style.display = 'block';
+            progressText.textContent = quickTest ? '⚡ Quick test: Creating 1-chapter script...' : '🎬 Creating your script with AI...';
+            resultDiv.style.display = 'none';
+            document.getElementById('debugLog').style.display = 'none';
+            clearProgressLog();
+            addProgressMessage(quickTest ? '⚡ Quick test mode: 1 chapter (~2 min)' : 'Starting script creation...', 'info');
+            
+            try {
+                // Gather checkbox selections (curl auto-enabled with heygen)
+                const heygenChecked = document.getElementById('checkHeyGenReady')?.checked || false;
+                const brollChecked = document.getElementById('checkBRollTable')?.checked || false;
+                const brollImagesEl = document.getElementById('checkBRollImages');
+                const checkboxes = {
+                    script: document.getElementById('checkScript')?.checked || false,
+                    youtube_details: document.getElementById('checkYouTubeDetails')?.checked || false,
+                    heygen: heygenChecked,
+                    curl: heygenChecked,  // Auto-enable curl with heygen
+                    broll: brollChecked,
+                    broll_images: brollChecked && brollImagesEl && brollImagesEl.checked,  // Requires B-Roll table
+                    davinci: false,  // DaVinci removed from checkboxes, handled by button
+                    hook_summary: document.getElementById('checkHookSummary')?.checked || false,
+                    flow_analysis: document.getElementById('checkFlowAnalysis')?.checked || false,
+                    thumbnails: document.getElementById('checkThumbnails')?.checked || false,
+                    demo: document.getElementById('checkDemoScript')?.checked || false,
+                    all: document.getElementById('checkAll')?.checked || false
+                };
+                
+                // Start script creation
+                const response = await fetch('/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        topic: topic,
+                        description: description,
+                        duration: duration,
+                        audience: audience,
+                        tone: tone,
+                        production_type: productionType,
+                        quick_test: quickTest,
+                        checkboxes: checkboxes
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success || !data.session_id) {
+                    progressDiv.style.display = 'none';
+                    resultDiv.innerHTML = `<h3>❌ Creation Failed</h3><p>${data.error || 'Failed to start script creation'}</p>`;
+                    resultDiv.className = 'result error';
+                    resultDiv.style.display = 'block';
+                    return;
+                }
+                
+                // Connect to SSE progress stream
+                const sessionId = data.session_id;
+                const eventSource = new EventSource(`/progress/${sessionId}`);
+                let finalScript = '';
+                
+                eventSource.onmessage = function(event) {
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.status === 'progress') {
+                        const msgText = message.message || '🎬 Creating your script with AI...';
+                        progressText.textContent = msgText;
+                        
+                        // Update footer progress if percentage is provided
+                        if (message.progress !== undefined) {
+                            updateFooterProgress(message.progress, msgText);
+                        }
+                        
+                        // Determine message type based on content
+                        let msgType = 'info';
+                        if (msgText.includes('DEBUG:')) {
+                            msgType = 'debug';
+                        } else if (msgText.includes('✅') || msgText.includes('completed')) {
+                            msgType = 'success';
+                        } else if (msgText.includes('❌') || msgText.includes('ERROR')) {
+                            msgType = 'error';
+                        }
+                        
+                        addProgressMessage(msgText, msgType);
+                    } else if (message.status === 'complete') {
+                        eventSource.close();
+                        finalScript = message.script || '';
+                        const thumbnails = message.thumbnails || [];
+                        const comparisonFile = message.comparison_file || null;
+                        const chapterComparisons = message.chapter_comparisons || null;
+                        const flowOriginal = message.flow_original_script || null;
+                        const flowImproved = message.flow_improved_script || null;
+                        const flowAnalysis = message.flow_analysis_report || null;
+                        const edlContent = message.edl_content || null;
+                        const edlFilename = message.edl_filename || null;
+                        const curlCommands = message.curl_commands || null;
+                        const brollImages = message.broll_images || null;
+                        const scriptTitle = message.script_title || document.getElementById('createTopic')?.value.trim() || 'AI Video Project';
+                        
+                        // Store scripts globally for export functions
+                        window.currentScript = finalScript;
+                        window.currentFlowOriginal = flowOriginal;
+                        window.currentFlowImproved = flowImproved;
+                        window.currentComparisonFile = comparisonFile;
+                        window.currentEDLContent = edlContent;
+                        window.currentEDLFilename = edlFilename;
+                        window.currentCurlCommands = curlCommands;
+                        window.currentScriptTitle = scriptTitle;
+                        
+                        addProgressMessage('✅ Script creation completed!', 'success');
+                        
+                        // Update footer progress to 100%
+                        updateFooterProgress(100, '✅ Complete!');
+                        
+                        // Preserve the debug log before hiding progress
+                        preserveDebugLog();
+                        progressDiv.style.display = 'none';
+                        
+                        if (finalScript) {
+                            // Use tabbed interface for script creation results
+                            const tabbedHTML = createTabbedInterface(
+                                finalScript,
+                                null,  // No demo packages for script creation (only polish has this)
+                                thumbnails,
+                                chapterComparisons,
+                                flowOriginal,
+                                flowImproved,
+                                flowAnalysis,
+                                edlContent,
+                                edlFilename,
+                                curlCommands,
+                                brollImages
+                            );
+                            
+                            let resultHTML = `
+                                <h3>✅ Script Created Successfully!</h3>
+                                ${tabbedHTML}
+                            `;
+                            
+                            resultDiv.innerHTML = resultHTML;
+                            
+                            // Render markdown content
+                            renderMarkdownContent(finalScript, null, flowOriginal, flowImproved);
+                            
+                            resultDiv.className = 'result';
+                            document.getElementById('saveBtn').style.display = 'inline-block';
+                            document.getElementById('wordBtn').style.display = 'inline-block';
+                            document.getElementById('markdownBtn').style.display = 'inline-block';
+                            document.getElementById('heygenBtn').style.display = 'inline-block';
+                            
+                            // Show DaVinci button only if checkbox was checked
+                            if (checkboxes.davinci) {
+                                document.getElementById('davinciBtn').style.display = 'inline-block';
+                            }
+                            
+                            // Show comparison button if file exists
+                            if (comparisonFile) {
+                                document.getElementById('comparisonBtn').style.display = 'inline-block';
+                            }
+                        } else {
+                            resultDiv.innerHTML = `<h3>❌ Creation Failed</h3><p>No script content received</p>`;
+                            resultDiv.className = 'result error';
+                        }
+                        resultDiv.style.display = 'block';
+                    } else if (message.status === 'error') {
+                        eventSource.close();
+                        
+                        // Reset footer progress on error
+                        updateFooterProgress(0, 'Ready');
+                        
+                        // Preserve the debug log before hiding progress
+                        preserveDebugLog();
+                        progressDiv.style.display = 'none';
+                        resultDiv.innerHTML = `<h3>❌ Creation Failed</h3><p>${message.error || 'Unknown error occurred'}</p>`;
+                        resultDiv.className = 'result error';
+                        resultDiv.style.display = 'block';
+                    }
+                };
+                
+                eventSource.onerror = function(error) {
+                    console.error('SSE Error:', error);
+                    eventSource.close();
+                    progressDiv.style.display = 'none';
+                    resultDiv.innerHTML = `<h3>❌ Connection Error</h3><p>Lost connection to server. Please try again.</p>`;
+                    resultDiv.className = 'result error';
+                    resultDiv.style.display = 'block';
+                };
+                
+            } catch (error) {
+                progressDiv.style.display = 'none';
+                resultDiv.innerHTML = `<h3>❌ Network Error</h3><p>${error.message}</p>`;
+                resultDiv.className = 'result error';
+                resultDiv.style.display = 'block';
+            }
+        }
+
+        async function exportToWord() {
+            // Determine which script to export based on active tab
+            let content = null;
+            let scriptTitle = 'AI Script';
+            
+            const activeTab = document.querySelector('.tab-content.active');
+            if (activeTab) {
+                const tabId = activeTab.id;
+                
+                if (tabId === 'flowOriginalTab' && window.currentFlowOriginal) {
+                    content = window.currentFlowOriginal;
+                    scriptTitle = 'Original Script (Before Flow Analysis)';
+                } else if (tabId === 'flowImprovedTab' && window.currentFlowImproved) {
+                    content = window.currentFlowImproved;
+                    scriptTitle = 'Revised Script (After Flow Analysis)';
+                } else if (window.currentScript) {
+                    content = window.currentScript;
+                    scriptTitle = 'AI Script';
+                }
+            }
+            
+            if (!content) {
+                alert('No script to export. Please create or polish a script first.');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/export_word', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ script_content: content, title: scriptTitle })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'script.docx';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    alert('✅ Script exported to Word document!');
+                } else {
+                    alert('❌ Failed to export to Word document');
+                }
+            } catch (error) {
+                alert('❌ Error exporting to Word: ' + error.message);
+            }
+        }
+
+        async function exportToMarkdown() {
+            // Determine which script to export based on active tab
+            let content = null;
+            let scriptTitle = 'AI_Script';
+            
+            const activeTab = document.querySelector('.tab-content.active');
+            if (activeTab) {
+                const tabId = activeTab.id;
+                
+                if (tabId === 'flowOriginalTab' && window.currentFlowOriginal) {
+                    content = window.currentFlowOriginal;
+                    scriptTitle = 'Original_Script_Before_Flow_Analysis';
+                } else if (tabId === 'flowImprovedTab' && window.currentFlowImproved) {
+                    content = window.currentFlowImproved;
+                    scriptTitle = 'Revised_Script_After_Flow_Analysis';
+                } else if (window.currentScript) {
+                    content = window.currentScript;
+                    scriptTitle = 'AI_Script';
+                }
+            }
+            
+            if (!content) {
+                alert('No script to export. Please create or polish a script first.');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/export_markdown', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ script_content: content, title: scriptTitle })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'script.md';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    alert('✅ Script exported to Markdown!');
+                } else {
+                    alert('❌ Failed to export to Markdown');
+                }
+            } catch (error) {
+                alert('❌ Error exporting to Markdown: ' + error.message);
+            }
+        }
+
+        // Export EDL file
+        function exportEDL() {
+            const edlContent = window.currentEDLContent;
+            const edlFilename = window.currentEDLFilename || 'broll_markers.edl';
+            
+            if (!edlContent) {
+                alert('❌ No EDL content available to export');
+                return;
+            }
+            
+            try {
+                // Create blob and download
+                const blob = new Blob([edlContent], { type: 'text/plain' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = edlFilename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                alert(`✅ EDL file downloaded: ${edlFilename}`);
+            } catch (error) {
+                alert('❌ Error exporting EDL: ' + error.message);
+            }
+        }
+
+        // Copy EDL content to clipboard
+        function copyEDLToClipboard() {
+            const edlContent = window.currentEDLContent;
+            
+            if (!edlContent) {
+                alert('❌ No EDL content available to copy');
+                return;
+            }
+            
+            try {
+                navigator.clipboard.writeText(edlContent).then(() => {
+                    alert('✅ EDL content copied to clipboard!');
+                }).catch(err => {
+                    // Fallback for older browsers
+                    const textarea = document.createElement('textarea');
+                    textarea.value = edlContent;
+                    textarea.style.position = 'fixed';
+                    textarea.style.opacity = '0';
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    alert('✅ EDL content copied to clipboard!');
+                });
+            } catch (error) {
+                alert('❌ Error copying EDL: ' + error.message);
+            }
+        }
+
+        // Download curl commands file
+        function downloadCurlCommands() {
+            const curlContent = window.currentCurlCommands;
+            
+            if (!curlContent) {
+                alert('❌ No curl commands available to download');
+                return;
+            }
+            
+            try {
+                // Create blob and download
+                const blob = new Blob([curlContent], { type: 'text/plain' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'heygen_curl_commands.sh';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                alert('✅ Curl commands downloaded: heygen_curl_commands.sh');
+            } catch (error) {
+                alert('❌ Error downloading curl commands: ' + error.message);
+            }
+        }
+
+        // Copy curl commands to clipboard
+        function copyCurlToClipboard() {
+            const curlContent = window.currentCurlCommands;
+            
+            if (!curlContent) {
+                alert('❌ No curl commands available to copy');
+                return;
+            }
+            
+            try {
+                navigator.clipboard.writeText(curlContent).then(() => {
+                    alert('✅ Curl commands copied to clipboard!');
+                }).catch(err => {
+                    // Fallback for older browsers
+                    const textarea = document.createElement('textarea');
+                    textarea.value = curlContent;
+                    textarea.style.position = 'fixed';
+                    textarea.style.opacity = '0';
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    alert('✅ Curl commands copied to clipboard!');
+                });
+            } catch (error) {
+                alert('❌ Error copying curl commands: ' + error.message);
+            }
+        }
+
+        // HTML escape function for displaying EDL content
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+
+        // Create DaVinci Resolve Project
+        async function createResolveProject() {
+            const scriptTitle = window.currentScriptTitle || 'AI_Video_Project';
+            const edlContent = window.currentEDLContent || null;
+            const edlFilename = window.currentEDLFilename || null;
+            
+            // EDL is optional - project can be created without it
+            
+            // Show loading indicator
+            const originalButton = event.target;
+            const originalText = originalButton.innerHTML;
+            originalButton.disabled = true;
+            originalButton.innerHTML = '⏳ Creating Project...';
+            
+            try {
+                const response = await fetch('/create_resolve_project', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        script_title: scriptTitle,
+                        edl_content: edlContent,
+                        edl_filename: edlFilename
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    let message = `✅ DaVinci Resolve Project Created!\n\nProject: ${result.project_name}\nTimeline: ${result.timeline_name}\nBins: ${result.bins_created.join(', ')}`;
+                    
+                    // Show media import stats if available
+                    if (result.media_imported && Object.keys(result.media_imported).length > 0) {
+                        message += '\n\n📁 Media Imported:';
+                        for (const [bin, count] of Object.entries(result.media_imported)) {
+                            message += `\n  • ${bin}: ${count} file(s)`;
+                        }
+                    }
+                    
+                    // Show EDL import status
+                    if (result.edl_imported) {
+                        message += `\n\n✅ ${result.edl_message || 'EDL Timeline Imported'}`;
+                    } else if (edlFilename && !result.edl_imported) {
+                        message += `\n\n📝 ${result.edl_message || 'EDL markers available in EDL tab'}`;
+                    }
+                    
+                    alert(message);
+                } else {
+                    alert(`❌ Failed to create project: ${result.error}`);
+                }
+            } catch (error) {
+                alert('❌ Error creating DaVinci Resolve project: ' + error.message);
+            } finally {
+                originalButton.disabled = false;
+                originalButton.innerHTML = originalText;
+            }
+        }
+
+        // Function to check if aRoll videos exist and enable DaVinci button
+        async function checkArollVideos() {
+            // Try to get script title from window variable or from displayed element
+            let scriptTitle = window.currentScriptTitle || '';
+            
+            if (!scriptTitle) {
+                // Try to read from displayed title element
+                const titleElement = document.getElementById('displayedScriptTitle');
+                if (titleElement) {
+                    scriptTitle = titleElement.textContent.trim();
+                    window.currentScriptTitle = scriptTitle; // Save for next time
+                }
+            }
+            
+            console.log('🔍 checkArollVideos called with title:', scriptTitle);
+            
+            if (!scriptTitle) {
+                console.log('⚠️ No script title set - cannot check for videos');
+                addToDebugLog('⚠️ No script title available to check for videos');
+                return;
+            }
+            
+            try {
+                console.log('📡 Checking for aRoll videos...');
+                const response = await fetch('/check_aroll_videos', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ script_title: scriptTitle })
+                });
+                
+                const result = await response.json();
+                console.log('📊 Check result:', result);
+                
+                if (result.success && result.video_count > 0) {
+                    const davinciButton = document.getElementById('davinciButton');
+                    if (davinciButton) {
+                        davinciButton.disabled = false;
+                        davinciButton.title = `Create DaVinci Project with ${result.video_count} video(s)`;
+                        addToDebugLog(`✅ Found ${result.video_count} aRoll video(s) - DaVinci button enabled`);
+                        console.log('✅ DaVinci button enabled');
+                    }
+                } else {
+                    console.log(`ℹ️ No videos found (count: ${result.video_count || 0})`);
+                    addToDebugLog(`ℹ️ No aRoll videos found yet. Download videos first.`);
+                }
+            } catch (error) {
+                console.error('❌ Error checking aRoll videos:', error);
+                addToDebugLog(`❌ Error checking videos: ${error.message}`);
+            }
+        }
+
+        // Function to create DaVinci project with aRoll videos
+        async function createDaVinciWithVideos() {
+            const scriptTitle = window.currentScriptTitle || 'AI_Video_Project';
+            const edlContent = window.currentEDLContent || null;
+            const edlFilename = window.currentEDLFilename || null;
+            
+            // Show loading indicator
+            const button = document.getElementById('davinciButton');
+            const originalText = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<span class="toolbar-icon">⏳</span><span class="toolbar-text">Creating Project...</span>';
+            
+            addToDebugLog('🎬 Creating DaVinci Resolve project with aRoll videos...');
+            
+            try {
+                const response = await fetch('/create_resolve_with_videos', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        script_title: scriptTitle,
+                        edl_content: edlContent,
+                        edl_filename: edlFilename
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    let message = `✅ DaVinci Resolve Project Created!\n\nProject: ${result.project_name}\nTimeline: ${result.timeline_name}\n`;
+                    
+                    if (result.videos_added && result.videos_added.length > 0) {
+                        message += `\n🎬 Videos Added to Timeline (${result.videos_added.length}):\n`;
+                        result.videos_added.forEach((video, index) => {
+                            message += `  ${index + 1}. ${video}\n`;
+                        });
+                    }
+                    
+                    if (result.bins_created) {
+                        message += `\n📁 Bins: ${result.bins_created.join(', ')}`;
+                    }
+                    
+                    addToDebugLog(`✅ DaVinci project created with ${result.videos_added ? result.videos_added.length : 0} videos`);
+                    alert(message);
+                } else {
+                    addToDebugLog(`❌ Failed to create DaVinci project: ${result.error}`);
+                    alert(`❌ Failed to create project: ${result.error}`);
+                }
+            } catch (error) {
+                addToDebugLog(`❌ Error creating DaVinci project: ${error.message}`);
+                alert('❌ Error creating DaVinci Resolve project: ' + error.message);
+            } finally {
+                button.disabled = false;
+                button.innerHTML = originalText;
+            }
+        }
+
+        async function exportProcessedScriptToWord(title, contentId) {
+            // Get the raw markdown content from the element
+            const contentElement = document.getElementById(contentId);
+            if (!contentElement) {
+                alert('No script content found to export.');
+                return;
+            }
+            
+            // Get the original markdown text (stored in data attribute or textContent)
+            const content = contentElement.getAttribute('data-original-markdown') || 
+                           contentElement.textContent;
+            
+            if (!content) {
+                alert('No script to export. Please process a script first.');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/export_word', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        script_content: content, 
+                        title: title || 'Processed_Script'
+                    })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${title || 'Processed_Script'}.docx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    alert('✅ Script exported to Word document!');
+                } else {
+                    const errorData = await response.json();
+                    alert('❌ Failed to export: ' + (errorData.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('❌ Error exporting to Word: ' + error.message);
+            }
+        }
+
+        async function exportHeyGenCurls() {
+            // Use the stored curl commands instead of parsing from script
+            const curlContent = window.currentCurlCommands;
+            
+            if (!curlContent) {
+                alert('No HeyGen curl commands available. Make sure you checked "HeyGen Script & Curl Commands" when generating.');
+                return;
+            }
+            
+            try {
+                // Create a blob and download directly - no need for backend processing
+                const blob = new Blob([curlContent], { type: 'text/plain' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'heygen_curl_commands.sh';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                alert('✅ HeyGen curl commands exported successfully!');
+            } catch (error) {
+                alert('❌ Error exporting HeyGen curl commands: ' + error.message);
+            }
+        }
+
+        function clearContent() {
+            document.getElementById('scriptInput').value = '';
+            document.getElementById('createTopic').value = '';
+            document.getElementById('createDescription').value = '';
+            document.getElementById('result').style.display = 'none';
+            document.getElementById('saveBtn').style.display = 'none';
+            document.getElementById('wordBtn').style.display = 'none';
+            document.getElementById('davinciBtn').style.display = 'none';
+            document.getElementById('markdownBtn').style.display = 'none';
+            document.getElementById('heygenBtn').style.display = 'none';
+            document.getElementById('comparisonBtn').style.display = 'none';
+            window.currentComparisonFile = null;
+        }
+
+        // Toggle all curl command checkboxes
+        function toggleAllCurlCheckboxes() {
+            const checkboxes = document.querySelectorAll('.curl-checkbox');
+            const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+            checkboxes.forEach(cb => cb.checked = !allChecked);
+        }
+
+        // Toggle all curl command checkboxes from header checkbox
+        function toggleAllCurlCheckboxesFromHeader() {
+            const headerCheckbox = document.getElementById('selectAllCurls');
+            const checkboxes = document.querySelectorAll('.curl-checkbox');
+            checkboxes.forEach(cb => cb.checked = headerCheckbox.checked);
+        }
+
+        // Execute selected curl commands
+        async function executeSelectedCurls() {
+            const checkboxes = document.querySelectorAll('.curl-checkbox');
+            const selectedIndices = [];
+            
+            checkboxes.forEach((cb, index) => {
+                if (cb.checked) {
+                    selectedIndices.push(index);
+                }
+            });
+            
+            if (selectedIndices.length === 0) {
+                alert('⚠️ Please select at least one curl command to execute');
+                return;
+            }
+            
+            if (!confirm(`Execute ${selectedIndices.length} curl command(s)?\n\n⚠️ Make sure you have:\n• Replaced 'your_api_key_here' with your actual HeyGen API key\n• Updated the avatar_id with your preferred avatar\n\nProceed?`)) {
+                return;
+            }
+            
+            // Log the start of execution
+            addToDebugLog(`🚀 Starting execution of ${selectedIndices.length} curl command(s)...`);
+            
+            // Show progress cursor while processing
+            document.body.style.cursor = 'wait';
+            
+            // Determine which script to save based on active tab (same logic as exportToWord)
+            let scriptContent = null;
+            let scriptTitle = window.currentScriptTitle || 'untitled';
+            
+            const activeTab = document.querySelector('.tab-content.active');
+            if (activeTab) {
+                const tabId = activeTab.id;
+                
+                if (tabId === 'flowOriginalTab' && window.currentFlowOriginal) {
+                    scriptContent = window.currentFlowOriginal;
+                } else if (tabId === 'flowImprovedTab' && window.currentFlowImproved) {
+                    scriptContent = window.currentFlowImproved;
+                } else if (window.currentScript) {
+                    scriptContent = window.currentScript;
+                }
+            } else if (window.currentScript) {
+                // Fallback if no tabs (shouldn't happen)
+                scriptContent = window.currentScript;
+            }
+            
+            // Set up project folder before executing curl commands
+            try {
+                addToDebugLog(`📁 Setting up project folder for: ${scriptTitle}`);
+                const setupResponse = await fetch('/setup_project', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        script_title: scriptTitle,
+                        script_content: scriptContent || ''
+                    })
+                });
+                
+                const setupResult = await setupResponse.json();
+                if (setupResult.success) {
+                    addToDebugLog(`✅ Project setup complete: ${setupResult.project_path}`);
+                    console.log(`✅ Project setup complete: ${setupResult.project_path}`);
+                } else {
+                    addToDebugLog(`⚠️ Project setup failed: ${setupResult.error}`);
+                    console.warn(`⚠️ Project setup failed: ${setupResult.error}`);
+                }
+            } catch (error) {
+                addToDebugLog(`❌ Project setup error: ${error.message}`);
+                console.error(`❌ Project setup error: ${error.message}`);
+            }
+            
+            // Execute each selected curl command
+            for (const index of selectedIndices) {
+                addToDebugLog(`⏳ Executing curl command #${index + 1}...`);
+                const statusCell = document.getElementById(`curlStatus${index}`);
+                const videoStatusCell = document.getElementById(`videoStatus${index}`);
+                const curlCmd = document.getElementById(`curlCmd${index}`).textContent;
+                
+                // Extract API key from curl command - try multiple patterns
+                let apiKey = '';
+                
+                // Try pattern 1: --header 'X-Api-Key: xxx' (what we actually generate)
+                let apiKeyMatch = curlCmd.match(/--header\s*['"]\s*X-Api-Key\s*:\s*([^'"]+)['"]/i);
+                if (apiKeyMatch) {
+                    apiKey = apiKeyMatch[1].trim();
+                }
+                
+                // Try pattern 2: -H "X-Api-Key: xxx" or -H 'X-Api-Key: xxx'
+                if (!apiKey) {
+                    apiKeyMatch = curlCmd.match(/-H\s*['"]\s*X-Api-Key\s*:\s*([^'"]+)['"]/i);
+                    if (apiKeyMatch) {
+                        apiKey = apiKeyMatch[1].trim();
+                    }
+                }
+                
+                // Try pattern 3: -H "x-api-key: xxx" (case variations)
+                if (!apiKey) {
+                    apiKeyMatch = curlCmd.match(/-H\s*['"]\s*x-api-key\s*:\s*([^'"]+)['"]/i);
+                    if (apiKeyMatch) {
+                        apiKey = apiKeyMatch[1].trim();
+                    }
+                }
+                
+                console.log(`🔍 Debug [${index}]: Extracted API key: ${apiKey ? apiKey.substring(0, 20) + '...' : 'NOT FOUND'}`);
+                console.log(`🔍 Debug [${index}]: Curl preview: ${curlCmd.substring(0, 300)}...`);
+                
+                try {
+                    statusCell.innerHTML = '⏳ Running...';
+                    statusCell.style.color = '#3b82f6';
+                    
+                    // Send curl command to backend for execution
+                    const response = await fetch('/execute_curl', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ curl_command: curlCmd })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        statusCell.innerHTML = '✅ Success';
+                        statusCell.style.color = '#10b981';
+                        
+                        // Show job ID if available
+                        if (result.job_id) {
+                            addToDebugLog(`✅ Curl command #${index + 1} executed successfully. Job ID: ${result.job_id}`);
+                            statusCell.innerHTML = `✅ Job: ${result.job_id}`;
+                            statusCell.title = `Click to copy job ID: ${result.job_id}`;
+                            statusCell.style.cursor = 'pointer';
+                            statusCell.onclick = () => {
+                                navigator.clipboard.writeText(result.job_id);
+                                alert('Job ID copied to clipboard!');
+                            };
+                            
+                            // Start polling video status
+                            if (apiKey) {
+                                pollVideoStatus(result.job_id, apiKey, videoStatusCell, index);
+                            } else {
+                                videoStatusCell.innerHTML = '⚠️ <span style="cursor: help;" title="Could not extract API key from curl command. Check browser console for details.">No API key</span>';
+                                videoStatusCell.style.color = '#f59e0b';
+                                console.error('❌ Failed to extract API key from curl command');
+                                console.error('Curl command:', curlCmd);
+                            }
+                        }
+                    } else {
+                        addToDebugLog(`❌ Curl command #${index + 1} failed: ${result.error || 'Unknown error'}`);
+                        statusCell.innerHTML = '❌ Failed';
+                        statusCell.style.color = '#ef4444';
+                        statusCell.title = result.error || 'Unknown error';
+                    }
+                } catch (error) {
+                    addToDebugLog(`❌ Curl command #${index + 1} error: ${error.message}`);
+                    statusCell.innerHTML = '❌ Error';
+                    statusCell.style.color = '#ef4444';
+                    statusCell.title = error.message;
+                }
+                
+                // Small delay between requests to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            
+            // Reset cursor to default
+            document.body.style.cursor = 'default';
+            
+            addToDebugLog(`✅ Completed executing ${selectedIndices.length} curl command(s)`);
+            alert(`✅ Completed executing ${selectedIndices.length} curl command(s)`);
+        }
+        
+        // Poll video status function
+        async function pollVideoStatus(videoId, apiKey, statusCell, index) {
+            const maxPolls = 120; // 10 minutes max (5 sec * 120)
+            let pollCount = 0;
+            
+            statusCell.innerHTML = '🎬 Checking...';
+            statusCell.style.color = '#3b82f6';
+            
+            const pollInterval = setInterval(async () => {
+                pollCount++;
+                
+                try {
+                    const response = await fetch('/check_video_status', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            video_id: videoId,
+                            api_key: apiKey
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        if (result.status === 'completed') {
+                            clearInterval(pollInterval);
+                            
+                            // Extract video title from curl command
+                            const curlCmd = document.getElementById(`curlCmd${index}`);
+                            const videoTitle = curlCmd ? curlCmd.getAttribute('data-video-title') : `Chapter ${index}`;
+                            
+                            // Auto-download instead of showing manual link
+                            statusCell.innerHTML = '🎥 Downloading...';
+                            statusCell.style.color = '#3b82f6';
+                            statusCell.title = 'Downloading video automatically...';
+                            
+                            // Trigger automatic download
+                            try {
+                                await downloadHeyGenVideo(result.video_url, videoId, videoTitle);
+                                statusCell.innerHTML = '✅ Downloaded';
+                                statusCell.style.color = '#10b981';
+                                statusCell.title = 'Video downloaded to aRoll folder';
+                            } catch (downloadError) {
+                                statusCell.innerHTML = `❌ Download failed - <a href="#" onclick="downloadHeyGenVideo('${result.video_url}', '${videoId}', '${videoTitle}'); return false;" style="color: #ef4444; text-decoration: underline;">Retry</a>`;
+                                statusCell.style.color = '#ef4444';
+                                statusCell.title = `Auto-download failed: ${downloadError.message}`;
+                            }
+                            
+                        } else if (result.status === 'failed') {
+                            clearInterval(pollInterval);
+                            statusCell.innerHTML = '❌ Failed';
+                            statusCell.style.color = '#ef4444';
+                            statusCell.title = result.error || 'Video generation failed';
+                            
+                        } else if (result.status === 'processing' || result.status === 'pending') {
+                            statusCell.innerHTML = `🎬 ${result.status} (${pollCount * 5}s)`;
+                            statusCell.style.color = '#3b82f6';
+                            
+                        } else {
+                            statusCell.innerHTML = `⏳ ${result.status}`;
+                            statusCell.style.color = '#94a3b8';
+                        }
+                    } else {
+                        clearInterval(pollInterval);
+                        statusCell.innerHTML = '❌ Error';
+                        statusCell.style.color = '#ef4444';
+                        statusCell.title = result.error || 'Failed to check status';
+                    }
+                } catch (error) {
+                    clearInterval(pollInterval);
+                    statusCell.innerHTML = '❌ Error';
+                    statusCell.style.color = '#ef4444';
+                    statusCell.title = error.message;
+                }
+                
+                // Stop polling after max time
+                if (pollCount >= maxPolls) {
+                    clearInterval(pollInterval);
+                    statusCell.innerHTML = '⏱️ Timeout';
+                    statusCell.style.color = '#f59e0b';
+                    statusCell.title = 'Status check timed out after 10 minutes';
+                }
+            }, 5000); // Poll every 5 seconds
+        }
+        
+        // Download HeyGen video function
+        async function downloadHeyGenVideo(videoUrl, videoId, chapterName) {
+            try {
+                const scriptTitle = window.currentScriptTitle || '';
+                
+                const response = await fetch('/download_heygen_video', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        video_url: videoUrl,
+                        video_id: videoId,
+                        chapter_name: chapterName,
+                        script_title: scriptTitle
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Video saved to project folder
+                    alert(`✅ Video saved to project:\n${result.path}`);
+                    
+                    // Check if we can now enable DaVinci button
+                    await checkArollVideos();
+                } else {
+                    alert(`❌ Failed to save video: ${result.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                alert(`❌ Error downloading video: ${error.message}`);
+            }
+        }
+
+        async function openComparisonFile() {
+            const filePath = window.currentComparisonFile;
+            
+            if (!filePath) {
+                alert('No comparison file available.');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/download_comparison', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_path: filePath })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filePath.split('/').pop() || 'chapter_comparison.md';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    alert('✅ Comparison report downloaded! You can open it in VS Code or any markdown viewer.');
+                } else {
+                    const errorData = await response.json();
+                    alert('❌ Failed to download comparison file: ' + (errorData.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('❌ Error downloading comparison file: ' + error.message);
+            }
+        }
+
+        async function testThumbnails() {
+            console.log('🖼️ Testing thumbnail generation and display...');
+            
+            const testThumbBtn = document.getElementById('testThumbBtn');
+            const originalText = testThumbBtn.innerHTML;
+            testThumbBtn.innerHTML = '⏳ Generating...';
+            testThumbBtn.disabled = true;
+            
+            const resultDiv = document.getElementById('result');
+            
+            try {
+                // Get topic from create mode input or use default
+                const topic = document.getElementById('createTopic').value.trim() || 'AI Testing';
+                
+                console.log(`Calling /generate-test-thumbnails with topic: ${topic}`);
+                
+                const response = await fetch('/generate-test-thumbnails', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ topic: topic })
+                });
+                
+                const data = await response.json();
+                console.log('Response from /generate-test-thumbnails:', data);
+                
+                if (data.success && data.thumbnails && data.thumbnails.length > 0) {
+                    console.log(`✅ Got ${data.thumbnails.length} thumbnails, displaying in gallery...`);
+                    
+                    // Render the thumbnail gallery using existing function
+                    const galleryHTML = renderThumbnailGallery(data.thumbnails);
+                    
+                    // Display in result div
+                    resultDiv.innerHTML = `
+                        <h3>✅ Test Thumbnails Generated</h3>
+                        <p>Generated ${data.thumbnails.length} thumbnail variations for: <strong>${topic}</strong></p>
+                        ${galleryHTML}
+                    `;
+                    resultDiv.className = 'result success';
+                    resultDiv.style.display = 'block';
+                    
+                    console.log('✅ Gallery displayed successfully!');
+                } else {
+                    console.error('❌ No thumbnails in response:', data);
+                    resultDiv.innerHTML = `
+                        <h3>❌ Generation Failed</h3>
+                        <p>No thumbnails were generated. Check terminal for details.</p>
+                    `;
+                    resultDiv.className = 'result error';
+                    resultDiv.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('❌ Error testing thumbnails:', error);
+                resultDiv.innerHTML = `
+                    <h3>❌ Error</h3>
+                    <p>${error.message}</p>
+                `;
+                resultDiv.className = 'result error';
+                resultDiv.style.display = 'block';
+            } finally {
+                testThumbBtn.innerHTML = originalText;
+                testThumbBtn.disabled = false;
+            }
+        }
+
+        async function testComparisons() {
+            const resultDiv = document.getElementById('result');
+            const testCompBtn = document.getElementById('testCompBtn');
+            
+            testCompBtn.disabled = true;
+            const originalText = testCompBtn.innerHTML;
+            testCompBtn.innerHTML = '<span class="toolbar-icon">⏳</span><span class="toolbar-text">Loading...</span>';
+            
+            try {
+                // Navigate to the test endpoint which will render the page with mock data
+                window.location.href = '/test-comparisons';
+            } catch (error) {
+                console.error('❌ Error loading test comparisons:', error);
+                alert('Error loading test comparisons: ' + error.message);
+                testCompBtn.innerHTML = originalText;
+                testCompBtn.disabled = false;
+            }
+        }
+
+        function loadSample() {
+            const mode = document.getElementById('mode').value;
+            console.log('Load Sample clicked, mode:', mode);
+            
+            if (mode === 'create') {
+                // Load sample data for create mode
+                const topicElement = document.getElementById('createTopic');
+                const descriptionElement = document.getElementById('createDescription');
+                
+                console.log('Topic element:', topicElement);
+                console.log('Description element:', descriptionElement);
+                
+                if (topicElement && descriptionElement) {
+                    topicElement.value = 'AI at Home';
+                    descriptionElement.value = 'How is GenAI coming to our homes';
+                    console.log('Values set successfully');
+                    alert('✅ Sample topic and description loaded for create mode!');
+                } else {
+                    console.error('Could not find topic or description elements');
+                    alert('❌ Error: Could not find input fields. Make sure you are in Create mode.');
+                }
+            } else {
+                // Load sample script for polish mode
+                const sample = `# Sample Video Script
+
+## Introduction
+Welcome to this sample script for demonstration purposes.
+
+## Main Content
+This is the main content of your script.
+
+## Conclusion
+Thank you for watching!`;
+                
+                const scriptElement = document.getElementById('scriptInput');
+                if (scriptElement) {
+                    scriptElement.value = sample;
+                    alert('✅ Sample script loaded for polish mode!');
+                } else {
+                    alert('❌ Error: Could not find script input field.');
+                }
+            }
+        }
+
+        async function loadFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            try {
+                const text = await file.text();
+                document.getElementById('scriptInput').value = text;
+                alert('File loaded successfully!');
+            } catch (error) {
+                alert('Error loading file: ' + error.message);
+            }
+        }
+
+        function saveResult() {
+            // Check if we have a script stored in window.currentScript
+            if (!window.currentScript) {
+                alert('No result to save');
+                return;
+            }
+            
+            const content = window.currentScript;
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = `scriptcraft-result-${timestamp}.md`;
+            
+            const blob = new Blob([content], { type: 'text/markdown' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            
+            alert(`✅ Script saved as: ${filename}`);
+        }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Set initial state: Only Script checkbox checked by default
+            document.getElementById('checkScript').checked = true;
+            document.getElementById('checkAll').checked = false;
+            toggleScriptInput(); // Initialize the UI based on Script checkbox state
+            
+            // Add individual checkbox listeners to uncheck "All" when individual selections change
+            const checkboxes = [
+                'checkScript',
+                'checkYouTubeDetails',
+                'checkHeyGenReady',
+                'checkCurlCommands',
+                'checkBRollTable',
+                'checkThumbnails',
+                'checkDemoScript'
+            ];
+            
+            checkboxes.forEach(id => {
+                document.getElementById(id).addEventListener('change', function() {
+                    // Check if all individual boxes are now checked
+                    const allChecked = checkboxes.every(cbId => document.getElementById(cbId).checked);
+                    document.getElementById('checkAll').checked = allChecked;
+                    
+                    // Update script input visibility if Script checkbox changed
+                    if (id === 'checkScript') {
+                        toggleScriptInput();
+                    }
+                });
+            });
+        });
+    </script>
+    
+    <div class="footer">
+        <div>ScriptCraft v{{ version }} • Build 15.33-3hooks • © 2025</div>
+        <div id="footerProgress" class="footer-progress">
+            <div class="footer-progress-bar">
+                <div id="footerProgressFill" class="footer-progress-fill"></div>
+            </div>
+            <div id="footerProgressText" class="footer-progress-text">Ready</div>
+        </div>
+    </div>
+</body>
+</html>

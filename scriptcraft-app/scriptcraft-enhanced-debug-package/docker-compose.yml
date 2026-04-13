@@ -1,0 +1,38 @@
+# ScriptCraft Web App Docker Compose Configuration
+# Production deployment for AI-powered script creation
+
+version: '3.8'
+
+services:
+  scriptcraft:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "5007:5007"
+    volumes:
+      - ./output:/app/output
+    environment:
+      - PYTHONPATH=/app
+      - AI_PROJECT_API_KEY=${AI_PROJECT_API_KEY:-}
+      - AZURE_AI_PROJECTS_CONNECTION_STRING=${AZURE_AI_PROJECTS_CONNECTION_STRING:-}
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5007/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  scriptcraft-output:
+    driver: local
+  scriptcraft-logs:
+    driver: local
+
+networks:
+  scriptcraft-network:
+    driver: bridge
