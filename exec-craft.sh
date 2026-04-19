@@ -4,7 +4,7 @@
 
 echo "🚀 Starting ScriptCraft Web Server..."
 cd "$(dirname "$0")/scriptcraft-app"
-source ../venv312/bin/activate
+source ../venv314/bin/activate
 echo "✅ Virtual environment activated"
 echo "🌐 Starting web server at http://localhost:5005"
 python web_gui.py

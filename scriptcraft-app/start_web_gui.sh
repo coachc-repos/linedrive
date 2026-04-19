@@ -14,13 +14,16 @@ echo "📁 Repository root: $REPO_ROOT"
 echo ""
 
 # Activate virtual environment if it exists
-if [ -d "$REPO_ROOT/venv312" ]; then
+VENV_PYTHON="python3"
+if [ -d "$REPO_ROOT/venv314" ]; then
     echo "🐍 Activating virtual environment..."
-    source "$REPO_ROOT/venv312/bin/activate"
+    source "$REPO_ROOT/venv314/bin/activate"
+    VENV_PYTHON="$REPO_ROOT/venv314/bin/python3"
     echo "✅ Virtual environment activated"
 elif [ -d "$REPO_ROOT/.venv" ]; then
     echo "🐍 Activating virtual environment..."
     source "$REPO_ROOT/.venv/bin/activate"
+    VENV_PYTHON="$REPO_ROOT/.venv/bin/python3"
     echo "✅ Virtual environment activated"
 else
     echo "⚠️  No virtual environment found"
@@ -45,14 +48,14 @@ fi
 
 # Check Python version
 echo "🐍 Python version:"
-python --version
+$VENV_PYTHON --version
 echo ""
 
 # Check if required packages are installed
 echo "📦 Checking key packages..."
-python -c "import flask; print('✅ Flask installed')" 2>/dev/null || echo "❌ Flask not installed"
-python -c "import google.generativeai; print('✅ google-generativeai installed')" 2>/dev/null || echo "❌ google-generativeai not installed"
-python -c "from PIL import Image; print('✅ Pillow installed')" 2>/dev/null || echo "❌ Pillow not installed"
+$VENV_PYTHON -c "import flask; print('✅ Flask installed')" 2>/dev/null || echo "❌ Flask not installed"
+$VENV_PYTHON -c "import google.generativeai; print('✅ google-generativeai installed')" 2>/dev/null || echo "❌ google-generativeai not installed"
+$VENV_PYTHON -c "from PIL import Image; print('✅ Pillow installed')" 2>/dev/null || echo "❌ Pillow not installed"
 echo ""
 
 # Check if thumbnail template exists
@@ -72,4 +75,4 @@ echo "⏹️  Press Ctrl+C to stop"
 echo ""
 
 # Run the web GUI
-python web_gui.py
+$VENV_PYTHON web_gui.py

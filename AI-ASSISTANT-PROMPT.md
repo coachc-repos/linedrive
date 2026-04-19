@@ -285,7 +285,7 @@ git reset --hard working-web-gui-v1.0
 ### Issue: Import Error `google.generativeai`
 **Solution**: 
 ```bash
-venv312/bin/pip install google-generativeai
+venv314/bin/pip install google-generativeai
 ```
 
 ### Issue: Console UI import errors

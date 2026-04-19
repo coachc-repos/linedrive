@@ -95,7 +95,7 @@ linedrive/
 python --version  # Must be 3.12.x
 
 # Virtual environment
-source venv312/bin/activate
+source venv314/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -179,8 +179,8 @@ pip install google-generativeai
 
 **Wrong Python/venv**
 ```bash
-# Use venv312 explicitly
-venv312/bin/python console_launcher_modular.py
+# Use venv314 explicitly
+venv314/bin/python console_launcher_modular.py
 ```
 
 **Console UI errors**

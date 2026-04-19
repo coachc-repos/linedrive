@@ -889,8 +889,17 @@
                 <div style="display: flex; gap: 15px; align-items: center;">
                     <label for="heygenTemplateId" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;">Template ID:</label>
                     <input type="text" id="heygenTemplateId" value="92c09f8e9a1c4f078f7ae53886b7ad80" style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
-                    <label for="heygenApiKey" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap; margin-left: 10px;">API Key:</label>
-                    <input type="text" id="heygenApiKey" value="ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==" style="width: 350px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
+                    <button onclick="browseHeyGenTemplates()" style="padding: 4px 10px; background: linear-gradient(135deg, #0ea5e9, #0284c7); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">📋 Browse</button>
+                    <button onclick="viewHeyGenTemplateDetails()" style="padding: 4px 10px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🔍 Details</button>
+                    <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
+                    <label for="heygenVoiceId" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;">Voice ID:</label>
+                    <input type="text" id="heygenVoiceId" value="" placeholder="Select a voice..." style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
+                    <button onclick="browseHeyGenVoices()" style="padding: 4px 10px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🎤 Voices</button>
+                    <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
+                    <button onclick="openTestVideoDialog()" style="padding: 4px 10px; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🧪 Test Generate</button>
+                    <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
+                    <label for="heygenApiKey" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;">API Key:</label>
+                    <input type="text" id="heygenApiKey" value="sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC" style="width: 350px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
                 </div>
             </div>
 
@@ -1890,6 +1899,7 @@ Time management content here...`;
                 // Get HeyGen configuration
                 const heygenTemplateId = document.getElementById('heygenTemplateId').value;
                 const heygenApiKey = document.getElementById('heygenApiKey').value;
+                const heygenVoiceId = document.getElementById('heygenVoiceId').value;
                 
                 // Start the processing job and get session ID
                 const response = await fetch('/process-script', {
@@ -1902,7 +1912,8 @@ Time management content here...`;
                         videoLength: videoLength,
                         checkboxes: checkboxes,
                         heygen_template_id: heygenTemplateId,
-                        heygen_api_key: heygenApiKey
+                        heygen_api_key: heygenApiKey,
+                        heygen_voice_id: heygenVoiceId
                     })
                 });
                 
@@ -3293,6 +3304,388 @@ Thank you for watching!`;
         });
     </script>
     
+    <!-- HeyGen Template Details Modal -->
+    <div id="heygenDetailModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:10000; justify-content:center; align-items:center;">
+        <div style="background:#1e293b; border:1px solid #334155; border-radius:12px; width:700px; max-height:85vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+            <div style="padding:16px 20px; border-bottom:1px solid #334155; display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin:0; color:#e2e8f0; font-size:1.1em;">🔍 Template Details</h3>
+                <button onclick="closeHeyGenDetailModal()" style="background:none; border:none; color:#94a3b8; font-size:1.3em; cursor:pointer; padding:4px 8px;">&times;</button>
+            </div>
+            <div id="heygenDetailContent" style="padding:16px 20px; overflow-y:auto; flex:1;">
+                <div style="text-align:center; color:#94a3b8; padding:30px;">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- HeyGen Template Browser Modal -->
+    <div id="heygenTemplateModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:9999; justify-content:center; align-items:center;">
+        <div style="background:#1e293b; border:1px solid #334155; border-radius:12px; width:650px; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+            <div style="padding:16px 20px; border-bottom:1px solid #334155; display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin:0; color:#e2e8f0; font-size:1.1em;">📋 HeyGen Templates</h3>
+                <button onclick="closeHeyGenModal()" style="background:none; border:none; color:#94a3b8; font-size:1.3em; cursor:pointer; padding:4px 8px;">&times;</button>
+            </div>
+            <div id="heygenTemplateList" style="padding:16px 20px; overflow-y:auto; flex:1;">
+                <div style="text-align:center; color:#94a3b8; padding:30px;">Loading templates...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    function browseHeyGenTemplates() {
+        const apiKey = document.getElementById('heygenApiKey').value.trim();
+        if (!apiKey) { alert('Please enter your HeyGen API Key first.'); return; }
+
+        const modal = document.getElementById('heygenTemplateModal');
+        const list = document.getElementById('heygenTemplateList');
+        modal.style.display = 'flex';
+        list.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:30px;">⏳ Fetching templates...</div>';
+
+        fetch('/api/heygen/templates', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({api_key: apiKey})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) { list.innerHTML = '<div style="color:#f87171; padding:20px;">❌ ' + data.error + '</div>'; return; }
+
+            const templates = (data.data && data.data.templates) || [];
+            if (templates.length === 0) {
+                list.innerHTML = '<div style="color:#94a3b8; padding:20px;">No templates found in your account.</div>';
+                return;
+            }
+
+            const currentId = document.getElementById('heygenTemplateId').value.trim();
+            list.innerHTML = '<div style="margin-bottom:10px; color:#94a3b8; font-size:0.85em;">' + templates.length + ' template(s) found</div>' +
+                templates.map(t => {
+                    const tid = t.template_id || '';
+                    const name = _escModal(t.name || 'Untitled');
+                    const isActive = tid === currentId;
+                    const thumb = t.thumbnail_image_url ? '<img src="' + _escModal(t.thumbnail_image_url) + '" style="width:64px; height:36px; object-fit:cover; border-radius:4px; margin-right:12px; border:1px solid #475569;">' : '<div style="width:64px; height:36px; background:#0f172a; border-radius:4px; margin-right:12px; display:flex; align-items:center; justify-content:center; font-size:1.2em; border:1px solid #475569;">🎬</div>';
+                    return '<div onclick="selectHeyGenTemplate(\'' + tid + '\')" style="display:flex; align-items:center; padding:10px 12px; background:' + (isActive ? '#0c4a6e' : '#0f172a') + '; border:1px solid ' + (isActive ? '#0ea5e9' : '#334155') + '; border-radius:8px; margin-bottom:6px; cursor:pointer; transition:border-color 0.2s;" onmouseover="this.style.borderColor=\'#0ea5e9\'" onmouseout="this.style.borderColor=\'' + (isActive ? '#0ea5e9' : '#334155') + '\'">' +
+                        thumb +
+                        '<div style="flex:1; min-width:0;">' +
+                            '<div style="color:#f8fafc; font-weight:600; font-size:0.9em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' + name + '</div>' +
+                            '<div style="color:#64748b; font-family:monospace; font-size:0.75em; margin-top:2px;">' + tid + '</div>' +
+                        '</div>' +
+                        (isActive ? '<span style="color:#22d3ee; font-size:0.8em; white-space:nowrap; margin-left:8px;">✓ Active</span>' : '') +
+                    '</div>';
+                }).join('');
+        })
+        .catch(err => {
+            list.innerHTML = '<div style="color:#f87171; padding:20px;">❌ Failed to fetch: ' + err.message + '</div>';
+        });
+    }
+
+    function _escModal(s) {
+        const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+    }
+
+    function selectHeyGenTemplate(tid) {
+        document.getElementById('heygenTemplateId').value = tid;
+        closeHeyGenModal();
+    }
+
+    function closeHeyGenModal() {
+        document.getElementById('heygenTemplateModal').style.display = 'none';
+    }
+
+    // Close modal on backdrop click
+    document.getElementById('heygenTemplateModal').addEventListener('click', function(e) {
+        if (e.target === this) closeHeyGenModal();
+    });
+    document.getElementById('heygenDetailModal').addEventListener('click', function(e) {
+        if (e.target === this) closeHeyGenDetailModal();
+    });
+
+    function viewHeyGenTemplateDetails() {
+        const templateId = document.getElementById('heygenTemplateId').value.trim();
+        const apiKey = document.getElementById('heygenApiKey').value.trim();
+        if (!templateId) { alert('Please enter a Template ID first.'); return; }
+        if (!apiKey) { alert('Please enter your HeyGen API Key first.'); return; }
+
+        const modal = document.getElementById('heygenDetailModal');
+        const content = document.getElementById('heygenDetailContent');
+        modal.style.display = 'flex';
+        content.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:30px;">⏳ Fetching template details...</div>';
+
+        fetch('/api/heygen/template/' + encodeURIComponent(templateId), {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({api_key: apiKey})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) { content.innerHTML = '<div style="color:#f87171; padding:20px;">❌ ' + _escModal(data.error) + '</div>'; return; }
+
+            const t = data.data || data;
+            const name = _escModal(t.name || t.template_name || 'Untitled');
+            const tid = _escModal(t.template_id || templateId);
+            const thumb = t.thumbnail_image_url || '';
+
+            let html = '';
+            // Header with thumbnail
+            if (thumb) {
+                html += '<div style="text-align:center; margin-bottom:16px;"><img src="' + _escModal(thumb) + '" style="max-width:100%; max-height:200px; border-radius:8px; border:1px solid #475569;"></div>';
+            }
+            html += '<h3 style="color:#f8fafc; margin:0 0 12px 0; font-size:1.1em;">' + name + '</h3>';
+            html += '<div style="color:#64748b; font-family:monospace; font-size:0.8em; margin-bottom:16px; word-break:break-all;">ID: ' + tid + '</div>';
+
+            // Variables / input fields
+            const variables = t.variables || {};
+            const varKeys = Object.keys(variables);
+            if (varKeys.length > 0) {
+                html += '<div style="margin-bottom:12px;"><strong style="color:#94a3b8; font-size:0.85em;">📝 Variables (' + varKeys.length + ')</strong></div>';
+                html += '<div style="display:grid; gap:8px;">';
+                varKeys.forEach(function(k) {
+                    const v = variables[k];
+                    const vtype = _escModal(v.type || 'text');
+                    const vname = _escModal(v.name || k);
+                    const vprop = _escModal(v.properties && v.properties.content ? v.properties.content : (typeof v === 'string' ? v : ''));
+                    html += '<div style="background:#0f172a; padding:8px 12px; border-radius:6px; border:1px solid #334155;">';
+                    html += '<div style="display:flex; justify-content:space-between; align-items:center;">';
+                    html += '<span style="color:#e2e8f0; font-size:0.85em; font-weight:600;">' + vname + '</span>';
+                    html += '<span style="color:#8b5cf6; font-size:0.75em; background:#1e1b4b; padding:2px 8px; border-radius:4px;">' + vtype + '</span>';
+                    html += '</div>';
+                    if (vprop) { html += '<div style="color:#64748b; font-size:0.75em; margin-top:4px; word-break:break-all;">' + vprop + '</div>'; }
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+
+            // Show any other top-level fields
+            const skipKeys = ['name','template_name','template_id','thumbnail_image_url','variables'];
+            const extraKeys = Object.keys(t).filter(function(k) { return skipKeys.indexOf(k) === -1; });
+            if (extraKeys.length > 0) {
+                html += '<div style="margin-top:16px; margin-bottom:8px;"><strong style="color:#94a3b8; font-size:0.85em;">ℹ️ Additional Info</strong></div>';
+                extraKeys.forEach(function(k) {
+                    const val = typeof t[k] === 'object' ? JSON.stringify(t[k], null, 2) : String(t[k]);
+                    html += '<div style="background:#0f172a; padding:8px 12px; border-radius:6px; border:1px solid #334155; margin-bottom:6px;">';
+                    html += '<span style="color:#94a3b8; font-size:0.8em;">' + _escModal(k) + ':</span> ';
+                    html += '<span style="color:#e2e8f0; font-size:0.8em; font-family:monospace; word-break:break-all;">' + _escModal(val) + '</span>';
+                    html += '</div>';
+                });
+            }
+
+            content.innerHTML = html;
+        })
+        .catch(function(err) {
+            content.innerHTML = '<div style="color:#f87171; padding:20px;">❌ Failed to fetch: ' + _escModal(err.message) + '</div>';
+        });
+    }
+
+    function closeHeyGenDetailModal() {
+        document.getElementById('heygenDetailModal').style.display = 'none';
+    }
+    </script>
+
+    <!-- HeyGen Voice Browser Modal -->
+    <div id="heygenVoiceModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:10001; justify-content:center; align-items:center;">
+        <div style="background:#1e293b; border:1px solid #334155; border-radius:12px; width:650px; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+            <div style="padding:16px 20px; border-bottom:1px solid #334155; display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin:0; color:#e2e8f0; font-size:1.1em;">🎤 My Custom Voices</h3>
+                <button onclick="closeHeyGenVoiceModal()" style="background:none; border:none; color:#94a3b8; font-size:1.3em; cursor:pointer; padding:4px 8px;">&times;</button>
+            </div>
+            <div id="heygenVoiceList" style="padding:16px 20px; overflow-y:auto; flex:1;">
+                <div style="text-align:center; color:#94a3b8; padding:30px;">Loading voices...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    function browseHeyGenVoices() {
+        const apiKey = document.getElementById('heygenApiKey').value.trim();
+        if (!apiKey) { alert('Please enter your HeyGen API Key first.'); return; }
+
+        const modal = document.getElementById('heygenVoiceModal');
+        const list = document.getElementById('heygenVoiceList');
+        modal.style.display = 'flex';
+        list.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:30px;">\u23f3 Fetching voices...</div>';
+
+        fetch('/api/heygen/voices', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({api_key: apiKey})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) { list.innerHTML = '<div style="color:#f87171; padding:20px;">\u274c ' + _escModal(data.error) + '</div>'; return; }
+
+            const raw = data.data || {};
+            const allVoices = Array.isArray(raw) ? raw : (raw.voices || []);
+            const voices = allVoices.slice(0, 10);
+            if (voices.length === 0) {
+                list.innerHTML = '<div style="color:#94a3b8; padding:20px;">No voices found.</div>';
+                return;
+            }
+
+            const currentId = document.getElementById('heygenVoiceId').value.trim();
+            list.innerHTML = '<div style="margin-bottom:10px; color:#94a3b8; font-size:0.85em;">Showing ' + voices.length + ' custom voice(s)</div>' +
+                voices.map(function(v) {
+                    const vid = v.voice_id || '';
+                    const name = _escModal(v.name || 'Unnamed');
+                    const lang = _escModal(v.language || '');
+                    const gender = _escModal(v.gender || '');
+                    const isActive = vid === currentId;
+                    const previewUrl = v.preview_audio || '';
+                    const previewBtn = previewUrl
+                        ? '<button onclick="event.stopPropagation(); new Audio(\'' + _escModal(previewUrl) + '\').play()" style="background:none; border:1px solid #475569; border-radius:4px; color:#94a3b8; cursor:pointer; padding:2px 8px; font-size:0.75em; margin-left:8px;">\u25b6 Preview</button>'
+                        : '';
+                    return '<div onclick="selectHeyGenVoice(\'' + vid + '\')" style="display:flex; align-items:center; padding:10px 12px; background:' + (isActive ? '#422006' : '#0f172a') + '; border:1px solid ' + (isActive ? '#f59e0b' : '#334155') + '; border-radius:8px; margin-bottom:6px; cursor:pointer; transition:border-color 0.2s;" onmouseover="this.style.borderColor=\'#f59e0b\'" onmouseout="this.style.borderColor=\'' + (isActive ? '#f59e0b' : '#334155') + '\'">' +
+                        '<div style="width:36px; height:36px; background:#1e293b; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:1.1em; margin-right:12px; border:1px solid #475569;">\uD83C\uDFA4</div>' +
+                        '<div style="flex:1; min-width:0;">' +
+                            '<div style="display:flex; align-items:center;"><span style="color:#f8fafc; font-weight:600; font-size:0.9em;">' + name + '</span>' + previewBtn + '</div>' +
+                            '<div style="color:#64748b; font-size:0.75em; margin-top:2px;">' + lang + (gender ? ' \u2022 ' + gender : '') + ' \u2022 <span style="font-family:monospace;">' + vid + '</span></div>' +
+                        '</div>' +
+                        (isActive ? '<span style="color:#fbbf24; font-size:0.8em; white-space:nowrap; margin-left:8px;">\u2713 Active</span>' : '') +
+                    '</div>';
+                }).join('');
+        })
+        .catch(function(err) {
+            list.innerHTML = '<div style="color:#f87171; padding:20px;">\u274c Failed to fetch: ' + _escModal(err.message) + '</div>';
+        });
+    }
+
+    function selectHeyGenVoice(vid) {
+        document.getElementById('heygenVoiceId').value = vid;
+        closeHeyGenVoiceModal();
+    }
+
+    function closeHeyGenVoiceModal() {
+        document.getElementById('heygenVoiceModal').style.display = 'none';
+    }
+
+    document.getElementById('heygenVoiceModal').addEventListener('click', function(e) {
+        if (e.target === this) closeHeyGenVoiceModal();
+    });
+
+    /* ============================================================
+       🧪 Test Video Generation Dialog
+       ============================================================ */
+    function openTestVideoDialog() {
+        var existing = document.getElementById('testVideoModal');
+        if (existing) existing.remove();
+
+        var templateId = document.getElementById('heygenTemplateId').value.trim();
+        var apiKey = document.getElementById('heygenApiKey').value.trim();
+
+        var modal = document.createElement('div');
+        modal.id = 'testVideoModal';
+        modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:10000;';
+        modal.innerHTML = '<div style="background:#1e293b;border-radius:12px;padding:24px;width:700px;max-height:80vh;overflow-y:auto;border:1px solid #334155;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">' +
+            '<h3 style="margin:0;color:#10b981;">🧪 Test HeyGen Video Generation</h3>' +
+            '<button onclick="closeTestVideoModal()" style="background:none;border:none;color:#94a3b8;font-size:1.5em;cursor:pointer;">✕</button></div>' +
+            '<div style="margin-bottom:12px;">' +
+            '<label style="color:#94a3b8;font-size:0.85em;display:block;margin-bottom:4px;">Template ID:</label>' +
+            '<input type="text" id="testTemplateId" value="' + _escModal(templateId) + '" style="width:100%;padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:4px;color:#e2e8f0;font-family:monospace;font-size:0.85em;box-sizing:border-box;"></div>' +
+            '<div style="margin-bottom:12px;">' +
+            '<label style="color:#94a3b8;font-size:0.85em;display:block;margin-bottom:4px;">API Key:</label>' +
+            '<input type="text" id="testApiKey" value="' + _escModal(apiKey) + '" style="width:100%;padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:4px;color:#e2e8f0;font-family:monospace;font-size:0.85em;box-sizing:border-box;"></div>' +
+            '<div style="margin-bottom:12px;">' +
+            '<label style="color:#94a3b8;font-size:0.85em;display:block;margin-bottom:4px;">Video Title:</label>' +
+            '<input type="text" id="testVideoTitle" value="Test Video" style="width:100%;padding:6px 8px;background:#0f172a;border:1px solid #334155;border-radius:4px;color:#e2e8f0;font-size:0.85em;box-sizing:border-box;"></div>' +
+            '<div style="margin-bottom:12px;">' +
+            '<label style="color:#94a3b8;font-size:0.85em;display:block;margin-bottom:4px;">Script Text (passed as <code style="color:#10b981;">script</code> text variable):</label>' +
+            '<textarea id="testScriptText" rows="6" placeholder="Enter script text here..." style="width:100%;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:4px;color:#e2e8f0;font-size:0.85em;resize:vertical;box-sizing:border-box;">This is a test video from ScriptCraft.</textarea></div>' +
+            '<div style="margin-bottom:12px;">' +
+            '<button onclick="runTestVideoGeneration()" id="testGenerateBtn" style="padding:8px 20px;background:linear-gradient(135deg,#10b981,#059669);color:white;border:none;border-radius:6px;cursor:pointer;font-size:0.9em;font-weight:600;">🚀 Generate Test Video</button>' +
+            '<span id="testGenerateSpinner" style="display:none;margin-left:10px;color:#94a3b8;">⏳ Sending request...</span></div>' +
+            '<div style="margin-bottom:8px;">' +
+            '<label style="color:#94a3b8;font-size:0.85em;display:block;margin-bottom:4px;">Curl Command Sent:</label>' +
+            '<pre id="testCurlPreview" style="background:#0f172a;border:1px solid #334155;border-radius:4px;padding:10px;color:#e2e8f0;font-size:0.75em;overflow-x:auto;white-space:pre-wrap;max-height:150px;margin:0;">Click Generate to see the curl command</pre></div>' +
+            '<div>' +
+            '<label style="color:#94a3b8;font-size:0.85em;display:block;margin-bottom:4px;">API Response:</label>' +
+            '<pre id="testVideoResult" style="background:#0f172a;border:1px solid #334155;border-radius:4px;padding:10px;color:#e2e8f0;font-size:0.8em;overflow-x:auto;white-space:pre-wrap;max-height:250px;margin:0;">Waiting for request...</pre></div>' +
+            '</div>';
+        document.body.appendChild(modal);
+        modal.addEventListener('click', function(e) { if (e.target === modal) closeTestVideoModal(); });
+    }
+
+    function closeTestVideoModal() {
+        var m = document.getElementById('testVideoModal');
+        if (m) m.remove();
+    }
+
+    function runTestVideoGeneration() {
+        var templateId = document.getElementById('testTemplateId').value.trim();
+        var apiKey = document.getElementById('testApiKey').value.trim();
+        var title = document.getElementById('testVideoTitle').value.trim();
+        var scriptText = document.getElementById('testScriptText').value.trim();
+        var resultEl = document.getElementById('testVideoResult');
+        var curlEl = document.getElementById('testCurlPreview');
+        var spinner = document.getElementById('testGenerateSpinner');
+        var btn = document.getElementById('testGenerateBtn');
+
+        if (!templateId) { resultEl.textContent = '❌ Template ID is required'; return; }
+        if (!apiKey) { resultEl.textContent = '❌ API Key is required'; return; }
+        if (!scriptText) { resultEl.textContent = '❌ Script text is required'; return; }
+
+        // Build the request body exactly as sent to HeyGen
+        var requestBody = {
+            caption: false,
+            title: title || 'Test Video',
+            variables: {
+                script: {
+                    name: 'script',
+                    type: 'text',
+                    properties: {
+                        content: scriptText
+                    }
+                }
+            }
+        };
+
+        // Show the equivalent curl command
+        var curlCmd = 'curl --request POST \\\n' +
+            "     --url 'https://api.heygen.com/v2/template/" + templateId + "/generate' \\\n" +
+            "     --header 'accept: application/json' \\\n" +
+            "     --header 'content-type: application/json' \\\n" +
+            "     --header 'x-api-key: " + apiKey + "' \\\n" +
+            "     --data '" + JSON.stringify(requestBody, null, 2) + "'";
+        curlEl.textContent = curlCmd;
+
+        spinner.style.display = 'inline';
+        btn.disabled = true;
+        resultEl.textContent = '⏳ Sending request to HeyGen API...';
+
+        fetch('/api/heygen/test-generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                template_id: templateId,
+                api_key: apiKey,
+                request_body: requestBody
+            })
+        })
+        .then(function(resp) { return resp.json().then(function(data) { return { status: resp.status, data: data }; }); })
+        .then(function(result) {
+            spinner.style.display = 'none';
+            btn.disabled = false;
+            var output = 'HTTP Status: ' + result.status + '\n\n';
+            if (result.data.error) {
+                output += '❌ ERROR:\n' + JSON.stringify(result.data.error, null, 2);
+            } else if (result.data.data) {
+                output += '✅ SUCCESS:\n' + JSON.stringify(result.data.data, null, 2);
+            } else {
+                output += 'Full Response:\n' + JSON.stringify(result.data, null, 2);
+            }
+            resultEl.textContent = output;
+            if (result.status >= 200 && result.status < 300 && result.data.data) {
+                resultEl.style.borderColor = '#10b981';
+            } else {
+                resultEl.style.borderColor = '#f87171';
+            }
+        })
+        .catch(function(err) {
+            spinner.style.display = 'none';
+            btn.disabled = false;
+            resultEl.textContent = '❌ Request failed: ' + err.message;
+            resultEl.style.borderColor = '#f87171';
+        });
+    }
+    </script>
+
     <div class="footer">
         <div>ScriptCraft v{{ version }} • Build 15.33-3hooks • © 2025</div>
         <div id="footerProgress" class="footer-progress">

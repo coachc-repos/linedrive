@@ -3,7 +3,7 @@
 B-Roll Image Generator using Google Gemini Flash Image
 
 Generates AI images for each B-roll search term in the table.
-Uses Google's Gemini 2.5 Flash Image model for high-quality, contextual images.
+Uses Google's Gemini 2.0 Flash image generation model for high-quality, contextual images.
 """
 
 import os
@@ -34,34 +34,22 @@ class BRollImageGenerator:
         self.output_dir = Path.home() / "Dev" / "brollimages"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Lazy loading for google.generativeai
-        self._genai = None
-        self._model = None
+        # Lazy loading for google.genai
+        self._client = None
 
-    def _ensure_genai(self):
-        """Lazy load google.generativeai to prevent import failures"""
-        if self._genai is None:
+    def _get_client(self):
+        """Get or create the Google GenAI client"""
+        if self._client is None:
             try:
-                import google.generativeai as genai
-                self._genai = genai
-                self._genai.configure(api_key=self.api_key)
-                print("✅ Google Generative AI configured")
+                from google import genai
+                self._client = genai.Client(api_key=self.api_key)
+                print("✅ Google GenAI client initialized")
             except ImportError as e:
                 raise ImportError(
-                    "google-generativeai package not installed. "
-                    "Install with: pip install google-generativeai"
+                    "google-genai package not installed. "
+                    "Install with: pip install google-genai"
                 ) from e
-        return self._genai
-
-    def _get_model(self):
-        """Get or create the Gemini model instance"""
-        if self._model is None:
-            genai = self._ensure_genai()
-            # Use Gemini 2.5 Flash Image Preview for image generation
-            self._model = genai.GenerativeModel(
-                "gemini-2.5-flash-image-preview")
-            print("✅ Gemini 2.5 Flash Image Preview model initialized")
-        return self._model
+        return self._client
 
     def parse_broll_table(self, table_text: str) -> List[Dict[str, str]]:
         """

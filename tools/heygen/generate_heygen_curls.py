@@ -81,8 +81,8 @@ def generate_curl_command(chapter_title, chapter_content, api_key, template_id):
   "caption": false,
   "title": "{escaped_title}",
   "variables": {{
-    "first_name": {{
-      "name": "first_name",
+    "script": {{
+      "name": "script",
       "type": "text",
       "properties": {{
         "content": "{escaped_content}"

@@ -601,17 +601,21 @@ def extract_heygen_host_script(script_content: str) -> str:
 def generate_heygen_curl_commands(
     script_content: str,
     script_title: str,
-    api_key: str = "ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==",
-    template_id: str = "92c09f8e9a1c4f078f7ae53886b7ad80"
+    api_key: str = "sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC",
+    template_id: str = "92c09f8e9a1c4f078f7ae53886b7ad80",
+    voice_id: str = ""
 ) -> str:
     """
     Generate HeyGen API curl commands from script content.
+    Uses the v2 template generate endpoint per:
+    https://docs.heygen.com/reference/generate-from-template-v2
 
     Args:
         script_content: Full script markdown content
         script_title: Title of the script
         api_key: HeyGen API key
         template_id: HeyGen template ID
+        voice_id: Optional HeyGen voice ID for voice override
 
     Returns:
         Formatted string with all curl commands
@@ -793,79 +797,52 @@ def generate_heygen_curl_commands(
         # Shorten the script title for use in curl commands
         short_title = shorten_title(script_title)
 
+        # Build the variables JSON block
+        # The template's voice is already configured — just pass the script text
+        def build_variables_json(escaped_content):
+            return f"""    "script": {{
+      "name": "script",
+      "type": "text",
+      "properties": {{
+        "content": "{escaped_content}"
+      }}
+    }}"""
+
+        def build_curl(escaped_title, escaped_content):
+            variables_block = build_variables_json(escaped_content)
+            return f"""curl --request POST \\
+     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\
+     --header 'accept: application/json' \\
+     --header 'content-type: application/json' \\
+     --header 'x-api-key: {api_key}' \\
+     --data '{{
+  "caption": false,
+  "title": "{escaped_title}",
+  "variables": {{
+{variables_block}
+  }}
+}}'
+
+"""
+
         # Generate Part 1 curl command
         # Use shortened title + chapter number
         escaped_title_part1 = escape_for_json_in_bash(f"{short_title}-Ch{i}p1")
         escaped_content_part1 = escape_for_json_in_bash(part1)
 
-        curl_cmd_part1 = f"""curl --location 'https://api.heygen.com/v2/template/{template_id}/generate' \\
-     --header 'X-Api-Key: {api_key}' \\
-     --header 'Content-Type: application/json' \\
-     --data '{{
-  "caption": false,
-  "title": "{escaped_title_part1}",
-  "variables": {{
-    "first_name": {{
-      "name": "first_name",
-      "type": "text",
-      "properties": {{
-        "content": "{escaped_content_part1}"
-      }}
-    }}
-  }}
-}}'
-
-"""
-        curl_commands.append(curl_cmd_part1)
+        curl_commands.append(build_curl(escaped_title_part1, escaped_content_part1))
 
         # Generate duplicate of ONLY the first chapter's Part 1 command
         if i == 1:
             escaped_title_part1b = escape_for_json_in_bash(
                 f"{short_title}-Ch{i}p1b")
-
-            curl_cmd_part1b = f"""curl --location 'https://api.heygen.com/v2/template/{template_id}/generate' \\
-     --header 'X-Api-Key: {api_key}' \\
-     --header 'Content-Type: application/json' \\
-     --data '{{
-  "caption": false,
-  "title": "{escaped_title_part1b}",
-  "variables": {{
-    "first_name": {{
-      "name": "first_name",
-      "type": "text",
-      "properties": {{
-        "content": "{escaped_content_part1}"
-      }}
-    }}
-  }}
-}}'
-
-"""
-            curl_commands.append(curl_cmd_part1b)
+            curl_commands.append(build_curl(escaped_title_part1b, escaped_content_part1))
 
         # Generate Part 2 curl command
         escaped_title_part2 = escape_for_json_in_bash(f"{short_title}-Ch{i}p2")
         escaped_content_part2 = escape_for_json_in_bash(part2)
 
-        curl_cmd_part2 = f"""curl --location 'https://api.heygen.com/v2/template/{template_id}/generate' \\
-     --header 'X-Api-Key: {api_key}' \\
-     --header 'Content-Type: application/json' \\
-     --data '{{
-  "caption": false,
-  "title": "{escaped_title_part2}",
-  "variables": {{
-    "first_name": {{
-      "name": "first_name",
-      "type": "text",
-      "properties": {{
-        "content": "{escaped_content_part2}"
-      }}
-    }}
-  }}
-}}'
-
-"""
-        curl_commands.append(curl_cmd_part2)
+        curl_commands.append(build_curl(escaped_title_part2, escaped_content_part2))
 
     curl_commands.append("=" * 80)
     curl_commands.append(

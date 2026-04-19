@@ -17,6 +17,7 @@ import logging
 from datetime import datetime
 from io import BytesIO
 from flask import Flask, render_template, request, jsonify, Response, make_response, send_file
+import requests
 import sys
 from pathlib import Path
 
@@ -446,7 +447,8 @@ class ProgressStreamer:
 async def process_script_creation(session_id, topic, audience, tone,
                                   video_length, production_type, goals,
                                   quick_test=False, checkboxes=None,
-                                  heygen_template_id="", heygen_api_key=""):
+                                  heygen_template_id="", heygen_api_key="",
+                                  heygen_voice_id=""):
     """Clean script creation with only console capture"""
     logger.info(f"🎬 SCRIPT CREATION STARTED: session={session_id}")
     if quick_test:
@@ -785,6 +787,11 @@ async def process_script_creation(session_id, topic, audience, tone,
                     heygen_script = extract_heygen_host_script(
                         final_script_content)
 
+                    # Fallback: if no Host: markers found, use the script content directly
+                    if not heygen_script:
+                        print("⚠️ No Host: markers found - using full script for HeyGen section")
+                        heygen_script = final_script_content
+
                     if heygen_script:
                         heygen_section = f"\n\n{'=' * 80}\n"
                         heygen_section += "# 🎬 HEYGEN READY SCRIPT\n"
@@ -807,13 +814,14 @@ async def process_script_creation(session_id, topic, audience, tone,
                                     final_script_with_tools,
                                     topic,  # script_title
                                     heygen_api_key,
-                                    heygen_template_id
+                                    heygen_template_id,
+                                    heygen_voice_id
                                 )
 
                                 if curl_commands:
                                     # Store curl commands separately (don't append to script)
                                     print(
-                                        f"✅ Generated {curl_commands.count('curl --location')} curl commands")
+                                        f"✅ Generated {curl_commands.count('curl --request POST')} curl commands")
                                 else:
                                     print("⚠️ No curl commands generated")
                                     curl_commands = None
@@ -1152,7 +1160,7 @@ async def process_script_creation(session_id, topic, audience, tone,
 async def process_existing_script(
     session_id, script_content, audience, tone,
     video_length, checkboxes, heygen_template_id="",
-    heygen_api_key=""
+    heygen_api_key="", heygen_voice_id=""
 ):
     """Process existing script with progress updates"""
     import re
@@ -1524,6 +1532,10 @@ async def process_existing_script(
                 from console_ui.text_processing import extract_heygen_host_script
 
                 heygen_script = extract_heygen_host_script(final_output)
+                # Fallback: if no Host: markers found, use cleaned script directly
+                if not heygen_script:
+                    logger.info("⚠️ No Host: markers found - using full script for HeyGen section")
+                    heygen_script = cleaned_script
                 if heygen_script:
                     heygen_section = f"\n\n{'=' * 80}\n"
                     heygen_section += "# 🎬 HEYGEN READY SCRIPT\n"
@@ -1553,17 +1565,23 @@ async def process_existing_script(
                 if not heygen_script:
                     heygen_script = extract_heygen_host_script(final_output)
 
+                # Fallback: if no Host: markers found, use the cleaned script directly
+                if not heygen_script:
+                    logger.info("⚠️ No Host: markers found - using full script for curl generation")
+                    heygen_script = cleaned_script
+
                 if heygen_script:
                     heygen_with_header = (
                         f"# 🎬 HEYGEN READY SCRIPT\n{'=' * 80}\n\n{heygen_script}"
                     )
                     curl_commands = generate_heygen_curl_commands(
                         heygen_with_header, script_title,
-                        heygen_api_key, heygen_template_id
+                        heygen_api_key, heygen_template_id,
+                        heygen_voice_id
                     )
                     if curl_commands:
                         # Store curl commands separately (don't append to script)
-                        num_commands = curl_commands.count('curl --location')
+                        num_commands = curl_commands.count('curl --request POST')
                         completed_steps += 1
                         progress = 15 + (completed_steps * progress_per_step)
                         streamer.send_update(
@@ -2150,6 +2168,7 @@ def create():
     # Get HeyGen parameters
     heygen_template_id = data.get("heygen_template_id", "")
     heygen_api_key = data.get("heygen_api_key", "")
+    heygen_voice_id = data.get("heygen_voice_id", "")
 
     # If "All" is checked, enable everything
     if checkboxes.get("all", False):
@@ -2195,7 +2214,8 @@ def create():
                 asyncio.run(process_script_creation(
                     session_id, topic, audience, tone, actual_length,
                     production_type, goals, quick_test, checkboxes,
-                    heygen_template_id, heygen_api_key
+                    heygen_template_id, heygen_api_key,
+                    heygen_voice_id
                 ))
         except Exception as e:
             logger.error(f"❌ Script creation error: {e}")
@@ -2453,6 +2473,7 @@ def process_script():
         checkboxes = data.get("checkboxes", {})
         heygen_template_id = data.get("heygen_template_id", "")
         heygen_api_key = data.get("heygen_api_key", "")
+        heygen_voice_id = data.get("heygen_voice_id", "")
 
         if not script_content.strip():
             logger.warning("❌ Empty script received")
@@ -2476,7 +2497,7 @@ def process_script():
                 asyncio.run(process_existing_script(
                     session_id, script_content, audience, tone,
                     video_length, checkboxes, heygen_template_id,
-                    heygen_api_key
+                    heygen_api_key, heygen_voice_id
                 ))
             except Exception as e:
                 logger.error(f"❌ Script processing error: {e}")
@@ -2677,6 +2698,148 @@ def export_heygen_curl():
         error_msg = f"HeyGen curl export failed: {str(e)}"
         logger.error(f"❌ {error_msg}")
         return jsonify({"error": error_msg}), 500
+
+
+@app.route("/api/heygen/templates", methods=["POST"])
+def heygen_list_templates():
+    """Proxy endpoint to fetch HeyGen templates (avoids CORS)"""
+    try:
+        data = request.get_json()
+        api_key = data.get("api_key", "") if data else ""
+        if not api_key:
+            return jsonify({"error": "No API key provided"}), 400
+
+        resp = requests.get(
+            "https://api.heygen.com/v2/templates",
+            headers={"accept": "application/json", "x-api-key": api_key},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return jsonify(resp.json())
+
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 500
+        logger.error(f"HeyGen API error: {status} - {e}")
+        return jsonify({"error": f"HeyGen API returned {status}"}), status
+    except Exception as e:
+        logger.error(f"HeyGen template fetch failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/heygen/template/<template_id>", methods=["POST"])
+def heygen_template_details(template_id):
+    """Proxy endpoint to fetch details for a single HeyGen template.
+    Merges data from the list endpoint (name, thumbnail) and the
+    detail endpoint (variables)."""
+    try:
+        data = request.get_json()
+        api_key = data.get("api_key", "") if data else ""
+        if not api_key:
+            return jsonify({"error": "No API key provided"}), 400
+
+        headers = {"accept": "application/json", "x-api-key": api_key}
+
+        # Detail endpoint gives variables
+        detail_resp = requests.get(
+            f"https://api.heygen.com/v2/template/{template_id}",
+            headers=headers, timeout=15,
+        )
+        detail_resp.raise_for_status()
+        detail_data = detail_resp.json().get("data", {})
+
+        # List endpoint gives name and thumbnail
+        list_resp = requests.get(
+            "https://api.heygen.com/v2/templates",
+            headers=headers, timeout=15,
+        )
+        list_resp.raise_for_status()
+        templates = list_resp.json().get("data", {}).get("templates", [])
+        summary = next((t for t in templates if t.get("template_id") == template_id), {})
+
+        merged = {**summary, **detail_data, "template_id": template_id}
+        return jsonify({"error": None, "data": merged})
+
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 500
+        logger.error(f"HeyGen template detail error: {status} - {e}")
+        return jsonify({"error": f"HeyGen API returned {status}"}), status
+    except Exception as e:
+        logger.error(f"HeyGen template detail fetch failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/heygen/voices", methods=["POST"])
+def heygen_list_voices():
+    """Proxy endpoint to fetch HeyGen voices (avoids CORS)"""
+    try:
+        data = request.get_json()
+        api_key = data.get("api_key", "") if data else ""
+        if not api_key:
+            return jsonify({"error": "No API key provided"}), 400
+
+        resp = requests.get(
+            "https://api.heygen.com/v2/voices",
+            headers={"accept": "application/json", "x-api-key": api_key},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return jsonify(resp.json())
+
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 500
+        logger.error(f"HeyGen voices API error: {status} - {e}")
+        return jsonify({"error": f"HeyGen API returned {status}"}), status
+    except Exception as e:
+        logger.error(f"HeyGen voices fetch failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/heygen/test-generate", methods=["POST"])
+def heygen_test_generate():
+    """Proxy endpoint to test HeyGen video generation from template."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        api_key = data.get("api_key", "")
+        template_id = data.get("template_id", "")
+        request_body = data.get("request_body", {})
+
+        if not api_key:
+            return jsonify({"error": "No API key provided"}), 400
+        if not template_id:
+            return jsonify({"error": "No template ID provided"}), 400
+
+        url = f"https://api.heygen.com/v2/template/{template_id}/generate"
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "x-api-key": api_key,
+        }
+
+        logger.info(f"🧪 Test generate: POST {url}")
+        logger.info(f"🧪 Request body: {json.dumps(request_body)[:500]}")
+
+        resp = requests.post(url, headers=headers, json=request_body, timeout=30)
+
+        logger.info(f"🧪 Response status: {resp.status_code}")
+        logger.info(f"🧪 Response body: {resp.text[:500]}")
+
+        # Return the full response with status so frontend can show it
+        try:
+            resp_json = resp.json()
+        except Exception:
+            resp_json = {"raw_response": resp.text}
+
+        return jsonify(resp_json), resp.status_code
+
+    except requests.exceptions.Timeout:
+        logger.error("HeyGen test-generate timed out")
+        return jsonify({"error": "Request timed out after 30 seconds"}), 504
+    except Exception as e:
+        logger.error(f"HeyGen test-generate failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/test_word")
@@ -3346,7 +3509,8 @@ def execute_curl():
                     # Extract job ID if available (HeyGen specific)
                     job_id = None
                     if isinstance(response_data, dict):
-                        job_id = response_data.get('data', {}).get('video_id') or \
+                        data_obj = response_data.get('data') or {}
+                        job_id = (data_obj.get('video_id') if isinstance(data_obj, dict) else None) or \
                             response_data.get('video_id') or \
                             response_data.get('job_id') or \
                             response_data.get('id')

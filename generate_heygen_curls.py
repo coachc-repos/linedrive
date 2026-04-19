@@ -78,15 +78,17 @@ def generate_curl_command(chapter_title, chapter_content, api_key, template_id):
     escaped_content = escape_for_bash_single_quotes(chapter_content)
     escaped_title = escape_for_bash_single_quotes(chapter_title)
 
-    curl_cmd = f"""curl --location 'https://api.heygen.com/v2/template/{template_id}/generate' \\
-     --header 'X-Api-Key: {api_key}' \\
-     --header 'Content-Type: application/json' \\
+    curl_cmd = f"""curl --request POST \\
+     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\
+     --header 'accept: application/json' \\
+     --header 'content-type: application/json' \\
+     --header 'x-api-key: {api_key}' \\
      --data '{{
   "caption": false,
   "title": "{escaped_title}",
   "variables": {{
-    "first_name": {{
-      "name": "first_name",
+    "script": {{
+      "name": "script",
       "type": "text",
       "properties": {{
         "content": "{escaped_content}"

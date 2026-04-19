@@ -343,52 +343,49 @@ class PerfectGameScraper:
             return None
 
     def _parse_date_text(self, date_text: str) -> Tuple[str, str]:
-        """Parse date text from Perfect Game format"""
+        """Parse date text from Perfect Game format.
+
+        Selenium .text returns newline-separated parts, e.g.:
+            'APR\\n18 - 19\\n2026'
+        BeautifulSoup concatenates them: 'Apr18 - 192026'
+        Both formats are handled.
+        """
+        import re
+
         try:
-            # Perfect Game provides the year in the date text, let's extract it
-            lines = date_text.strip().split("\n")
-            year = None
-            month_text = ""
+            # Normalise: collapse whitespace/newlines into single spaces
+            text = " ".join(date_text.split()).strip()
 
-            # Look for the year in the date text
-            for line in lines:
-                line = line.strip()
-                if line.isdigit() and len(line) == 4:  # Found year (e.g., "2025")
-                    year = int(line)
-                elif (
-                    line and not line.replace(" - ", "").replace(" ", "").isdigit()
-                ):  # Month text
-                    month_text = line.upper()
-
-            # If no year found, use current year
-            if not year:
-                year = datetime.now().year
-
-            # Parse based on month text
-            if "AUG" in month_text:
-                return f"{year}-08-01", f"{year}-08-31"
-            elif "SEP - OCT" in month_text:
-                return f"{year}-09-07", f"{year}-10-26"
-            elif "SEP - NOV" in month_text:
-                return f"{year}-09-07", f"{year}-11-09"
-            elif "JUN - JUL" in month_text:
-                return f"{year}-06-06", f"{year}-07-07"
-            elif "SEP" in month_text:
-                return f"{year}-09-01", f"{year}-09-30"
-            elif "OCT" in month_text:
-                return f"{year}-10-01", f"{year}-10-31"
-            elif "NOV" in month_text:
-                return f"{year}-11-01", f"{year}-11-30"
-            else:
-                # Default fallback - use the year we found or current year
-                return f"{year}-08-01", f"{year}-08-03"
-
-        except:
-            # Ultimate fallback
-            return (
-                f"{datetime.now().year}-08-01",
-                f"{datetime.now().year}-08-03",
+            # Primary pattern: MON DD - DD YYYY  (with optional spaces)
+            # Matches both "APR 18 - 19 2026" and "Apr18 - 192026"
+            match = re.match(
+                r"([A-Za-z]{3})\s*(\d{1,2})\s*-\s*(\d{1,2})\s*(\d{4})", text
             )
+            if match:
+                month_str = match.group(1)
+                start_day = int(match.group(2))
+                end_day = int(match.group(3))
+                year = int(match.group(4))
+
+                month_num = datetime.strptime(month_str, "%b").month
+
+                date_start = f"{year}-{month_num:02d}-{start_day:02d}"
+                date_end = f"{year}-{month_num:02d}-{end_day:02d}"
+                return date_start, date_end
+
+            # Fallback: try to find any recognisable month + year
+            month_match = re.search(r"([A-Za-z]{3}).*?(\d{4})", text)
+            if month_match:
+                month_num = datetime.strptime(month_match.group(1), "%b").month
+                year = int(month_match.group(2))
+                return f"{year}-{month_num:02d}-01", f"{year}-{month_num:02d}-01"
+
+            logger.warning(f"Unrecognised date format: {repr(date_text)}")
+            return "TBD", "TBD"
+
+        except Exception as e:
+            logger.warning(f"Date parse error for {repr(date_text)}: {e}")
+            return "TBD", "TBD"
 
     def save_results(self, results: Dict, filename: str = None) -> str:
         """Save search results to JSON file"""

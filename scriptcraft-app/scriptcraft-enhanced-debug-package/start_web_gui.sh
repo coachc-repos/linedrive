@@ -14,9 +14,9 @@ echo "📁 Repository root: $REPO_ROOT"
 echo ""
 
 # Activate virtual environment if it exists
-if [ -d "$REPO_ROOT/venv312" ]; then
+if [ -d "$REPO_ROOT/venv314" ]; then
     echo "🐍 Activating virtual environment..."
-    source "$REPO_ROOT/venv312/bin/activate"
+    source "$REPO_ROOT/venv314/bin/activate"
     echo "✅ Virtual environment activated"
 elif [ -d "$REPO_ROOT/.venv" ]; then
     echo "🐍 Activating virtual environment..."
@@ -45,14 +45,14 @@ fi
 
 # Check Python version
 echo "🐍 Python version:"
-python --version
+python3 --version
 echo ""
 
 # Check if required packages are installed
 echo "📦 Checking key packages..."
-python -c "import flask; print('✅ Flask installed')" 2>/dev/null || echo "❌ Flask not installed"
-python -c "import google.generativeai; print('✅ google-generativeai installed')" 2>/dev/null || echo "❌ google-generativeai not installed"
-python -c "from PIL import Image; print('✅ Pillow installed')" 2>/dev/null || echo "❌ Pillow not installed"
+python3 -c "import flask; print('✅ Flask installed')" 2>/dev/null || echo "❌ Flask not installed"
+python3 -c "import google.generativeai; print('✅ google-generativeai installed')" 2>/dev/null || echo "❌ google-generativeai not installed"
+python3 -c "from PIL import Image; print('✅ Pillow installed')" 2>/dev/null || echo "❌ Pillow not installed"
 echo ""
 
 # Check if thumbnail template exists
@@ -72,4 +72,4 @@ echo "⏹️  Press Ctrl+C to stop"
 echo ""
 
 # Run the web GUI
-python web_gui.py
+python3 web_gui.py
