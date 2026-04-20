@@ -37,7 +37,7 @@ VERSION = "15.34-quotes-progress-mapping"
 # Set Google API key at module level to ensure it's available
 # This ensures the API key is set before any thumbnail generation
 if "GOOGLE_API_KEY" not in os.environ:
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyAiFFlgDokz-s4U8UrV73Fhdnl8Ukx2jCM"
+    os.environ["GOOGLE_API_KEY"] = "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg"
     print("🔑 Set GOOGLE_API_KEY environment variable from default")
 else:
     print(f"🔑 Using GOOGLE_API_KEY from environment")
@@ -1029,7 +1029,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                     print(f"\n🔧 Initializing EmotionalThumbnailGenerator...")
                     # Let generator get API key from environment (same as test page)
                     api_key = os.getenv(
-                        "GOOGLE_API_KEY", "AIzaSyAiFFlgDokz-s4U8UrV73Fhdnl8Ukx2jCM")
+                        "GOOGLE_API_KEY", "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg")
                     print(
                         f"   Environment API key: {api_key[:20]}... (length: {len(api_key)})")
 

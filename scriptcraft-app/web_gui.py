@@ -38,7 +38,7 @@ VERSION = "15.34-quotes-progress-mapping"
 # Set Google API key at module level to ensure it's available
 # This ensures the API key is set before any thumbnail generation
 if "GOOGLE_API_KEY" not in os.environ:
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyAiFFlgDokz-s4U8UrV73Fhdnl8Ukx2jCM"
+    os.environ["GOOGLE_API_KEY"] = "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg"
     print("🔑 Set GOOGLE_API_KEY environment variable from default")
 else:
     print(f"🔑 Using GOOGLE_API_KEY from environment")
@@ -1040,7 +1040,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                     print(f"\n🔧 Initializing EmotionalThumbnailGenerator...")
                     # Let generator get API key from environment (same as test page)
                     api_key = os.getenv(
-                        "GOOGLE_API_KEY", "AIzaSyAiFFlgDokz-s4U8UrV73Fhdnl8Ukx2jCM")
+                        "GOOGLE_API_KEY", "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg")
                     print(
                         f"   Environment API key: {api_key[:20]}... (length: {len(api_key)})")
 
@@ -1626,31 +1626,37 @@ async def process_existing_script(
                 logger.error(f"❌ Demo package error: {e}")
 
         # Generate Thumbnails if requested
+        thumbnail_results = None
         if checkboxes.get("thumbnails", False):
             current_progress = 15 + (completed_steps * progress_per_step)
-            streamer.send_update("🖼️ Generating emotional thumbnails...",
+            streamer.send_update("🖼️ Generating 6 thumbnail variations...",
                                  int(current_progress))
             try:
-                from linedrive_azure.agents import EmotionalThumbnailAgentClient
-
-                thumb_agent = EmotionalThumbnailAgentClient()
-                thumb_result = thumb_agent.generate_thumbnail_variations(
-                    script_title=script_title,
-                    script_content=cleaned_script,
-                    target_audience=audience,
-                    timeout=120
+                from tools.media.emotional_thumbnail_generator import (
+                    EmotionalThumbnailGenerator,
                 )
 
-                if thumb_result.get("success", False):
-                    thumbnails = thumb_result.get("thumbnails", "")
+                thumbnail_gen = EmotionalThumbnailGenerator()
+                thumbnail_results = thumbnail_gen.generate_all_thumbnails(
+                    script_title=script_title,
+                    script_content=cleaned_script
+                )
+
+                if thumbnail_results and thumbnail_results.get("variations"):
+                    variations = thumbnail_results["variations"]
                     thumb_section = f"\n\n{'=' * 80}\n"
                     thumb_section += "# 🖼️ EMOTIONAL THUMBNAIL VARIATIONS\n"
-                    thumb_section += f"{'=' * 80}\n\n{thumbnails}"
+                    thumb_section += f"{'=' * 80}\n\n"
+                    for i, var in enumerate(variations, 1):
+                        thumb_section += f"## Variation #{i}: {var.get('emotion')}\n"
+                        thumb_section += f"- **Text:** {var.get('text')}\n"
+                        thumb_section += f"- **Expression:** {var.get('expression')}\n"
+                        thumb_section += f"- **File:** {var.get('filename')}\n\n"
                     final_output += thumb_section
                     completed_steps += 1
                     progress = 15 + (completed_steps * progress_per_step)
                     streamer.send_update(
-                        "✅ Emotional thumbnails generated",
+                        f"✅ Generated {len(variations)} thumbnails",
                         int(progress)
                     )
             except Exception as e:
@@ -1725,6 +1731,7 @@ async def process_existing_script(
             "enhanced_script": final_output,  # SSE handler expects "enhanced_script" key
             "script": final_output,  # Also include "script" for compatibility
             "script_title": script_title,
+            "thumbnail_results": thumbnail_results,
             "edl_content": edl_content,
             "edl_filename": edl_filename,
             "curl_commands": curl_commands,

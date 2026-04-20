@@ -3,7 +3,7 @@
 B-Roll Image Generator using Google Gemini Flash Image
 
 Generates AI images for each B-roll search term in the table.
-Uses Google's Gemini 2.5 Flash Image model for high-quality, contextual images.
+Uses Google's Gemini 2.0 Flash image generation model for high-quality, contextual images.
 """
 
 import os
@@ -34,34 +34,22 @@ class BRollImageGenerator:
         self.output_dir = Path.home() / "Dev" / "brollimages"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Lazy loading for google.generativeai
-        self._genai = None
-        self._model = None
+        # Lazy loading for google.genai
+        self._client = None
 
-    def _ensure_genai(self):
-        """Lazy load google.generativeai to prevent import failures"""
-        if self._genai is None:
+    def _get_client(self):
+        """Get or create the Google GenAI client"""
+        if self._client is None:
             try:
-                import google.generativeai as genai
-                self._genai = genai
-                self._genai.configure(api_key=self.api_key)
-                print("✅ Google Generative AI configured")
+                from google import genai
+                self._client = genai.Client(api_key=self.api_key)
+                print("✅ Google GenAI client initialized")
             except ImportError as e:
                 raise ImportError(
-                    "google-generativeai package not installed. "
-                    "Install with: pip install google-generativeai"
+                    "google-genai package not installed. "
+                    "Install with: pip install google-genai"
                 ) from e
-        return self._genai
-
-    def _get_model(self):
-        """Get or create the Gemini model instance"""
-        if self._model is None:
-            genai = self._ensure_genai()
-            # Use Gemini 2.5 Flash Image Preview for image generation
-            self._model = genai.GenerativeModel(
-                "gemini-2.5-flash-image-preview")
-            print("✅ Gemini 2.5 Flash Image Preview model initialized")
-        return self._model
+        return self._client
 
     def parse_broll_table(self, table_text: str) -> List[Dict[str, str]]:
         """
@@ -143,7 +131,8 @@ class BRollImageGenerator:
             Dict with success status and file path, or None on failure
         """
         try:
-            model = self._get_model()
+            client = self._get_client()
+            from google.genai import types
 
             # Create detailed prompt combining search term AND description for specificity
             prompt = f"""Create a professional, high-quality stock photo style image for video B-roll footage.
@@ -177,53 +166,54 @@ Generate an image showing: {search_term} with these specific details: {descripti
                 f"\n🎨 Generating image {index} variation {variation}: {search_term}")
             print(f"   Description: {description[:60]}...")
 
-            # Generate the image
-            response = model.generate_content(prompt)
+            # Generate the image using google-genai SDK
+            response = client.models.generate_content(
+                model="gemini-2.5-flash-image",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_modalities=["TEXT", "IMAGE"],
+                )
+            )
 
             # Check if image was generated
-            if not hasattr(response, 'candidates') or not response.candidates:
+            if not response.candidates or not response.candidates[0].content:
                 print(f"❌ No image generated for {search_term}")
                 return None
 
-            # Get the generated image
-            candidate = response.candidates[0]
+            # Extract image from response parts
+            for part in response.candidates[0].content.parts:
+                if part.inline_data and part.inline_data.data:
+                    image_data = part.inline_data.data
+                    mime_type = part.inline_data.mime_type or "image/png"
 
-            # Check for inline data (image)
-            if hasattr(candidate.content, 'parts') and candidate.content.parts:
-                for part in candidate.content.parts:
-                    if hasattr(part, 'inline_data') and part.inline_data:
-                        # Extract image data
-                        image_data = part.inline_data.data
-                        mime_type = part.inline_data.mime_type
+                    # Determine file extension
+                    ext = 'png'
+                    if 'jpeg' in mime_type or 'jpg' in mime_type:
+                        ext = 'jpg'
+                    elif 'webp' in mime_type:
+                        ext = 'webp'
 
-                        # Determine file extension
-                        ext = 'png'
-                        if 'jpeg' in mime_type or 'jpg' in mime_type:
-                            ext = 'jpg'
-                        elif 'webp' in mime_type:
-                            ext = 'webp'
+                    # Create safe filename with variation
+                    safe_term = re.sub(r'[^\w\s-]', '', search_term)
+                    safe_term = re.sub(r'[-\s]+', '_', safe_term)
+                    safe_term = safe_term[:50]  # Limit length
 
-                        # Create safe filename with variation
-                        safe_term = re.sub(r'[^\w\s-]', '', search_term)
-                        safe_term = re.sub(r'[-\s]+', '_', safe_term)
-                        safe_term = safe_term[:50]  # Limit length
+                    filename = f"broll_{index:02d}_v{variation}_{safe_term}.{ext}"
+                    filepath = self.output_dir / filename
 
-                        filename = f"broll_{index:02d}_v{variation}_{safe_term}.{ext}"
-                        filepath = self.output_dir / filename
+                    # Save the image
+                    with open(filepath, 'wb') as f:
+                        f.write(image_data)
 
-                        # Save the image
-                        with open(filepath, 'wb') as f:
-                            f.write(image_data)
+                    print(f"✅ Saved: {filename}")
 
-                        print(f"✅ Saved: {filename}")
-
-                        return {
-                            'success': True,
-                            'filename': str(filepath),
-                            'search_term': search_term,
-                            'description': description,
-                            'index': index
-                        }
+                    return {
+                        'success': True,
+                        'filename': str(filepath),
+                        'search_term': search_term,
+                        'description': description,
+                        'index': index
+                    }
 
             print(f"❌ No image data found in response for {search_term}")
             return None

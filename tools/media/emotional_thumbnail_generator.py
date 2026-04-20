@@ -11,25 +11,27 @@ from pathlib import Path
 from datetime import datetime
 from PIL import Image
 
-# Lazy import for google.generativeai - only import when needed
-# This gives better error messages and avoids import-time failures
+# Lazy import for google.genai (new SDK) - only import when needed
 _genai = None
+_types = None
 
 
 def _ensure_genai():
-    """Lazy import of google.generativeai with helpful error message"""
-    global _genai
+    """Lazy import of google.genai with helpful error message"""
+    global _genai, _types
     if _genai is None:
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types
             _genai = genai
+            _types = types
         except ImportError as e:
             raise ImportError(
-                "google-generativeai package is required for thumbnail generation.\n"
-                "Install it with: pip install google-generativeai\n"
+                "google-genai package is required for thumbnail generation.\n"
+                "Install it with: pip install google-genai\n"
                 f"Original error: {e}"
             )
-    return _genai
+    return _genai, _types
 
 
 class EmotionalThumbnailGenerator:
@@ -41,28 +43,31 @@ class EmotionalThumbnailGenerator:
 
         Args:
             api_key: Google API key (defaults to env var GOOGLE_API_KEY)
-            template_path: Path to template image (defaults to thumbnail_template_canva.png)
+            template_path: Path to optional template image (if provided, will be used as reference)
             output_dir: Output directory for thumbnails (defaults to ~/Dev/Thumbnails)
         """
         self.api_key = api_key or os.getenv(
-            "GOOGLE_API_KEY", "AIzaSyAiFFlgDokz-s4U8UrV73Fhdnl8Ukx2jCM")
+            "GOOGLE_API_KEY", "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg")
 
-        # Use absolute path for template - find it relative to this file
-        if template_path:
+        # Template is optional - if provided and exists, use it
+        self.template_path = None
+        if template_path and Path(template_path).exists():
             self.template_path = template_path
         else:
+            # Check default location but don't fail if missing
             current_dir = Path(__file__).parent
-            self.template_path = str(
-                current_dir / "Thumbnail_Template_Canva.png")
+            default_template = current_dir / "Thumbnail_Template_Canva.png"
+            if default_template.exists():
+                self.template_path = str(default_template)
 
         self.output_dir = Path(
             output_dir or os.path.expanduser("~/Dev/Thumbnails"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Configure Gemini API (lazy import)
-        genai = _ensure_genai()
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel('gemini-2.5-flash-image-preview')
+        # Configure Gemini API (lazy import, new SDK)
+        genai, types = _ensure_genai()
+        self.client = genai.Client(api_key=self.api_key)
+        self.model_name = 'gemini-2.5-flash-image'
 
     def extract_thumbnail_text_from_upload_details(self, upload_details):
         """
@@ -171,85 +176,82 @@ class EmotionalThumbnailGenerator:
         Returns:
             PIL Image object or None on failure
         """
-        # Load template image
-        template_img = Image.open(self.template_path)
+        # Check if we have a template image to use as reference
+        has_template = self.template_path and Path(self.template_path).exists()
 
-        # Create detailed prompt for model
-        prompt = f"""You are modifying a YouTube thumbnail template image (1280x720 aspect ratio).
+        if has_template:
+            template_img = Image.open(self.template_path)
+            prompt = f"""You are modifying a YouTube thumbnail template image (1280x720 aspect ratio).
 
-TEMPLATE IMAGE PROVIDED: This image shows a person in a specific pose pointing upward.
+TEMPLATE IMAGE PROVIDED: This image shows a person in a specific pose.
 
-CRITICAL INSTRUCTIONS - WHAT TO PRESERVE:
-1. KEEP THE PERSON'S POSE, BODY POSITION, AND POINTING ARM EXACTLY AS IS - DO NOT CHANGE
-2. Keep the person's size and placement in the frame EXACTLY as shown
-3. Keep the arm gesture and pointing direction EXACTLY as shown
-4. Keep the overall composition EXACTLY as shown
+WHAT TO TRANSFORM:
+1. BACKGROUND: Replace background with: {emotion_data['background']}
+2. FACIAL EXPRESSION: {emotion_data['expression']} conveying {emotion_data['mood']}
+3. OUTFIT: Change clothing to: {emotion_data['outfit']}
 
-WHAT TO TRANSFORM (ONLY 3 THINGS):
-1. BACKGROUND: Replace white/plain background with colorful futuristic scene
-2. FACIAL EXPRESSION: Transform the person's face to match emotion
-3. OUTFIT: Change what the person is wearing
+Topic: {script_title}
+Emotion: {emotion_data['emotion']}
 
 DO NOT ADD ANY TEXT OR WORDS TO THE IMAGE.
+Keep the person's pose and position. Fill background edge-to-edge (1280x720).
+High resolution, photorealistic, YouTube thumbnail optimized."""
+        else:
+            prompt = f"""Generate a professional YouTube thumbnail image (1280x720 aspect ratio, 16:9).
 
-BACKGROUND REPLACEMENT:
-Topic: {script_title}
-Specific Background: {emotion_data['background']}
-- Replace the current background with a COLORFUL, FUTURISTIC scene
-- Background must relate to: {script_title}
-- Background should be: {emotion_data['background']}
-- MANDATORY: Background fills ENTIRE frame edge-to-edge (1280x720)
-- High resolution, detailed, vibrant colors
-- Futuristic tech aesthetic with rich visual detail
-- Dramatic lighting that complements the scene
-- Background should be prominent in UPPER LEFT where text will go
-- Ensure background extends to all edges with no white space
-- Create DISTINCTLY DIFFERENT backgrounds for each variation
-
-FACIAL EXPRESSION CHANGE:
-- Transform ONLY the person's face to show: {emotion_data['expression']}
-- Make expression EXAGGERATED and CLEAR for thumbnail visibility
-- Expression must convey: {emotion_data['mood']}
+SCENE DESCRIPTION:
+- A person (content creator / YouTuber) positioned on the RIGHT side of the frame
+- The person should be from chest up, facing the camera
+- Facial expression: {emotion_data['expression']}
+- The expression must convey: {emotion_data['mood']}
 - Emotion: {emotion_data['emotion']}
-- Keep face proportional and natural
-- DO NOT change head position or angle, only facial expression
-- Face should match the emotion while maintaining the pose
+- Outfit: {emotion_data['outfit']}
 
-OUTFIT CHANGE:
-- Change clothing to: {emotion_data['outfit']}
-- Mix of edgy fashion AND current trendy styles
-- Make outfit stylish, modern, and fashionable
-- Should look current and contemporary
-- Keep outfit appropriate for thumbnail visibility
+BACKGROUND:
+- Topic: {script_title}
+- Specific scene: {emotion_data['background']}
+- Background fills the ENTIRE frame edge-to-edge
+- UPPER LEFT area should be clean/spacious (text overlay will be added later)
+- Vibrant, high-contrast colors for thumbnail visibility
 
-COLOR PALETTE for backgrounds:
-- ANGRY: Reds, oranges, dark dramatic (#ef4444, #dc2626, #1e293b)
-- SHOCKED: Bright blues, whites, high contrast (#ffffff, #0ea5e9, #38bdf8)
-- SCARED: Dark blues, purples, moody (#1e293b, #7c3aed, #dc2626)
-- EXCITED: Vibrant yellows, greens, energetic (#fbbf24, #22c55e, #0ea5e9)
-- SKEPTICAL: Cool grays, teals, modern (#64748b, #06b6d4, #475569)
-- DETERMINED: Deep reds, blacks, powerful (#991b1b, #1f2937, #b91c1c)
+COLOR PALETTE:
+- ANGRY: Reds, oranges, dark dramatic
+- SHOCKED: Bright blues, whites, high contrast
+- SCARED: Dark blues, purples, moody
+- EXCITED: Vibrant yellows, greens, energetic
+- SKEPTICAL: Cool grays, teals, modern
+- DETERMINED: Deep reds, blacks, powerful
 
-FINAL OUTPUT REQUIREMENTS:
+CRITICAL RULES:
+- DO NOT ADD ANY TEXT OR WORDS TO THE IMAGE
 - 1280x720 pixels, 16:9 aspect ratio
-- Person in SAME POSITION as template with pointing gesture UNCHANGED
-- NEW colorful futuristic background filling entire frame
-- NEW facial expression matching emotion
-- NEW outfit matching style description
-- NO TEXT on image
-- High visual impact, professional quality
-- Background extends to all edges with no gaps
-
-Style: HIGH RESOLUTION photorealistic, preserve original pose and gesture exactly, colorful futuristic backgrounds, varied facial expressions, contemporary fashion, YouTube thumbnail optimized."""
+- Photorealistic, high resolution
+- High visual impact, professional YouTube thumbnail quality
+- Person takes up roughly 40% of right side of frame
+- Background extends to all edges with no gaps or white space"""
 
         try:
-            # Generate image with Gemini
-            response = self.model.generate_content([prompt, template_img])
+            _, types = _ensure_genai()
 
-            # Extract image from response
-            if response.parts:
-                for part in response.parts:
-                    if hasattr(part, 'inline_data') and part.inline_data:
+            contents = [prompt]
+            if has_template:
+                template_bytes = BytesIO()
+                template_img.save(template_bytes, format='PNG')
+                template_bytes.seek(0)
+                contents.append(Image.open(BytesIO(template_bytes.getvalue())))
+
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_modalities=["TEXT", "IMAGE"]
+                )
+            )
+
+            # Extract image from response (new SDK format)
+            if response.candidates and response.candidates[0].content.parts:
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, 'inline_data') and part.inline_data and part.inline_data.data:
                         img = Image.open(BytesIO(part.inline_data.data))
 
                         # Ensure correct dimensions
@@ -302,7 +304,7 @@ Style: HIGH RESOLUTION photorealistic, preserve original pose and gesture exactl
 
         print(f"\n{'='*70}")
         print(f"🎬 Generating 6 Emotional Thumbnails: '{script_title}'")
-        print(f"📸 Template: {self.template_path}")
+        print(f"📸 Template: {self.template_path or 'None (generating from scratch)'}")
         if base_text:
             print(f"💬 Base Text: {base_text}")
         print(f"{'='*70}\n")

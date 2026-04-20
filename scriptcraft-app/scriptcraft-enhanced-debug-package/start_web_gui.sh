@@ -28,7 +28,7 @@ fi
 echo ""
 
 # Export Google API key
-export GOOGLE_API_KEY="AIzaSyAiFFlgDokz-s4U8UrV73Fhdnl8Ukx2jCM"
+export GOOGLE_API_KEY="AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg"
 echo "🔑 Google API key exported"
 echo ""
 

@@ -96,7 +96,7 @@ if [ -f ".env" ]; then
     if [ -z "$GOOGLE_API_KEY" ]; then
         echo "⚠️  GOOGLE_API_KEY not found in .env file"
         echo "   Thumbnail generation will use hardcoded fallback"
-        GOOGLE_API_KEY="AIzaSyAiFFlgDokz-s4U8UrV73Fhdnl8Ukx2jCM"
+        GOOGLE_API_KEY="AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg"
     fi
 else
     echo "❌ .env file not found. Please create it with AI_PROJECT_API_KEY and GOOGLE_API_KEY"

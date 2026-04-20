@@ -1972,6 +1972,7 @@ Time management content here...`;
                             const edlFilename = message.edl_filename || null;
                             const curlCommands = message.curl_commands || null;
                             const brollImages = message.broll_images || null;
+                            const thumbnails = message.thumbnails || [];
                             
                             // Store script globally for export functions
                             window.currentScript = processedScript;
@@ -1986,7 +1987,7 @@ Time management content here...`;
                             const tabbedHTML = createTabbedInterface(
                                 processedScript,
                                 null,  // demo_packages not yet implemented
-                                null,  // thumbnails not yet implemented
+                                thumbnails,
                                 null,  // chapter_comparisons not applicable for process workflow
                                 null,  // flowOriginal not applicable
                                 null,  // flowImproved not applicable
@@ -2016,7 +2017,12 @@ Time management content here...`;
                                 }
                                 renderMarkdownContent(processedScript, null);
                                 console.log('Rendered markdown for script length:', processedScript ? processedScript.length : 0);
-                            }, 100);
+                                
+                                // Auto-switch to thumbnails tab if thumbnails were generated
+                                if (thumbnails && thumbnails.length > 0) {
+                                    switchTab('thumbnails');
+                                }
+                            }, 200);
                             
                             addProgressMessage('✅ Script processing complete!', 'success');
                             
@@ -2242,6 +2248,11 @@ Time management content here...`;
                             
                             // Render markdown content
                             renderMarkdownContent(finalScript, null, flowOriginal, flowImproved);
+                            
+                            // Auto-switch to thumbnails tab if thumbnails were generated
+                            if (thumbnails && thumbnails.length > 0) {
+                                setTimeout(() => { switchTab('thumbnails'); }, 200);
+                            }
                             
                             resultDiv.className = 'result';
                             document.getElementById('saveBtn').style.display = 'inline-block';
