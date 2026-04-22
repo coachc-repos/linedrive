@@ -1488,6 +1488,8 @@ Just provide the clean, production-ready revised chapter content above.
 
             hook_text = ""
             summary_text = ""
+            thumbnail_hook_text = ""
+            thumbnail_hook_text_options = []
 
             try:
                 print("🔍 DEBUG: About to call generate_hook_and_summary...")
@@ -1510,6 +1512,8 @@ Just provide the clean, production-ready revised chapter content above.
                     summary_text = hook_summary_result.get("summary", "")
                     flow_analysis = hook_summary_result.get(
                         "flow_analysis", "")
+                    thumbnail_hook_text = (hook_summary_result.get("thumbnail_hook_text") or "").strip()
+                    thumbnail_hook_text_options = hook_summary_result.get("thumbnail_hook_text_options") or []
 
                     # Log each hook generation
                     if hook1_text:
@@ -1524,6 +1528,14 @@ Just provide the clean, production-ready revised chapter content above.
                     if summary_text:
                         print(
                             f"✅ Summary generated ({len(summary_text)} chars) [{hook_summary_end}]")
+                    if thumbnail_hook_text:
+                        print(
+                            f"✅ Thumbnail hook text generated: '{thumbnail_hook_text}' [{hook_summary_end}]")
+                    if thumbnail_hook_text_options:
+                        print(
+                            f"✅ Thumbnail hook options generated: {thumbnail_hook_text_options} [{hook_summary_end}]")
+                    else:
+                        print("⚠️ Thumbnail hook text missing from Hook-and-Summary output")
 
                     # Display flow analysis if available
                     if flow_analysis:
@@ -1718,6 +1730,8 @@ Just provide the clean, production-ready revised chapter content above.
                 "chapter_scripts": all_chapter_scripts,
                 "combined_script": combined_script,
                 "script_review": script_review,
+                "thumbnail_hook_text": thumbnail_hook_text,
+                "thumbnail_hook_text_options": thumbnail_hook_text_options,
                 "chapters_count": len(chapters),
                 "target_minutes_per_chapter": minutes_per_chapter,
                 "comparison_file": comparison_file_path if chapter_comparisons else None,

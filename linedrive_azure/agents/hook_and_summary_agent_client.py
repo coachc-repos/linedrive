@@ -9,6 +9,7 @@ This agent handles creation of engaging video hooks and summaries:
 """
 
 from typing import Dict, Any, Optional
+import re
 from .base_agent_client import BaseAgentClient
 
 
@@ -127,6 +128,7 @@ Following your system instructions, generate:
 1. THREE HOOK OPTIONS (8-10 seconds each) using DIFFERENT opening patterns
 2. ONE OPENING STATEMENT (15-20 seconds) that teases ALL chapters
 3. ONE SUMMARY/CONCLUSION (30-45 seconds) with recap + wrap-up + CTA
+4. THREE THUMBNAIL HOOK text options for thumbnail image generation
 
 Use the EXACT OUTPUT FORMAT specified in your system instructions, including:
 - HOOK OPTION 1 (8-10 SECONDS)
@@ -134,7 +136,20 @@ Use the EXACT OUTPUT FORMAT specified in your system instructions, including:
 - HOOK OPTION 3 (8-10 SECONDS)
 - OPENING STATEMENT (15-20 SECONDS)
 - SUMMARY/CONCLUSION (30-45 SECONDS)
+- THUMBNAIL HOOK OPTIONS (FOR IMAGE TEXT)
+- THUMBNAIL_HOOK_TEXT_1: [3-8 words, strong emotional headline]
+- THUMBNAIL_HOOK_TEXT_2: [3-8 words, strong emotional headline]
+- THUMBNAIL_HOOK_TEXT_3: [3-8 words, strong emotional headline]
 - YOUTUBE STRATEGY ALIGNMENT
+
+    Thumbnail hook quality rules:
+    - Prefer punchy thumbnail language, not descriptive summary language
+    - Avoid bland benefit-copy such as "save time", "save hours", "learn about", "tips for", or generic explanatory phrases
+    - Favor stronger patterns like second-person challenge, mistake framing, surprising outcome, or AI-powered transformation
+    - The line should feel clickable and provocative, not merely helpful
+    - Use the pattern, not the wording, of examples
+    - Do not copy example phrasing verbatim; generate a fresh line specific to the script topic
+    - Example pattern types: direct challenge, bold contrarian claim, painful mistake, dramatic shortcut, unexpected transformation
 
 Analyze the script and return all sections with their ANALYSIS subsections as specified.
 """
@@ -176,6 +191,8 @@ Analyze the script and return all sections with their ANALYSIS subsections as sp
             opening_analysis = ""
             summary_analysis = ""
             flow_analysis = ""
+            thumbnail_hook_text = ""
+            thumbnail_hook_text_options = []
 
             # Try new format first (3 hooks + opening statement)
             if "HOOK OPTION 1 (8-10 SECONDS)" in raw_response:
@@ -250,6 +267,32 @@ Analyze the script and return all sections with their ANALYSIS subsections as sp
                     print(f"✅ Opening: {len(opening_statement)} chars")
                     print(f"✅ Summary: {len(summary_text)} chars")
 
+                    for idx in range(1, 4):
+                        match = re.search(
+                            rf'THUMBNAIL_HOOK_TEXT_{idx}\s*:\s*"?([^"\n]+)"?',
+                            raw_response,
+                            flags=re.IGNORECASE,
+                        )
+                        if match:
+                            option_text = match.group(1).strip().strip('"')
+                            if option_text:
+                                thumbnail_hook_text_options.append(option_text)
+
+                    if not thumbnail_hook_text_options:
+                        fallback_match = re.search(
+                            r'THUMBNAIL_HOOK_TEXT\s*:\s*"?([^"\n]+)"?',
+                            raw_response,
+                            flags=re.IGNORECASE,
+                        )
+                        if fallback_match:
+                            fallback_text = fallback_match.group(1).strip().strip('"')
+                            if fallback_text:
+                                thumbnail_hook_text_options.append(fallback_text)
+
+                    thumbnail_hook_text = thumbnail_hook_text_options[0] if thumbnail_hook_text_options else ""
+                    if thumbnail_hook_text_options:
+                        print(f"✅ Thumbnail hook options: {thumbnail_hook_text_options}")
+
                 except Exception as parse_error:
                     print(f"⚠️ Error parsing new format: {parse_error}")
                     # Fall back to returning what we have
@@ -269,6 +312,8 @@ Analyze the script and return all sections with their ANALYSIS subsections as sp
                 "opening_analysis": opening_analysis,
                 "summary_analysis": summary_analysis,
                 "flow_analysis": flow_analysis,
+                "thumbnail_hook_text": thumbnail_hook_text,
+                "thumbnail_hook_text_options": thumbnail_hook_text_options,
                 "raw_response": raw_response,
                 "error": None,
             }

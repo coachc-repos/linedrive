@@ -6,6 +6,7 @@ for completed video scripts to maximize viewer retention and engagement.
 """
 
 from linedrive_azure.agents.base_agent_client import BaseAgentClient
+import re
 
 
 class HookAndSummaryAgentClient(BaseAgentClient):
@@ -72,7 +73,7 @@ COMPLETE SCRIPT TO ANALYZE:
 {script_content}
 
 TASK:
-Generate THREE different hook options (8-10 seconds each), ONE summary/conclusion (30-45 seconds), AND analyze the flow between chapters.
+Generate THREE different hook options (8-10 seconds each), ONE opening statement (15-20 seconds), ONE summary/conclusion (30-45 seconds), THREE thumbnail hook text options for image generation, AND analyze the flow between chapters.
 
 HOOK REQUIREMENTS (GENERATE 3 VARIATIONS):
 - Create 3 DIFFERENT hooks using DIFFERENT opening patterns (shocking statement, bold question, personal confession, etc.)
@@ -91,6 +92,28 @@ SUMMARY REQUIREMENTS:
 - Total: 90-135 words spoken naturally
 - Reference specific tools/concepts from the script
 - Create emotional closure and encourage engagement
+
+OPENING STATEMENT REQUIREMENTS:
+- Explain what the video is about
+- Tease all major chapter topics to maintain watch time
+- Total: 45-60 words spoken naturally
+
+THUMBNAIL HOOK REQUIREMENTS:
+- Return THREE thumbnail hook text options that can be used directly in thumbnail generation
+- Must be short, emotionally strong, and curiosity-driven
+- Use FOMO, warning, contrarian framing, or mistake-avoidance when appropriate
+- Keep it to 3-8 words
+- Prefer punchy thumbnail language, not descriptive summary language
+- Avoid bland benefit-copy such as "save time", "save hours", "learn about", "tips for", or generic explanatory phrases
+- Favor stronger patterns like second-person challenge, mistake framing, surprising outcome, or AI-powered transformation
+- The line should feel clickable and provocative, not merely helpful
+- Use the pattern, not the wording, of examples
+- Do not copy example phrasing verbatim; generate a fresh line specific to the script topic
+- Example pattern types: direct challenge, bold contrarian claim, painful mistake, dramatic shortcut, unexpected transformation
+- Return them using these exact field names:
+    - THUMBNAIL_HOOK_TEXT_1:
+    - THUMBNAIL_HOOK_TEXT_2:
+    - THUMBNAIL_HOOK_TEXT_3:
 
 FLOW ANALYSIS REQUIREMENTS:
 - Identify chapter transitions (look for "---" separators or chapter markers)
@@ -129,6 +152,14 @@ ANALYSIS:
 - Aligns with script tone: [Yes/No + note]
 - References script content: [Specific elements]
 
+OPENING STATEMENT (15-20 SECONDS)
+[Complete opening statement dialogue]
+
+ANALYSIS:
+- Value proposition: [What the video delivers]
+- Chapters teased: [Topics mentioned]
+- Anticipation level: [High/Medium + why]
+
 SUMMARY/CONCLUSION (30-45 SECONDS)
 [Complete summary dialogue]
 
@@ -137,6 +168,18 @@ ANALYSIS:
 - Wrap-up approach: [Closure type]
 - CTA pattern used: [CTA Pattern number]
 - Key elements reinforced: [List 2-3 takeaways]
+
+THUMBNAIL HOOK OPTIONS (FOR IMAGE TEXT)
+THUMBNAIL_HOOK_TEXT_1: [3-8 words, strong emotional headline]
+THUMBNAIL_HOOK_TEXT_2: [3-8 words, strong emotional headline]
+THUMBNAIL_HOOK_TEXT_3: [3-8 words, strong emotional headline]
+
+ANALYSIS:
+- Hook angle: [FOMO/Warning/Contrarian/Scare-Mistake/Outcome]
+- Based on title: [How title informed this line]
+- Promise alignment: [How script content supports this claim]
+- Readability: [Why this works on a thumbnail]
+- Why it is not bland: [Explain why it avoids generic benefit-copy]
 
 FLOW ANALYSIS:
 - Number of chapters detected: [Count]
@@ -187,6 +230,8 @@ YOUTUBE STRATEGY ALIGNMENT:
         opening_analysis = ""
         summary_analysis = ""
         flow_analysis = ""
+        thumbnail_hook_text = ""
+        thumbnail_hook_text_options = []
 
         try:
             # Extract Hook Option 1
@@ -252,6 +297,32 @@ YOUTUBE STRATEGY ALIGNMENT:
                 flow_section = flow_parts[1].split("YOUTUBE STRATEGY")[0]
                 flow_analysis = flow_section.strip()
 
+            # Extract thumbnail hook options (preferred format)
+            for idx in range(1, 4):
+                option_match = re.search(
+                    rf'THUMBNAIL_HOOK_TEXT_{idx}\s*:\s*"?([^"\n]+)"?',
+                    response_text,
+                    flags=re.IGNORECASE,
+                )
+                if option_match:
+                    option_text = option_match.group(1).strip().strip('"')
+                    if option_text:
+                        thumbnail_hook_text_options.append(option_text)
+
+            # Backward compatibility: single field fallback
+            if not thumbnail_hook_text_options:
+                match = re.search(
+                    r'THUMBNAIL_HOOK_TEXT\s*:\s*"?([^"\n]+)"?',
+                    response_text,
+                    flags=re.IGNORECASE,
+                )
+                if match:
+                    fallback_text = match.group(1).strip().strip('"')
+                    if fallback_text:
+                        thumbnail_hook_text_options.append(fallback_text)
+
+            thumbnail_hook_text = thumbnail_hook_text_options[0] if thumbnail_hook_text_options else ""
+
             print(f"✅ Hook 1 generated: {len(hook1_text)} characters")
             print(f"✅ Hook 2 generated: {len(hook2_text)} characters")
             print(f"✅ Hook 3 generated: {len(hook3_text)} characters")
@@ -260,6 +331,9 @@ YOUTUBE STRATEGY ALIGNMENT:
             if flow_analysis:
                 print(
                     f"✅ Flow analysis generated: {len(flow_analysis)} characters")
+            if thumbnail_hook_text_options:
+                print(
+                    f"✅ Thumbnail hook options generated ({len(thumbnail_hook_text_options)}): {thumbnail_hook_text_options}")
 
         except Exception as parse_error:
             print(f"⚠️ Parsing warning: {parse_error}")
@@ -281,6 +355,8 @@ YOUTUBE STRATEGY ALIGNMENT:
             "hook3_analysis": hook3_analysis,
             "summary_analysis": summary_analysis,
             "flow_analysis": flow_analysis,
+            "thumbnail_hook_text": thumbnail_hook_text,
+            "thumbnail_hook_text_options": thumbnail_hook_text_options,
             "full_response": response_text,
             "script_title": script_title,
             "audience": target_audience,

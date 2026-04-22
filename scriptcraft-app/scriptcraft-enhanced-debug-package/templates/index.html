@@ -1532,6 +1532,11 @@ Time management content here...`;
         // Function to create tabbed interface
         function createTabbedInterface(mainScript, demoPackages, thumbnails, chapterComparisons, flowOriginal, flowImproved, flowAnalysis, edlContent, edlFilename, curlCommands, brollImages) {
             let html = '<div class="tab-container">';
+            const thumbnailList = Array.isArray(thumbnails)
+                ? thumbnails
+                : ((thumbnails && Array.isArray(thumbnails.variations))
+                    ? thumbnails.variations
+                    : []);
             
             // Tab Headers
             html += '<div class="tab-header">';
@@ -1541,7 +1546,7 @@ Time management content here...`;
                 html += '<button class="tab-button" onclick="switchTab(\'demoPackages\')">🎥 Demo Packages</button>';
             }
             
-            if (thumbnails && thumbnails.length > 0) {
+            if (thumbnailList.length > 0) {
                 html += '<button class="tab-button" onclick="switchTab(\'thumbnails\')">🖼️ Thumbnails</button>';
             }
             
@@ -1590,9 +1595,9 @@ Time management content here...`;
             }
             
             // Thumbnails Tab
-            if (thumbnails && thumbnails.length > 0) {
+            if (thumbnailList.length > 0) {
                 html += '<div id="thumbnailsTab" class="tab-content">';
-                html += renderThumbnailGallery(thumbnails);
+                html += renderThumbnailGallery(thumbnailList);
                 html += '</div>';
             }
             
@@ -1946,6 +1951,17 @@ Time management content here...`;
                         eventSource.close();
                         const processedScript = message.script || '';
                         const scriptTitle = message.script_title || 'Processed Script';
+                        const thumbnails = (message.thumbnails && message.thumbnails.length > 0)
+                            ? message.thumbnails
+                            : ((message.thumbnail_results && message.thumbnail_results.variations)
+                                ? message.thumbnail_results.variations
+                                    .map(v => ({
+                                        emotion: v.emotion || v.mood || 'VARIATION',
+                                        text: v.text || v.thumbnail_text || 'Thumbnail variation',
+                                        filename: v.filename || (v.filepath ? v.filepath.split('/').pop() : null)
+                                    }))
+                                    .filter(v => v.filename)
+                                : []);
                         addProgressMessage('✅ Script processing completed!', 'success');
                         
                         // Update footer progress to 100%
@@ -1975,7 +1991,7 @@ Time management content here...`;
                             const tabbedHTML = createTabbedInterface(
                                 processedScript,
                                 null,  // demo_packages not yet implemented
-                                null,  // thumbnails not yet implemented
+                                thumbnails,
                                 null,  // chapter_comparisons not applicable for process workflow
                                 null,  // flowOriginal not applicable
                                 null,  // flowImproved not applicable
@@ -2005,6 +2021,9 @@ Time management content here...`;
                                 }
                                 renderMarkdownContent(processedScript, null);
                                 console.log('Rendered markdown for script length:', processedScript ? processedScript.length : 0);
+                                if (thumbnails && thumbnails.length > 0) {
+                                    switchTab('thumbnails');
+                                }
                             }, 100);
                             
                             addProgressMessage('✅ Script processing complete!', 'success');
@@ -2175,7 +2194,17 @@ Time management content here...`;
                     } else if (message.status === 'complete') {
                         eventSource.close();
                         finalScript = message.script || '';
-                        const thumbnails = message.thumbnails || [];
+                        const thumbnails = (message.thumbnails && message.thumbnails.length > 0)
+                            ? message.thumbnails
+                            : ((message.thumbnail_results && message.thumbnail_results.variations)
+                                ? message.thumbnail_results.variations
+                                    .map(v => ({
+                                        emotion: v.emotion || v.mood || 'VARIATION',
+                                        text: v.text || v.thumbnail_text || 'Thumbnail variation',
+                                        filename: v.filename || (v.filepath ? v.filepath.split('/').pop() : null)
+                                    }))
+                                    .filter(v => v.filename)
+                                : []);
                         const comparisonFile = message.comparison_file || null;
                         const chapterComparisons = message.chapter_comparisons || null;
                         const flowOriginal = message.flow_original_script || null;
@@ -2231,6 +2260,10 @@ Time management content here...`;
                             
                             // Render markdown content
                             renderMarkdownContent(finalScript, null, flowOriginal, flowImproved);
+
+                            if (thumbnails && thumbnails.length > 0) {
+                                setTimeout(() => { switchTab('thumbnails'); }, 200);
+                            }
                             
                             resultDiv.className = 'result';
                             document.getElementById('saveBtn').style.display = 'inline-block';
@@ -3108,7 +3141,8 @@ Time management content here...`;
             
             try {
                 // Get topic from create mode input or use default
-                const topic = document.getElementById('createTopic').value.trim() || 'AI Testing';
+                const topicEl = document.getElementById('createTopic');
+                const topic = topicEl ? (topicEl.value || '').trim() || 'AI Testing' : 'AI Testing';
                 
                 console.log(`Calling /generate-test-thumbnails with topic: ${topic}`);
                 
@@ -3117,6 +3151,10 @@ Time management content here...`;
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ topic: topic })
                 });
+
+                if (!response.ok) {
+                    throw new Error(`Thumbnail request failed (${response.status})`);
+                }
                 
                 const data = await response.json();
                 console.log('Response from /generate-test-thumbnails:', data);
@@ -3124,17 +3162,30 @@ Time management content here...`;
                 if (data.success && data.thumbnails && data.thumbnails.length > 0) {
                     console.log(`✅ Got ${data.thumbnails.length} thumbnails, displaying in gallery...`);
                     
-                    // Render the thumbnail gallery using existing function
-                    const galleryHTML = renderThumbnailGallery(data.thumbnails);
+                    // Render inside the same tabbed interface used by script processing.
+                    const tabbedHTML = createTabbedInterface(
+                        'Thumbnail generation results',
+                        null,
+                        data.thumbnails,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                    );
                     
                     // Display in result div
                     resultDiv.innerHTML = `
                         <h3>✅ Test Thumbnails Generated</h3>
                         <p>Generated ${data.thumbnails.length} thumbnail variations for: <strong>${topic}</strong></p>
-                        ${galleryHTML}
+                        ${tabbedHTML}
                     `;
                     resultDiv.className = 'result success';
                     resultDiv.style.display = 'block';
+                    setTimeout(() => { switchTab('thumbnails'); }, 100);
                     
                     console.log('✅ Gallery displayed successfully!');
                 } else {

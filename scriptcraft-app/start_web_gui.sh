@@ -30,9 +30,12 @@ else
 fi
 echo ""
 
-# Export Google API key
-export GOOGLE_API_KEY="AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg"
-echo "🔑 Google API key exported"
+# Use Google API key from existing environment
+if [ -n "$GOOGLE_API_KEY" ]; then
+    echo "🔑 GOOGLE_API_KEY detected in environment"
+else
+    echo "⚠️ GOOGLE_API_KEY is not set; thumbnail generation will fail"
+fi
 echo ""
 
 # Change to scriptcraft-app directory

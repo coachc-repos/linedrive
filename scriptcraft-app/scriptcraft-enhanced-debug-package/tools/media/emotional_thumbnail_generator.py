@@ -10,6 +10,7 @@ from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from PIL import Image
+from typing import Callable, Optional
 
 # Lazy import for google.genai (new SDK) - only import when needed
 _genai = None
@@ -44,10 +45,13 @@ class EmotionalThumbnailGenerator:
         Args:
             api_key: Google API key (defaults to env var GOOGLE_API_KEY)
             template_path: Path to optional template image (if provided, will be used as reference)
-            output_dir: Output directory for thumbnails (defaults to ~/Dev/Thumbnails)
+            output_dir: Output directory for thumbnails
         """
-        self.api_key = api_key or os.getenv(
-            "GOOGLE_API_KEY", "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg")
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "GOOGLE_API_KEY is not set. Export a valid key or pass api_key explicitly."
+            )
 
         # Template is optional - if provided and exists, use it
         self.template_path = None
@@ -60,14 +64,42 @@ class EmotionalThumbnailGenerator:
             if default_template.exists():
                 self.template_path = str(default_template)
 
-        self.output_dir = Path(
-            output_dir or os.path.expanduser("~/Dev/Thumbnails"))
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._custom_output_dir = output_dir is not None
+        self.output_dir = Path(output_dir) if output_dir else None
+        if self.output_dir:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Configure Gemini API (lazy import, new SDK)
         genai, types = _ensure_genai()
         self.client = genai.Client(api_key=self.api_key)
         self.model_name = 'gemini-2.5-flash-image'
+        self.last_error = None
+
+    def _build_output_dir(self, script_title: str) -> Path:
+        """Build output path: ~/Dev/Videos/Edited/Final/{script_title}/thumbnails"""
+        safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '', (script_title or '').strip())
+        safe_title = re.sub(r'\s+', '_', safe_title).strip('_.')
+        if not safe_title:
+            safe_title = "untitled_script"
+
+        return (
+            Path.home()
+            / "Dev"
+            / "Videos"
+            / "Edited"
+            / "Final"
+            / safe_title
+            / "thumbnails"
+        )
+
+    def _display_title_text(self, script_title: str) -> str:
+        """Normalize script title into display text for in-image headline generation."""
+        title = (script_title or "").strip()
+        title = re.sub(r'^\s*title\s*:\s*', '', title, flags=re.IGNORECASE)
+        title = re.sub(r'\s+', ' ', title).strip()
+        if not title:
+            title = "UNTITLED SCRIPT"
+        return title.upper()
 
     def extract_thumbnail_text_from_upload_details(self, upload_details):
         """
@@ -164,7 +196,7 @@ class EmotionalThumbnailGenerator:
 
         return variations
 
-    def generate_thumbnail_variation(self, script_title, emotion_data, variation_num):
+    def generate_thumbnail_variation(self, script_title, emotion_data, variation_num, headline_text=None):
         """
         Generate a single thumbnail variation
 
@@ -178,6 +210,7 @@ class EmotionalThumbnailGenerator:
         """
         # Check if we have a template image to use as reference
         has_template = self.template_path and Path(self.template_path).exists()
+        display_title = self._display_title_text(headline_text or script_title)
 
         if has_template:
             template_img = Image.open(self.template_path)
@@ -193,7 +226,12 @@ WHAT TO TRANSFORM:
 Topic: {script_title}
 Emotion: {emotion_data['emotion']}
 
-DO NOT ADD ANY TEXT OR WORDS TO THE IMAGE.
+TEXT REQUIREMENT (GENERATE TEXT INSIDE THE IMAGE):
+- Add this exact headline text in large stylized letters: "{display_title}"
+- Place the text on the LEFT side where the woman appears to point toward it
+- The text must be bold, high contrast, and easily readable at mobile size
+- Use dramatic YouTube style typography with thick stroke and depth/shadow
+
 Keep the person's pose and position. Fill background edge-to-edge (1280x720).
 High resolution, photorealistic, YouTube thumbnail optimized."""
         else:
@@ -211,8 +249,13 @@ BACKGROUND:
 - Topic: {script_title}
 - Specific scene: {emotion_data['background']}
 - Background fills the ENTIRE frame edge-to-edge
-- UPPER LEFT area should be clean/spacious (text overlay will be added later)
 - Vibrant, high-contrast colors for thumbnail visibility
+
+TEXT REQUIREMENT (GENERATE TEXT INSIDE THE IMAGE):
+- Add this exact headline text in large stylized letters: "{display_title}"
+- Place the text on the LEFT side of the frame
+- Ensure the person on RIGHT appears to be looking/pointing toward the text
+- Use bold cinematic YouTube typography with thick outline, shadow, and strong contrast
 
 COLOR PALETTE:
 - ANGRY: Reds, oranges, dark dramatic
@@ -223,7 +266,6 @@ COLOR PALETTE:
 - DETERMINED: Deep reds, blacks, powerful
 
 CRITICAL RULES:
-- DO NOT ADD ANY TEXT OR WORDS TO THE IMAGE
 - 1280x720 pixels, 16:9 aspect ratio
 - Photorealistic, high resolution
 - High visual impact, professional YouTube thumbnail quality
@@ -266,10 +308,18 @@ CRITICAL RULES:
             return None
 
         except Exception as e:
+            self.last_error = str(e)
             print(f"❌ Error generating variation {variation_num}: {e}")
             return None
 
-    def generate_all_thumbnails(self, script_title, script_content=None, youtube_upload_details=None):
+    def generate_all_thumbnails(
+        self,
+        script_title,
+        script_content=None,
+        youtube_upload_details=None,
+        headline_text=None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ):
         """
         Generate all 6 thumbnail variations
 
@@ -277,10 +327,17 @@ CRITICAL RULES:
             script_title: Title/topic of the video
             script_content: Optional script content for context
             youtube_upload_details: Optional YouTube upload details with thumbnail text
+            headline_text: Optional custom in-image headline text (e.g., thumbnail hook)
 
         Returns:
             Dict with variation info and file paths
         """
+        # Unless caller explicitly set a custom output_dir, always derive from
+        # script_title so folder naming stays consistent (underscored titles).
+        if not self._custom_output_dir:
+            self.output_dir = self._build_output_dir(script_title)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
         # Extract thumbnail text from upload details if available
         base_text = None
         if youtube_upload_details:
@@ -297,9 +354,14 @@ CRITICAL RULES:
 
         results = {
             "script_title": script_title,
+            "headline_text": headline_text,
             "base_text": base_text,
             "variations": [],
-            "output_dir": str(self.output_dir)
+            "output_dir": str(self.output_dir),
+            "total_attempted": len(variations),
+            "total_generated": 0,
+            "failed_count": 0,
+            "success": False,
         }
 
         print(f"\n{'='*70}")
@@ -309,6 +371,8 @@ CRITICAL RULES:
             print(f"💬 Base Text: {base_text}")
         print(f"{'='*70}\n")
 
+        total = len(variations)
+        self.last_error = None
         for i, emotion_data in enumerate(variations, 1):
             print(f"{'─'*70}")
             print(f"🎭 Variation #{i}")
@@ -316,9 +380,16 @@ CRITICAL RULES:
             print(f"   Text: {emotion_data['thumbnail_text']}")
             print(f"   Expression: {emotion_data['expression']}")
 
+            if progress_callback:
+                try:
+                    progress_callback(
+                        f"🖼️ Generating thumbnail {i}/{total}: {emotion_data['emotion']}")
+                except Exception:
+                    pass
+
             # Generate thumbnail
             img = self.generate_thumbnail_variation(
-                script_title, emotion_data, i)
+                script_title, emotion_data, i, headline_text=headline_text)
 
             if img:
                 # Save file
@@ -340,8 +411,26 @@ CRITICAL RULES:
                     "filepath": str(filepath),
                     "dimensions": img.size
                 })
+                results["total_generated"] += 1
+                if progress_callback:
+                    try:
+                        progress_callback(
+                            f"✅ Generated thumbnail {i}/{total}: {filename}")
+                    except Exception:
+                        pass
             else:
                 print(f"   ❌ Failed to generate\n")
+                results["failed_count"] += 1
+                if progress_callback:
+                    try:
+                        progress_callback(
+                            f"⚠️ Failed thumbnail {i}/{total}: {emotion_data['emotion']}")
+                    except Exception:
+                        pass
+
+        results["success"] = results["total_generated"] > 0
+        if not results["success"] and self.last_error:
+            results["error"] = self.last_error
 
         return results
 

@@ -10,10 +10,28 @@ from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from PIL import Image
+from typing import Callable, Optional
 
 # Lazy import for google.genai (new SDK) - only import when needed
 _genai = None
 _types = None
+
+
+def _is_fatal_api_key_error(error_text: Optional[str]) -> bool:
+    """Detect unrecoverable API key/auth errors that should stop remaining attempts."""
+    if not error_text:
+        return False
+
+    lowered = error_text.lower()
+    fatal_markers = [
+        "api key expired",
+        "api_key_invalid",
+        "reported as leaked",
+        "permission_denied",
+        "api key not valid",
+        "invalid api key",
+    ]
+    return any(marker in lowered for marker in fatal_markers)
 
 
 def _ensure_genai():
@@ -44,10 +62,13 @@ class EmotionalThumbnailGenerator:
         Args:
             api_key: Google API key (defaults to env var GOOGLE_API_KEY)
             template_path: Path to optional template image (if provided, will be used as reference)
-            output_dir: Output directory for thumbnails (defaults to ~/Dev/Thumbnails)
+            output_dir: Output directory for thumbnails
         """
-        self.api_key = api_key or os.getenv(
-            "GOOGLE_API_KEY", "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg")
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "GOOGLE_API_KEY is not set. Export a valid key or pass api_key explicitly."
+            )
 
         # Template is optional - if provided and exists, use it
         self.template_path = None
@@ -60,14 +81,42 @@ class EmotionalThumbnailGenerator:
             if default_template.exists():
                 self.template_path = str(default_template)
 
-        self.output_dir = Path(
-            output_dir or os.path.expanduser("~/Dev/Thumbnails"))
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._custom_output_dir = output_dir is not None
+        self.output_dir = Path(output_dir) if output_dir else None
+        if self.output_dir:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Configure Gemini API (lazy import, new SDK)
         genai, types = _ensure_genai()
         self.client = genai.Client(api_key=self.api_key)
         self.model_name = 'gemini-2.5-flash-image'
+        self.last_error = None
+
+    def _build_output_dir(self, script_title: str) -> Path:
+        """Build output path: ~/Dev/Videos/Edited/Final/{script_title}/thumbnails"""
+        safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '', (script_title or '').strip())
+        safe_title = re.sub(r'\s+', '_', safe_title).strip('_.')
+        if not safe_title:
+            safe_title = "untitled_script"
+
+        return (
+            Path.home()
+            / "Dev"
+            / "Videos"
+            / "Edited"
+            / "Final"
+            / safe_title
+            / "thumbnails"
+        )
+
+    def _display_title_text(self, script_title: str) -> str:
+        """Normalize script title into display text for thumbnail overlay."""
+        title = (script_title or "").strip()
+        title = re.sub(r'^\s*title\s*:\s*', '', title, flags=re.IGNORECASE)
+        title = re.sub(r'\s+', ' ', title).strip()
+        if not title:
+            title = "UNTITLED SCRIPT"
+        return title.upper()
 
     def extract_thumbnail_text_from_upload_details(self, upload_details):
         """
@@ -100,6 +149,52 @@ class EmotionalThumbnailGenerator:
                 return suggestion
 
         return None
+
+    def _derive_context_outfits(self, script_title: str = "", script_content: str = "") -> list[str]:
+        """Return topic-aware outfit suggestions for a subset of variations."""
+        context = f"{script_title or ''} {script_content or ''}".lower()
+
+        # Education / homeschooling
+        if any(k in context for k in [
+            "homeschool", "home school", "teacher", "student", "education", "learning", "curriculum"
+        ]):
+            return [
+                "professional teacher outfit with cardigan and classroom-ready style",
+                "graduation gown or graduate-style academic attire",
+                "smart business-casual blazer for confident educational authority",
+            ]
+
+        # Finance / entrepreneurship / business
+        if any(k in context for k in [
+            "business", "entrepreneur", "startup", "finance", "money", "sales", "marketing"
+        ]):
+            return [
+                "modern business suit with clean professional styling",
+                "business-casual blazer and collared shirt",
+                "executive smart-casual outfit with confident leadership look",
+            ]
+
+        # Tech / AI / coding
+        if any(k in context for k in [
+            "ai", "artificial intelligence", "code", "coding", "developer", "software", "automation", "tech"
+        ]):
+            return [
+                "modern tech-professional outfit with minimalist jacket",
+                "smart casual hoodie-and-blazer creator look",
+                "sleek startup founder outfit with contemporary styling",
+            ]
+
+        # Health / fitness / wellness
+        if any(k in context for k in [
+            "fitness", "health", "wellness", "workout", "nutrition", "diet"
+        ]):
+            return [
+                "premium athletic wear with clean sporty styling",
+                "wellness coach outfit in calm neutral tones",
+                "modern performance activewear with trainer aesthetic",
+            ]
+
+        return []
 
     def generate_emotional_variations(self, base_text=None):
         """
@@ -164,7 +259,7 @@ class EmotionalThumbnailGenerator:
 
         return variations
 
-    def generate_thumbnail_variation(self, script_title, emotion_data, variation_num):
+    def generate_thumbnail_variation(self, script_title, emotion_data, variation_num, headline_text=None):
         """
         Generate a single thumbnail variation
 
@@ -178,6 +273,7 @@ class EmotionalThumbnailGenerator:
         """
         # Check if we have a template image to use as reference
         has_template = self.template_path and Path(self.template_path).exists()
+        display_title = self._display_title_text(headline_text or script_title)
 
         if has_template:
             template_img = Image.open(self.template_path)
@@ -193,7 +289,12 @@ WHAT TO TRANSFORM:
 Topic: {script_title}
 Emotion: {emotion_data['emotion']}
 
-DO NOT ADD ANY TEXT OR WORDS TO THE IMAGE.
+TEXT REQUIREMENT (GENERATE TEXT INSIDE THE IMAGE):
+- Add this exact headline text in large stylized letters: "{display_title}"
+- Place the text on the LEFT side where the woman appears to point toward it
+- The text must be bold, high contrast, and easily readable at mobile size
+- Use dramatic YouTube style typography with thick stroke and depth/shadow
+
 Keep the person's pose and position. Fill background edge-to-edge (1280x720).
 High resolution, photorealistic, YouTube thumbnail optimized."""
         else:
@@ -211,8 +312,13 @@ BACKGROUND:
 - Topic: {script_title}
 - Specific scene: {emotion_data['background']}
 - Background fills the ENTIRE frame edge-to-edge
-- UPPER LEFT area should be clean/spacious (text overlay will be added later)
 - Vibrant, high-contrast colors for thumbnail visibility
+
+TEXT REQUIREMENT (GENERATE TEXT INSIDE THE IMAGE):
+- Add this exact headline text in large stylized letters: "{display_title}"
+- Place the text on the LEFT side of the frame
+- Ensure the person on RIGHT appears to be looking/pointing toward the text
+- Use bold cinematic YouTube typography with thick outline, shadow, and strong contrast
 
 COLOR PALETTE:
 - ANGRY: Reds, oranges, dark dramatic
@@ -223,7 +329,6 @@ COLOR PALETTE:
 - DETERMINED: Deep reds, blacks, powerful
 
 CRITICAL RULES:
-- DO NOT ADD ANY TEXT OR WORDS TO THE IMAGE
 - 1280x720 pixels, 16:9 aspect ratio
 - Photorealistic, high resolution
 - High visual impact, professional YouTube thumbnail quality
@@ -266,10 +371,19 @@ CRITICAL RULES:
             return None
 
         except Exception as e:
+            self.last_error = str(e)
             print(f"❌ Error generating variation {variation_num}: {e}")
             return None
 
-    def generate_all_thumbnails(self, script_title, script_content=None, youtube_upload_details=None):
+    def generate_all_thumbnails(
+        self,
+        script_title,
+        script_content=None,
+        youtube_upload_details=None,
+        headline_text=None,
+        headline_options: Optional[list[str]] = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ):
         """
         Generate all 6 thumbnail variations
 
@@ -277,10 +391,20 @@ CRITICAL RULES:
             script_title: Title/topic of the video
             script_content: Optional script content for context
             youtube_upload_details: Optional YouTube upload details with thumbnail text
+            headline_text: Optional custom in-image headline text (e.g., thumbnail hook)
+            headline_options: Optional list of custom in-image headline options.
+                When provided, generates one thumbnail per option for each emotion
+                (up to 3 options x 6 emotions = 18 total).
 
         Returns:
             Dict with variation info and file paths
         """
+        # Unless caller explicitly set a custom output_dir, always derive from
+        # script_title so folder naming stays consistent (underscored titles).
+        if not self._custom_output_dir:
+            self.output_dir = self._build_output_dir(script_title)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
         # Extract thumbnail text from upload details if available
         base_text = None
         if youtube_upload_details:
@@ -290,6 +414,25 @@ CRITICAL RULES:
         # Generate emotional variations
         variations = self.generate_emotional_variations(base_text)
 
+        # Blend topic-aware outfits into a subset of emotions while keeping some
+        # general outfits for diversity and broader thumbnail testing.
+        context_outfits = self._derive_context_outfits(
+            script_title=script_title,
+            script_content=script_content or "",
+        )
+        for idx, outfit in enumerate(context_outfits):
+            if idx >= len(variations):
+                break
+            variations[idx]["outfit"] = outfit
+
+        # If we have explicit thumbnail hook options, generate all option/emotion combinations.
+        cleaned_headline_options = []
+        for option in (headline_options or []):
+            text = (option or "").strip().strip('"').strip()
+            if text and text not in cleaned_headline_options:
+                cleaned_headline_options.append(text)
+        cleaned_headline_options = cleaned_headline_options[:3]
+
         # Create safe filename
         safe_title = re.sub(
             r'[^\w\s-]', '', script_title).strip().replace(' ', '_')
@@ -297,51 +440,124 @@ CRITICAL RULES:
 
         results = {
             "script_title": script_title,
+            "headline_text": headline_text,
+            "headline_options": cleaned_headline_options,
             "base_text": base_text,
             "variations": [],
-            "output_dir": str(self.output_dir)
+            "output_dir": str(self.output_dir),
+            "total_attempted": len(variations) *
+            (len(cleaned_headline_options) if cleaned_headline_options else 1),
+            "total_processed": 0,
+            "total_generated": 0,
+            "failed_count": 0,
+            "success": False,
+            "aborted": False,
         }
 
         print(f"\n{'='*70}")
-        print(f"🎬 Generating 6 Emotional Thumbnails: '{script_title}'")
+        if cleaned_headline_options:
+            print(
+                f"🎬 Generating {len(variations) * len(cleaned_headline_options)} Thumbnail Option/Emotion Variations: '{script_title}'")
+        else:
+            print(f"🎬 Generating 6 Emotional Thumbnails: '{script_title}'")
         print(f"📸 Template: {self.template_path or 'None (generating from scratch)'}")
         if base_text:
             print(f"💬 Base Text: {base_text}")
+        if cleaned_headline_options:
+            print(f"🏷️ Headline options: {cleaned_headline_options}")
         print(f"{'='*70}\n")
 
-        for i, emotion_data in enumerate(variations, 1):
-            print(f"{'─'*70}")
-            print(f"🎭 Variation #{i}")
-            print(f"   Emotion: {emotion_data['emotion']}")
-            print(f"   Text: {emotion_data['thumbnail_text']}")
-            print(f"   Expression: {emotion_data['expression']}")
+        headline_variants = cleaned_headline_options if cleaned_headline_options else [headline_text]
+        total = len(variations) * len(headline_variants)
+        self.last_error = None
+        generated_index = 0
+        for emotion_idx, emotion_data in enumerate(variations, 1):
+            for option_idx, selected_headline in enumerate(headline_variants, 1):
+                results["total_processed"] += 1
+                generated_index += 1
 
-            # Generate thumbnail
-            img = self.generate_thumbnail_variation(
-                script_title, emotion_data, i)
+                print(f"{'─'*70}")
+                print(f"🎭 Variation #{generated_index}")
+                print(f"   Emotion #{emotion_idx}: {emotion_data['emotion']}")
+                print(f"   Text: {emotion_data['thumbnail_text']}")
+                print(f"   Expression: {emotion_data['expression']}")
+                if selected_headline:
+                    print(f"   Headline option #{option_idx}: {selected_headline}")
 
-            if img:
-                # Save file
-                filename = f"{safe_title}_v{i}_{timestamp}.png"
-                filepath = self.output_dir / filename
-                img.save(filepath, "PNG", quality=95)
+                if progress_callback:
+                    try:
+                        progress_callback(
+                            f"🖼️ Generating thumbnail {generated_index}/{total}: {emotion_data['emotion']} (hook {option_idx})")
+                    except Exception:
+                        pass
 
-                print(f"   ✅ Generated: {img.size}")
-                print(f"   💾 Saved: {filename}\n")
+                # Generate thumbnail
+                img = self.generate_thumbnail_variation(
+                    script_title,
+                    emotion_data,
+                    generated_index,
+                    headline_text=selected_headline,
+                )
 
-                results["variations"].append({
-                    "number": i,
-                    "emotion": emotion_data['emotion'],
-                    "text": emotion_data['thumbnail_text'],
-                    "expression": emotion_data['expression'],
-                    "outfit": emotion_data['outfit'],
-                    "background": emotion_data['background'],
-                    "filename": filename,
-                    "filepath": str(filepath),
-                    "dimensions": img.size
-                })
-            else:
-                print(f"   ❌ Failed to generate\n")
+                if img:
+                    # Save file
+                    filename = (
+                        f"{safe_title}_v{emotion_idx}_h{option_idx}_{timestamp}.png"
+                    )
+                    filepath = self.output_dir / filename
+                    img.save(filepath, "PNG", quality=95)
+
+                    print(f"   ✅ Generated: {img.size}")
+                    print(f"   💾 Saved: {filename}\n")
+
+                    results["variations"].append({
+                        "number": generated_index,
+                        "emotion_index": emotion_idx,
+                        "hook_option_index": option_idx,
+                        "emotion": emotion_data['emotion'],
+                        "text": emotion_data['thumbnail_text'],
+                        "expression": emotion_data['expression'],
+                        "outfit": emotion_data['outfit'],
+                        "background": emotion_data['background'],
+                        "headline_text": selected_headline,
+                        "filename": filename,
+                        "filepath": str(filepath),
+                        "dimensions": img.size
+                    })
+                    results["total_generated"] += 1
+                    if progress_callback:
+                        try:
+                            progress_callback(
+                                f"✅ Generated thumbnail {generated_index}/{total}: {filename}")
+                        except Exception:
+                            pass
+                else:
+                    print(f"   ❌ Failed to generate\n")
+                    results["failed_count"] += 1
+                    if progress_callback:
+                        try:
+                            progress_callback(
+                                f"⚠️ Failed thumbnail {generated_index}/{total}: {emotion_data['emotion']} (hook {option_idx})")
+                        except Exception:
+                            pass
+
+                    if _is_fatal_api_key_error(self.last_error):
+                        results["aborted"] = True
+                        if progress_callback:
+                            try:
+                                progress_callback(
+                                    "🛑 Stopping thumbnail generation: API key is invalid, expired, or leaked")
+                            except Exception:
+                                pass
+                        print("🛑 Aborting remaining thumbnail attempts due to fatal API key/auth error")
+                        break
+
+            if results["aborted"]:
+                break
+
+        results["success"] = results["total_generated"] > 0
+        if self.last_error:
+            results["error"] = self.last_error
 
         return results
 

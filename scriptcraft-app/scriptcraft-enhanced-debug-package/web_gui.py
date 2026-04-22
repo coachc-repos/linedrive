@@ -34,13 +34,11 @@ if str(REPO_ROOT) not in sys.path:
 
 VERSION = "15.34-quotes-progress-mapping"
 
-# Set Google API key at module level to ensure it's available
-# This ensures the API key is set before any thumbnail generation
-if "GOOGLE_API_KEY" not in os.environ:
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg"
-    print("🔑 Set GOOGLE_API_KEY environment variable from default")
+# Verify Google API key availability for thumbnail generation.
+if "GOOGLE_API_KEY" in os.environ and os.environ.get("GOOGLE_API_KEY"):
+    print("🔑 Using GOOGLE_API_KEY from environment")
 else:
-    print(f"🔑 Using GOOGLE_API_KEY from environment")
+    print("⚠️ GOOGLE_API_KEY is not set; thumbnail generation will fail until provided")
 
 
 # Set up logging
@@ -1028,8 +1026,7 @@ async def process_script_creation(session_id, topic, audience, tone,
 
                     print(f"\n🔧 Initializing EmotionalThumbnailGenerator...")
                     # Let generator get API key from environment (same as test page)
-                    api_key = os.getenv(
-                        "GOOGLE_API_KEY", "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg")
+                    api_key = os.getenv("GOOGLE_API_KEY", "")
                     print(
                         f"   Environment API key: {api_key[:20]}... (length: {len(api_key)})")
 
@@ -1047,7 +1044,8 @@ async def process_script_creation(session_id, topic, audience, tone,
                     thumbnail_results = thumbnail_gen.generate_all_thumbnails(
                         script_title=topic,
                         script_content=final_script_content,
-                        youtube_upload_details=youtube_upload_details
+                        youtube_upload_details=youtube_upload_details,
+                        progress_callback=lambda msg: streamer.send_update(msg, 98),
                     )
 
                     print(f"\n🔍 THUMBNAIL GENERATION RESULTS:")
@@ -1056,8 +1054,14 @@ async def process_script_creation(session_id, topic, audience, tone,
 
                     if thumbnail_results:
                         print(f"   Keys: {list(thumbnail_results.keys())}")
-                        if thumbnail_results.get("variations"):
-                            variations = thumbnail_results["variations"]
+                        output_dir = thumbnail_results.get("output_dir")
+                        variations = thumbnail_results.get("variations") or []
+                        if variations:
+                            if output_dir:
+                                print(f"   📁 Thumbnails saved to: {output_dir}")
+                                streamer.send_update(
+                                    f"📁 Thumbnails saved to: {output_dir}", 99
+                                )
                             print(f"   Variations count: {len(variations)}")
                             print(
                                 f"\n✅ Generated {len(variations)} thumbnail variations")
@@ -1071,7 +1075,20 @@ async def process_script_creation(session_id, topic, audience, tone,
                                 f"✅ Generated {len(variations)} thumbnails", 99
                             )
                         else:
-                            print("   ⚠️ No 'variations' key in results")
+                            print("   ⚠️ Thumbnail directory created, but no thumbnails were generated")
+                            if output_dir:
+                                print(f"   📁 Directory: {output_dir}")
+                                streamer.send_update(
+                                    f"⚠️ No thumbnails generated (directory only): {output_dir}", 99
+                                )
+                            attempted = thumbnail_results.get("total_attempted", 0)
+                            streamer.send_update(
+                                f"❌ Thumbnail generation failed (0/{attempted})", 99
+                            )
+                            if thumbnail_results.get("error"):
+                                streamer.send_update(
+                                    f"❌ Thumbnail API error: {thumbnail_results.get('error')}", 99
+                                )
                             print(f"   Full results: {thumbnail_results}")
                     else:
                         print("   ⚠️ thumbnail_results is None")
@@ -2263,12 +2280,18 @@ def progress_stream(session_id):
                                     print(
                                         f"      Filename: {variation.get('filename')}")
 
-                                    thumbnails.append({
-                                        "emotion": variation["emotion"],
-                                        "text": variation["text"],
-                                        # Generator returns filename directly
-                                        "filename": variation["filename"]
-                                    })
+                                    filename = variation.get("filename")
+                                    if not filename and variation.get("filepath"):
+                                        filename = Path(
+                                            variation.get("filepath")).name
+
+                                    if filename:
+                                        thumbnails.append({
+                                            "emotion": variation.get("emotion") or variation.get("mood") or f"VARIATION_{idx}",
+                                            "text": variation.get("text") or variation.get("thumbnail_text") or "Thumbnail variation",
+                                            # Generator returns filename directly (fallback to filepath basename)
+                                            "filename": filename
+                                        })
 
                                 print(
                                     f"\n✅ Prepared {len(thumbnails)} thumbnail objects for frontend")
@@ -2304,6 +2327,7 @@ def progress_stream(session_id):
                                 "word_count": streamer.result.get("word_count", 0),
                                 "reading_time": streamer.result.get("reading_time", "N/A"),
                                 "thumbnails": thumbnails,
+                                "thumbnail_results": thumbnail_results,
                                 "comparison_file": streamer.result.get("comparison_file"),
                                 "chapter_comparisons": streamer.result.get("chapter_comparisons"),
                                 "flow_original_script": streamer.result.get("flow_original_script"),
@@ -2961,17 +2985,27 @@ def generate_test_thumbnails():
         if thumbnail_results and thumbnail_results.get("variations"):
             variations = thumbnail_results["variations"]
             print(f"\n✅ Generated {len(variations)} thumbnails successfully!")
+            output_dir = thumbnail_results.get("output_dir")
+            if output_dir:
+                print(f"📁 Thumbnails saved to: {output_dir}")
 
             return jsonify({
                 "success": True,
                 "thumbnails": variations,
+                "output_dir": thumbnail_results.get("output_dir"),
                 "count": len(variations)
             })
         else:
             print(f"\n⚠️ No thumbnails generated")
+            output_dir = (thumbnail_results or {}).get("output_dir")
+            if output_dir:
+                print(f"📁 Directory created (no thumbnails): {output_dir}")
+            if (thumbnail_results or {}).get("error"):
+                print(f"❌ Thumbnail API error: {(thumbnail_results or {}).get('error')}")
             return jsonify({
                 "success": False,
-                "error": "No thumbnails generated",
+                "error": (thumbnail_results or {}).get("error") or "No thumbnails generated",
+                "output_dir": (thumbnail_results or {}).get("output_dir"),
                 "results": thumbnail_results
             })
 
@@ -2989,13 +3023,26 @@ def generate_test_thumbnails():
 def serve_thumbnail(filename):
     """Serve generated thumbnail images"""
     try:
-        thumbnail_dir = Path.home() / "Dev" / "Thumbnails"
-        file_path = thumbnail_dir / filename
+        search_roots = [
+            Path.home() / "Dev" / "Videos" / "Edited" / "Final",
+            Path.home() / "Dev" / "Thumbnails",
+        ]
 
-        if file_path.exists() and file_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
-            return send_file(file_path, mimetype='image/png')
-        else:
-            return jsonify({"error": "Thumbnail not found"}), 404
+        file_path = None
+        for root in search_roots:
+            if not root.exists():
+                continue
+            matches = list(root.rglob(filename))
+            if matches:
+                file_path = matches[0]
+                break
+
+        if file_path and file_path.exists() and file_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
+            mimetype = 'image/png'
+            if file_path.suffix.lower() in ['.jpg', '.jpeg']:
+                mimetype = 'image/jpeg'
+            return send_file(file_path, mimetype=mimetype)
+        return jsonify({"error": "Thumbnail not found"}), 404
     except Exception as e:
         logger.error(f"Error serving thumbnail: {e}")
         return jsonify({"error": str(e)}), 500
@@ -3005,10 +3052,21 @@ def serve_thumbnail(filename):
 def serve_broll_image(filename):
     """Serve generated B-roll images"""
     try:
-        broll_dir = Path.home() / "Dev" / "brollimages"
-        file_path = broll_dir / filename
+        search_roots = [
+            Path.home() / "Dev" / "Videos" / "Edited" / "Final",
+            Path.home() / "Dev" / "brollimages",
+        ]
 
-        if file_path.exists() and file_path.suffix.lower() in ['.png', '.jpg', '.jpeg', '.webp']:
+        file_path = None
+        for root in search_roots:
+            if not root.exists():
+                continue
+            matches = list(root.rglob(filename))
+            if matches:
+                file_path = matches[0]
+                break
+
+        if file_path and file_path.exists() and file_path.suffix.lower() in ['.png', '.jpg', '.jpeg', '.webp']:
             # Determine mimetype based on extension
             mimetype = 'image/png'
             if file_path.suffix.lower() in ['.jpg', '.jpeg']:
@@ -3017,8 +3075,7 @@ def serve_broll_image(filename):
                 mimetype = 'image/webp'
 
             return send_file(file_path, mimetype=mimetype)
-        else:
-            return jsonify({"error": "B-roll image not found"}), 404
+        return jsonify({"error": "B-roll image not found"}), 404
     except Exception as e:
         logger.error(f"Error serving B-roll image: {e}")
         return jsonify({"error": str(e)}), 500
@@ -3190,20 +3247,35 @@ def create_resolve_with_videos():
 
         # Sort videos by chapter/part order
         def parse_chapter_info(filename):
-            """Extract chapter and part numbers from filename like heygen_Ch1p1_abc123.mp4"""
+            """Extract chapter and part numbers from filename.
+
+            Matches any filename containing Ch{N} then p{N}, e.g.:
+              Ch1p1, Ch1p2, Ch6p1         (no separator)
+              Ch1-Pt1, Ch1-pt1, Ch2-p2   (dash + optional 't')
+              Ch1_Pt1                     (underscore)
+              Title-Ch3p2.mp4            (title prefix)
+              heygen_...-Ch1p1_id.mp4    (heygen with ID suffix)
+              Ch1p1b                     (b-duplicate sorts after Ch1p1)
+
+            'AI with Roz' intro files always sort first.
+            Unknown files sort to the end.
+            """
             import re
-            # Try to match pattern: Ch{X}p{Y} where X is chapter, Y is part
-            match = re.search(r'Ch(\d+)p(\d+)', filename, re.IGNORECASE)
+            name = filename
+
+            # Intro/exit clips always go first
+            if re.search(r'AI\s+with\s+Roz', name, re.IGNORECASE):
+                return (0, 0)
+
+            # Universal pattern: Ch{X} + optional separator + p/P + optional t/T + {Y} + optional b
+            # Covers: Ch1p1, Ch1-p1, Ch1-Pt1, Ch1-pt1, Ch1_Pt1, Ch6p1, Ch2-p2, etc.
+            match = re.search(r'Ch(\d+)[-_]?[Pp][Tt]?(\d+)(b?)', name)
             if match:
                 chapter_num = int(match.group(1))
                 part_num = int(match.group(2))
-                return (chapter_num, part_num)
-
-            # Try to match just Chapter_{X}
-            match = re.search(r'Chapter[_\s]+(\d+)', filename, re.IGNORECASE)
-            if match:
-                chapter_num = int(match.group(1))
-                return (chapter_num, 0)
+                # 'b' duplicate sorts just after the main part
+                part_frac = 0.5 if match.group(3).lower() == 'b' else 0
+                return (chapter_num, part_num + part_frac)
 
             # Default to end of list
             return (999, 999)

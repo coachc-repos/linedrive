@@ -16,7 +16,7 @@ import threading
 import logging
 from datetime import datetime
 from io import BytesIO
-from flask import Flask, render_template, request, jsonify, Response, make_response, send_file
+from flask import Flask, render_template, request, jsonify, Response, make_response, send_file, stream_with_context
 import requests
 import sys
 from pathlib import Path
@@ -35,19 +35,40 @@ if str(REPO_ROOT) not in sys.path:
 
 VERSION = "15.34-quotes-progress-mapping"
 
-# Set Google API key at module level to ensure it's available
-# This ensures the API key is set before any thumbnail generation
-if "GOOGLE_API_KEY" not in os.environ:
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg"
-    print("🔑 Set GOOGLE_API_KEY environment variable from default")
+# Verify Google API key availability for thumbnail generation.
+if "GOOGLE_API_KEY" in os.environ and os.environ.get("GOOGLE_API_KEY"):
+    print("🔑 Using GOOGLE_API_KEY from environment")
 else:
-    print(f"🔑 Using GOOGLE_API_KEY from environment")
+    print("⚠️ GOOGLE_API_KEY is not set; thumbnail generation will fail until provided")
 
 
 # Set up logging
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+SCRIPTCRAFT_SETTINGS_PATH = Path.home() / ".scriptcraft" / "web_gui_settings.json"
+
+
+def _load_scriptcraft_settings() -> dict:
+    try:
+        if SCRIPTCRAFT_SETTINGS_PATH.exists():
+            with open(SCRIPTCRAFT_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not load ScriptCraft settings: {e}")
+    return {}
+
+
+def _save_scriptcraft_settings(settings: dict) -> bool:
+    try:
+        SCRIPTCRAFT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(SCRIPTCRAFT_SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+        return True
+    except Exception as e:
+        logger.error(f"❌ Could not save ScriptCraft settings: {e}")
+        return False
 
 # Paths already added above - no need to duplicate
 
@@ -57,6 +78,159 @@ app = Flask(__name__)
 progress_streams = {}
 results = {}
 running_tasks = {}
+
+
+@app.after_request
+def add_no_cache_headers(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+EMOTION_BY_VARIATION = {
+    1: "ANGRY/FRUSTRATED",
+    2: "SHOCKED/SURPRISED",
+    3: "SCARED/WORRIED",
+    4: "EXCITED/ENERGETIC",
+    5: "SKEPTICAL/DOUBTFUL",
+    6: "DETERMINED/INTENSE",
+}
+
+
+def _safe_title_for_paths(script_title: str) -> str:
+    """Normalize script title to filesystem-safe folder name used by generators."""
+    safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '', (script_title or '').strip())
+    safe_title = re.sub(r'\s+', '_', safe_title).strip('_.')
+    return safe_title or "untitled_script"
+
+
+def _guess_emotion_from_filename(filename: str) -> str:
+    """Infer variation emotion label from filename pattern like *_v2_*.png."""
+    match = re.search(r'_v(\d+)_', filename)
+    if not match:
+        return "EXISTING THUMBNAIL"
+    return EMOTION_BY_VARIATION.get(int(match.group(1)), "EXISTING THUMBNAIL")
+
+
+def _collect_all_thumbnail_entries(script_title: str, thumbnail_results: dict | None = None) -> list[dict]:
+    """Return all thumbnails present in the script's thumbnails directory."""
+    thumbnail_results = thumbnail_results or {}
+    generated_variations = thumbnail_results.get("variations") or []
+    output_dir_hint = thumbnail_results.get("output_dir")
+
+    thumbnail_dir = None
+    if output_dir_hint:
+        thumbnail_dir = Path(output_dir_hint)
+    else:
+        thumbnail_dir = (
+            Path.home()
+            / "Dev"
+            / "Videos"
+            / "Edited"
+            / "Final"
+            / _safe_title_for_paths(script_title)
+            / "thumbnails"
+        )
+
+    generated_by_filename = {}
+    for variation in generated_variations:
+        filename = variation.get("filename")
+        if not filename and variation.get("filepath"):
+            filename = Path(variation.get("filepath")).name
+        if filename:
+            generated_by_filename[filename] = variation
+
+    if not thumbnail_dir.exists() or not thumbnail_dir.is_dir():
+        return []
+
+    image_paths = sorted(
+        [
+            p for p in thumbnail_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}
+        ],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    thumbnails = []
+    for image_path in image_paths:
+        variation = generated_by_filename.get(image_path.name, {})
+        thumbnails.append({
+            "emotion": variation.get("emotion") or variation.get("mood") or _guess_emotion_from_filename(image_path.name),
+            "text": variation.get("text") or variation.get("thumbnail_text") or "Existing thumbnail",
+            "filename": image_path.name,
+        })
+
+    return thumbnails
+
+
+def _extract_thumbnail_hook_text_options(hook_result: dict | None = None, script_text: str = "") -> list[str]:
+    """Extract up to three thumbnail hook text options from hook agent result or script text blocks."""
+    hook_result = hook_result or {}
+
+    options: list[str] = []
+
+    direct_options = hook_result.get("thumbnail_hook_text_options") or []
+    if isinstance(direct_options, list):
+        for option in direct_options:
+            text = (option or "").strip().strip('"').strip()
+            if text and text not in options:
+                options.append(text)
+
+    direct_single = (hook_result.get("thumbnail_hook_text") or "").strip().strip('"').strip()
+    if direct_single and direct_single not in options:
+        options.append(direct_single)
+
+    if options:
+        return options[:3]
+
+    def _add_option(text: str):
+        cleaned = (text or "").strip().strip('"').strip()
+        if cleaned and cleaned not in options:
+            options.append(cleaned)
+
+    raw_candidates = [
+        hook_result.get("full_response", ""),
+        hook_result.get("raw_response", ""),
+        script_text,
+    ]
+
+    for raw in raw_candidates:
+        if not raw:
+            continue
+
+        numbered = re.findall(
+            r'THUMBNAIL_HOOK_TEXT_(\d+)\s*:\s*"?([^"\n]+)"?',
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if numbered:
+            for _, text in sorted(numbered, key=lambda item: int(item[0])):
+                _add_option(text)
+            if options:
+                return options[:3]
+
+        match = re.search(
+            r'THUMBNAIL_HOOK_TEXT\s*:\s*"?([^"\n]+)"?',
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            _add_option(match.group(1))
+            if options:
+                return options[:3]
+
+    return options[:3]
+
+
+def _extract_thumbnail_hook_text(hook_result: dict | None = None, script_text: str = "") -> str:
+    """Extract the first available thumbnail hook text option."""
+    options = _extract_thumbnail_hook_text_options(
+        hook_result=hook_result,
+        script_text=script_text,
+    )
+    return options[0] if options else ""
 
 
 class ConsoleCapture:
@@ -448,7 +622,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                                   video_length, production_type, goals,
                                   quick_test=False, checkboxes=None,
                                   heygen_template_id="", heygen_api_key="",
-                                  heygen_voice_id=""):
+                                  heygen_voice_id="", grok_api_key=""):
     """Clean script creation with only console capture"""
     logger.info(f"🎬 SCRIPT CREATION STARTED: session={session_id}")
     if quick_test:
@@ -627,6 +801,8 @@ async def process_script_creation(session_id, topic, audience, tone,
             curl_commands = None  # Initialize curl commands variable
             edl_content = None  # Initialize EDL content variable
             edl_filename = None  # Initialize EDL filename variable
+            broll_table = None
+            broll_rows = []
 
             # NEW: Generate B-roll Table using AI Agent (skip unless checkbox checked)
             print(
@@ -658,6 +834,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                     if broll_result.get("success", False):
                         broll_table = broll_result.get("table", "")
                         parsed_data = broll_result.get("parsed_data", [])
+                        broll_rows = parsed_data
 
                         print(
                             f"✅ B-roll table generated ({len(broll_table)} characters, {len(parsed_data)} entries)")
@@ -777,6 +954,37 @@ async def process_script_creation(session_id, topic, audience, tone,
                 except Exception as broll_img_error:
                     print(
                         f"⚠️ B-roll image generation error: {broll_img_error}")
+
+            # NEW: Defer Grok AI generation until user selects rows from B-roll table
+            grok_videos = []
+            if not quick_test and checkboxes.get("grok_videos", False):
+                if not broll_table:
+                    print("🤖 Grok Videos: broll_table not available, auto-generating...")
+                    streamer.send_update("🤖 Grok Videos: generating B-roll table first...", 98)
+                    try:
+                        from linedrive_azure.agents import ScriptBRollAgentClient
+                        broll_agent = ScriptBRollAgentClient()
+                        broll_result = broll_agent.generate_broll_table_with_timecodes(
+                            script_content=final_script_content,
+                            script_title=topic,
+                            words_per_minute=150,
+                            timeout=300
+                        )
+                        if broll_result.get("success", False):
+                            broll_table = broll_result.get("table", "")
+                            broll_rows = broll_result.get("parsed_data", [])
+                            print(f"✅ Auto-generated broll_table ({len(broll_table)} chars) for Grok Videos")
+                        else:
+                            print("⚠️ Auto broll_table generation failed for Grok Videos")
+                    except Exception as auto_broll_err:
+                        print(f"❌ Auto broll_table error: {auto_broll_err}")
+
+                if broll_table:
+                    total_rows = len(broll_rows) if broll_rows else 0
+                    streamer.send_update(
+                        f"⏸️ Select B-roll rows for Grok generation ({total_rows} available)",
+                        99
+                    )
 
             # NEW: Generate HeyGen Ready Section (only if checkbox checked)
             if checkboxes.get("heygen", False):
@@ -1021,6 +1229,11 @@ async def process_script_creation(session_id, topic, audience, tone,
             thumbnail_results = None
             if checkboxes.get("thumbnails", False):
                 try:
+                    thumbnail_hook_text_options = _extract_thumbnail_hook_text_options(
+                        hook_result=result,
+                        script_text=final_script_with_tools
+                    )
+                    thumbnail_hook_text = thumbnail_hook_text_options[0] if thumbnail_hook_text_options else ""
                     print("\n" + "="*70)
                     print("🖼️  THUMBNAIL GENERATION STARTING")
                     print("="*70)
@@ -1029,9 +1242,21 @@ async def process_script_creation(session_id, topic, audience, tone,
                         f"📄 Script length: {len(final_script_content)} chars")
                     print(
                         f"🎥 YouTube details: {'Available' if youtube_upload_details else 'None'}")
+                    if thumbnail_hook_text_options:
+                        print(f"🏷️ Thumbnail hook text options: {thumbnail_hook_text_options}")
+                        streamer.send_update(
+                            f"🏷️ Thumbnail hook options: {', '.join(thumbnail_hook_text_options)}", 98
+                        )
+                    else:
+                        print("⚠️ Thumbnail hook text not found; using script title fallback")
+                        streamer.send_update(
+                            "⚠️ Thumbnail hook text not found; using script title", 98
+                        )
 
+                    expected_thumbnails = 6 * \
+                        len(thumbnail_hook_text_options) if thumbnail_hook_text_options else 6
                     streamer.send_update(
-                        "🖼️ Generating 6 thumbnail variations...", 98)
+                        f"🖼️ Generating {expected_thumbnails} thumbnail variations...", 98)
 
                     from tools.media.emotional_thumbnail_generator import (
                         EmotionalThumbnailGenerator,
@@ -1039,8 +1264,7 @@ async def process_script_creation(session_id, topic, audience, tone,
 
                     print(f"\n🔧 Initializing EmotionalThumbnailGenerator...")
                     # Let generator get API key from environment (same as test page)
-                    api_key = os.getenv(
-                        "GOOGLE_API_KEY", "AIzaSyDRyFKaGX1aBTya9Ljb_CaCM6-7I0USVhg")
+                    api_key = os.getenv("GOOGLE_API_KEY", "")
                     print(
                         f"   Environment API key: {api_key[:20]}... (length: {len(api_key)})")
 
@@ -1058,7 +1282,10 @@ async def process_script_creation(session_id, topic, audience, tone,
                     thumbnail_results = thumbnail_gen.generate_all_thumbnails(
                         script_title=topic,
                         script_content=final_script_content,
-                        youtube_upload_details=youtube_upload_details
+                        youtube_upload_details=youtube_upload_details,
+                        headline_text=thumbnail_hook_text or None,
+                        headline_options=thumbnail_hook_text_options or None,
+                        progress_callback=lambda msg: streamer.send_update(msg, 98),
                     )
 
                     print(f"\n🔍 THUMBNAIL GENERATION RESULTS:")
@@ -1067,8 +1294,14 @@ async def process_script_creation(session_id, topic, audience, tone,
 
                     if thumbnail_results:
                         print(f"   Keys: {list(thumbnail_results.keys())}")
-                        if thumbnail_results.get("variations"):
-                            variations = thumbnail_results["variations"]
+                        output_dir = thumbnail_results.get("output_dir")
+                        variations = thumbnail_results.get("variations") or []
+                        if variations:
+                            if output_dir:
+                                print(f"   📁 Thumbnails saved to: {output_dir}")
+                                streamer.send_update(
+                                    f"📁 Thumbnails saved to: {output_dir}", 99
+                                )
                             print(f"   Variations count: {len(variations)}")
                             print(
                                 f"\n✅ Generated {len(variations)} thumbnail variations")
@@ -1082,7 +1315,20 @@ async def process_script_creation(session_id, topic, audience, tone,
                                 f"✅ Generated {len(variations)} thumbnails", 99
                             )
                         else:
-                            print("   ⚠️ No 'variations' key in results")
+                            print("   ⚠️ Thumbnail directory created, but no thumbnails were generated")
+                            if output_dir:
+                                print(f"   📁 Directory: {output_dir}")
+                                streamer.send_update(
+                                    f"⚠️ No thumbnails generated (directory only): {output_dir}", 99
+                                )
+                            attempted = thumbnail_results.get("total_attempted", 0)
+                            streamer.send_update(
+                                f"❌ Thumbnail generation failed (0/{attempted})", 99
+                            )
+                            if thumbnail_results.get("error"):
+                                streamer.send_update(
+                                    f"❌ Thumbnail API error: {thumbnail_results.get('error')}", 99
+                                )
                             print(f"   Full results: {thumbnail_results}")
                     else:
                         print("   ⚠️ thumbnail_results is None")
@@ -1107,6 +1353,9 @@ async def process_script_creation(session_id, topic, audience, tone,
                 "youtube_details": youtube_upload_details,
                 "thumbnail_results": thumbnail_results,
                 "broll_images": broll_images,
+                "grok_videos": grok_videos,
+                "broll_table": broll_table,
+                "broll_rows": broll_rows,
                 "word_count": len(final_script_with_tools.split()),
                 "reading_time": f"{len(final_script_with_tools.split()) // 150} min",
                 "audience": audience,
@@ -1160,7 +1409,7 @@ async def process_script_creation(session_id, topic, audience, tone,
 async def process_existing_script(
     session_id, script_content, audience, tone,
     video_length, checkboxes, heygen_template_id="",
-    heygen_api_key="", heygen_voice_id=""
+    heygen_api_key="", heygen_voice_id="", grok_api_key=""
 ):
     """Process existing script with progress updates"""
     import re
@@ -1272,6 +1521,8 @@ async def process_existing_script(
         heygen_script = None
         curl_commands = None
         hook_result = {}  # Initialize to empty dict to prevent undefined variable errors
+        thumbnail_hook_text = ""
+        thumbnail_hook_text_options: list[str] = []
 
         # Generate Hook & Summary if requested
         if checkboxes.get("hook_summary", False):
@@ -1293,6 +1544,30 @@ async def process_existing_script(
                     hook_text = hook_result.get("hook", "")
                     summary_text = hook_result.get("summary", "")
                     flow_analysis = hook_result.get("flow_analysis", "")
+                    thumbnail_hook_text_options = _extract_thumbnail_hook_text_options(
+                        hook_result=hook_result
+                    )
+                    thumbnail_hook_text = thumbnail_hook_text_options[0] if thumbnail_hook_text_options else ""
+                    logger.info(
+                        f"🔍 DEBUG: process_existing_script hook_result keys: {list(hook_result.keys())}")
+                    if thumbnail_hook_text_options:
+                        logger.info(
+                            f"🏷️ Thumbnail hook text options detected: {thumbnail_hook_text_options}")
+                        print(f"🏷️ Thumbnail hook text options detected: {thumbnail_hook_text_options}")
+                        streamer.send_update(
+                            f"🏷️ Thumbnail hook options: {', '.join(thumbnail_hook_text_options)}", 15
+                        )
+                    else:
+                        logger.warning(
+                            "⚠️ Thumbnail hook text missing in Hook-and-Summary response")
+                        raw_response = hook_result.get("full_response", "") or hook_result.get("raw_response", "")
+                        print("⚠️ Thumbnail hook text missing in Hook-and-Summary response")
+                        print(f"🔍 DEBUG: THUMBNAIL_HOOK_TEXT marker present: {'THUMBNAIL_HOOK_TEXT' in raw_response}")
+                        print(f"🔍 DEBUG: THUMBNAIL HOOK section present: {'THUMBNAIL HOOK' in raw_response.upper()}")
+                        streamer.send_update(
+                            "⚠️ Thumbnail hook text missing in Hook-and-Summary response",
+                            15,
+                        )
                     completed_steps += 1
                     progress = 15 + (completed_steps * progress_per_step)
                     streamer.send_update(
@@ -1410,6 +1685,7 @@ async def process_existing_script(
 
         # Generate B-roll Table if requested
         broll_table = None
+        broll_rows = []
         if checkboxes.get("broll", False):
             current_progress = 15 + (completed_steps * progress_per_step)
             streamer.send_update("📊 Generating B-roll Search Terms Table...",
@@ -1429,6 +1705,7 @@ async def process_existing_script(
                 if broll_result.get("success", False):
                     broll_table = broll_result.get("table", "")
                     parsed_data = broll_result.get("parsed_data", [])
+                    broll_rows = parsed_data
 
                     broll_section = f"\n\n{'=' * 80}\n"
                     broll_section += "# 📊 B-ROLL SEARCH TERMS TABLE\n"
@@ -1522,6 +1799,37 @@ async def process_existing_script(
                 logger.error(f"❌ B-roll images error: {e}")
                 import traceback
                 traceback.print_exc()
+
+        # Defer Grok AI generation until user selects rows from B-roll table
+        # Auto-generate broll_table if needed and not already done
+        grok_videos = []
+        if checkboxes.get("grok_videos", False):
+            if not broll_table:
+                logger.info("🤖 Grok Videos: broll_table not available, auto-generating...")
+                streamer.send_update("🤖 Grok Videos: generating B-roll table first...", int(15 + (completed_steps * progress_per_step)))
+                try:
+                    from linedrive_azure.agents import ScriptBRollAgentClient
+                    broll_agent = ScriptBRollAgentClient()
+                    broll_result = broll_agent.generate_broll_table_with_timecodes(
+                        script_content=cleaned_script,
+                        script_title=script_title,
+                        words_per_minute=150,
+                        timeout=300
+                    )
+                    if broll_result.get("success", False):
+                        broll_table = broll_result.get("table", "")
+                        broll_rows = broll_result.get("parsed_data", [])
+                        logger.info(f"✅ Auto-generated broll_table ({len(broll_table)} chars) for Grok Videos")
+                    else:
+                        logger.warning("⚠️ Auto broll_table generation failed for Grok Videos")
+                except Exception as auto_broll_err:
+                    logger.error(f"❌ Auto broll_table error: {auto_broll_err}")
+        if checkboxes.get("grok_videos", False) and broll_table:
+            total_rows = len(broll_rows) if broll_rows else 0
+            streamer.send_update(
+                f"⏸️ Select B-roll rows for Grok generation ({total_rows} available)",
+                int(15 + (completed_steps * progress_per_step))
+            )
 
         # Generate HeyGen Ready Script if requested
         if checkboxes.get("heygen", False):
@@ -1629,21 +1937,47 @@ async def process_existing_script(
         thumbnail_results = None
         if checkboxes.get("thumbnails", False):
             current_progress = 15 + (completed_steps * progress_per_step)
-            streamer.send_update("🖼️ Generating 6 thumbnail variations...",
-                                 int(current_progress))
+            expected_thumbnails = 6 * \
+                len(thumbnail_hook_text_options) if thumbnail_hook_text_options else 6
+            streamer.send_update(
+                f"🖼️ Generating {expected_thumbnails} thumbnail variations...",
+                int(current_progress),
+            )
             try:
                 from tools.media.emotional_thumbnail_generator import (
                     EmotionalThumbnailGenerator,
                 )
 
                 thumbnail_gen = EmotionalThumbnailGenerator()
+                if thumbnail_hook_text_options:
+                    logger.info(
+                        f"🏷️ Script processing will use thumbnail hook text options instead of script title: {thumbnail_hook_text_options}")
+                else:
+                    logger.warning(
+                        "⚠️ Script processing did not find thumbnail hook text; using script title fallback")
                 thumbnail_results = thumbnail_gen.generate_all_thumbnails(
                     script_title=script_title,
-                    script_content=cleaned_script
+                    script_content=cleaned_script,
+                    headline_text=thumbnail_hook_text or None,
+                    headline_options=thumbnail_hook_text_options or None,
+                    progress_callback=lambda msg: streamer.send_update(
+                        msg, int(current_progress)
+                    ),
                 )
+                logger.info(
+                    f"🔍 DEBUG: script processing headline options passed to thumbnail generator = {repr(thumbnail_hook_text_options or None)}")
 
-                if thumbnail_results and thumbnail_results.get("variations"):
-                    variations = thumbnail_results["variations"]
+                variations = (thumbnail_results or {}).get("variations") or []
+                output_dir = (thumbnail_results or {}).get("output_dir")
+
+                if variations:
+                    if output_dir:
+                        logger.info(
+                            f"📁 Thumbnails saved to: {output_dir}")
+                        streamer.send_update(
+                            f"📁 Thumbnails saved to: {output_dir}",
+                            int(current_progress)
+                        )
                     thumb_section = f"\n\n{'=' * 80}\n"
                     thumb_section += "# 🖼️ EMOTIONAL THUMBNAIL VARIATIONS\n"
                     thumb_section += f"{'=' * 80}\n\n"
@@ -1659,6 +1993,30 @@ async def process_existing_script(
                         f"✅ Generated {len(variations)} thumbnails",
                         int(progress)
                     )
+                    api_error = (thumbnail_results or {}).get("error")
+                    if api_error:
+                        logger.warning(f"⚠️ Thumbnail API returned errors during generation: {api_error}")
+                        streamer.send_update(
+                            f"⚠️ Thumbnail API error during generation: {api_error}",
+                            int(current_progress)
+                        )
+                elif output_dir:
+                    logger.warning(
+                        f"⚠️ Thumbnail directory created but no files generated: {output_dir}")
+                    streamer.send_update(
+                        f"⚠️ No thumbnails generated (directory only): {output_dir}",
+                        int(current_progress)
+                    )
+                    attempted = (thumbnail_results or {}).get("total_attempted", 0)
+                    streamer.send_update(
+                        f"❌ Thumbnail generation failed (0/{attempted})",
+                        int(current_progress)
+                    )
+                    if (thumbnail_results or {}).get("error"):
+                        streamer.send_update(
+                            f"❌ Thumbnail API error: {(thumbnail_results or {}).get('error')}",
+                            int(current_progress)
+                        )
             except Exception as e:
                 logger.error(f"❌ Thumbnail generation error: {e}")
 
@@ -1732,10 +2090,15 @@ async def process_existing_script(
             "script": final_output,  # Also include "script" for compatibility
             "script_title": script_title,
             "thumbnail_results": thumbnail_results,
+            "thumbnail_hook_text": thumbnail_hook_text,
+            "thumbnail_hook_text_options": thumbnail_hook_text_options,
             "edl_content": edl_content,
             "edl_filename": edl_filename,
             "curl_commands": curl_commands,
             "broll_images": broll_images,
+            "grok_videos": grok_videos,
+            "broll_table": broll_table,
+            "broll_rows": broll_rows,
         }
         logger.info("✅ Script processing completed successfully")
 
@@ -2176,6 +2539,7 @@ def create():
     heygen_template_id = data.get("heygen_template_id", "")
     heygen_api_key = data.get("heygen_api_key", "")
     heygen_voice_id = data.get("heygen_voice_id", "")
+    grok_api_key = data.get("grok_api_key", "")
 
     # If "All" is checked, enable everything
     if checkboxes.get("all", False):
@@ -2222,7 +2586,7 @@ def create():
                     session_id, topic, audience, tone, actual_length,
                     production_type, goals, quick_test, checkboxes,
                     heygen_template_id, heygen_api_key,
-                    heygen_voice_id
+                    heygen_voice_id, grok_api_key
                 ))
         except Exception as e:
             logger.error(f"❌ Script creation error: {e}")
@@ -2283,38 +2647,19 @@ def progress_stream(session_id):
                             print(
                                 f"Thumbnail results is None: {thumbnail_results is None}")
 
-                            thumbnails = []
+                            thumbnails = _collect_all_thumbnail_entries(
+                                streamer.result.get("script_title", "Untitled Script"),
+                                thumbnail_results,
+                            )
+
                             if thumbnail_results and thumbnail_results.get("variations"):
                                 print(f"✅ Found variations in thumbnail_results")
-                                variations = thumbnail_results["variations"]
-                                print(f"   Count: {len(variations)}")
+                                print(f"   Generated this run: {len(thumbnail_results.get('variations') or [])}")
+                            elif thumbnail_results:
+                                print(f"⚠️ No variations found in thumbnail_results")
+                                print(f"   Available keys: {list(thumbnail_results.keys())}")
 
-                                for idx, variation in enumerate(variations, 1):
-                                    print(f"\n   Processing variation #{idx}:")
-                                    print(
-                                        f"      Keys: {list(variation.keys())}")
-                                    print(
-                                        f"      Emotion: {variation.get('emotion')}")
-                                    print(
-                                        f"      Text: {variation.get('text')}")
-                                    print(
-                                        f"      Filename: {variation.get('filename')}")
-
-                                    thumbnails.append({
-                                        "emotion": variation["emotion"],
-                                        "text": variation["text"],
-                                        # Generator returns filename directly
-                                        "filename": variation["filename"]
-                                    })
-
-                                print(
-                                    f"\n✅ Prepared {len(thumbnails)} thumbnail objects for frontend")
-                            else:
-                                print(
-                                    f"⚠️ No variations found in thumbnail_results")
-                                if thumbnail_results:
-                                    print(
-                                        f"   Available keys: {list(thumbnail_results.keys())}")
+                            print(f"\n✅ Prepared {len(thumbnails)} thumbnail objects for frontend (directory-wide)")
 
                             print("="*70 + "\n")
 
@@ -2341,6 +2686,7 @@ def progress_stream(session_id):
                                 "word_count": streamer.result.get("word_count", 0),
                                 "reading_time": streamer.result.get("reading_time", "N/A"),
                                 "thumbnails": thumbnails,
+                                "thumbnail_results": thumbnail_results,
                                 "comparison_file": streamer.result.get("comparison_file"),
                                 "chapter_comparisons": streamer.result.get("chapter_comparisons"),
                                 "flow_original_script": streamer.result.get("flow_original_script"),
@@ -2349,7 +2695,10 @@ def progress_stream(session_id):
                                 "edl_content": streamer.result.get("edl_content"),
                                 "edl_filename": streamer.result.get("edl_filename"),
                                 "curl_commands": streamer.result.get("curl_commands"),
-                                "broll_images": streamer.result.get("broll_images")
+                                "broll_images": streamer.result.get("broll_images"),
+                                "grok_videos": streamer.result.get("grok_videos"),
+                                "broll_table": streamer.result.get("broll_table"),
+                                "broll_rows": streamer.result.get("broll_rows")
                             }
 
                             print("\n" + "="*70)
@@ -2481,6 +2830,7 @@ def process_script():
         heygen_template_id = data.get("heygen_template_id", "")
         heygen_api_key = data.get("heygen_api_key", "")
         heygen_voice_id = data.get("heygen_voice_id", "")
+        grok_api_key = data.get("grok_api_key", "")
 
         if not script_content.strip():
             logger.warning("❌ Empty script received")
@@ -2504,7 +2854,7 @@ def process_script():
                 asyncio.run(process_existing_script(
                     session_id, script_content, audience, tone,
                     video_length, checkboxes, heygen_template_id,
-                    heygen_api_key, heygen_voice_id
+                    heygen_api_key, heygen_voice_id, grok_api_key
                 ))
             except Exception as e:
                 logger.error(f"❌ Script processing error: {e}")
@@ -2849,6 +3199,192 @@ def heygen_test_generate():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/grok/test-video", methods=["POST"])
+def grok_test_video_generate():
+    """Generate a single Grok test video from a prompt and return a local preview path."""
+    try:
+        data = request.get_json() or {}
+        prompt = (data.get("prompt") or "").strip()
+        duration = int(data.get("duration") or 6)
+        aspect_ratio = data.get("aspect_ratio") or "16:9"
+        resolution = data.get("resolution") or "480p"
+
+        if not prompt:
+            return jsonify({"success": False, "error": "Prompt is required"}), 400
+
+        duration = max(1, min(15, duration))
+
+        xai_api_key = (data.get("api_key") or "").strip() or os.getenv("XAI_API_KEY", "").strip()
+        if not xai_api_key or xai_api_key == "your-xai-api-key-here":
+            return jsonify({
+                "success": False,
+                "error": "Grok API key is missing. Enter it in the Web GUI Grok Key field (or set XAI_API_KEY)."
+            }), 400
+
+        import xai_sdk
+        import certifi
+        import datetime as dt
+
+        logger.info("🤖 Grok test video request started")
+        logger.info(f"🤖 Prompt: {prompt[:180]}")
+        logger.info(
+            f"🤖 Settings: duration={duration}, aspect_ratio={aspect_ratio}, resolution={resolution}")
+
+        client = xai_sdk.Client(api_key=xai_api_key)
+        response = client.video.generate(
+            prompt=prompt,
+            model="grok-imagine-video",
+            duration=duration,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+        )
+
+        broll_videos_dir = Path.home() / "Dev" / "brollvideos"
+        broll_videos_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_prompt = "".join(c if c.isalnum() else "_" for c in prompt)[:40].strip("_")
+        if not safe_prompt:
+            safe_prompt = "test_video"
+        filename = f"grok_test_{timestamp}_{safe_prompt}.mp4"
+        local_path = broll_videos_dir / filename
+
+        with requests.get(response.url, stream=True, timeout=180, verify=certifi.where()) as dl_resp:
+            dl_resp.raise_for_status()
+            with open(local_path, "wb") as out_file:
+                for chunk in dl_resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        out_file.write(chunk)
+
+        logger.info(f"✅ Grok test video saved: {local_path}")
+
+        return jsonify({
+            "success": True,
+            "filename": filename,
+            "video_path": f"/broll-videos/{filename}",
+            "source_url": response.url,
+            "duration": getattr(response, "duration", duration),
+            "model": getattr(response, "model", "grok-imagine-video"),
+            "respect_moderation": getattr(response, "respect_moderation", None),
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Grok test video generation failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/grok/key", methods=["GET"])
+def grok_get_saved_key():
+    """Return saved Grok API key from server settings (if any)."""
+    try:
+        settings = _load_scriptcraft_settings()
+        key = (settings.get("grok_api_key") or "").strip()
+        return jsonify({"success": True, "api_key": key})
+    except Exception as e:
+        logger.error(f"❌ Failed to load saved Grok key: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/grok/key", methods=["POST"])
+def grok_save_key():
+    """Persist Grok API key in server settings so it survives browser/session changes."""
+    try:
+        data = request.get_json() or {}
+        api_key = (data.get("api_key") or "").strip()
+        if not api_key:
+            return jsonify({"success": False, "error": "api_key is required"}), 400
+
+        settings = _load_scriptcraft_settings()
+        settings["grok_api_key"] = api_key
+        if not _save_scriptcraft_settings(settings):
+            return jsonify({"success": False, "error": "Could not save settings"}), 500
+
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.error(f"❌ Failed to save Grok key: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/grok/generate-selected", methods=["POST"])
+def grok_generate_selected_videos():
+    """Generate Grok videos sequentially for selected B-roll rows."""
+    try:
+        data = request.get_json() or {}
+        selected_rows = data.get("selected_rows") or []
+        api_key = (data.get("api_key") or "").strip() or os.getenv("XAI_API_KEY", "").strip()
+
+        if not api_key:
+            return jsonify({"success": False, "error": "Grok API key is required"}), 400
+        if not selected_rows:
+            return jsonify({"success": False, "error": "No rows selected"}), 400
+
+        import xai_sdk
+        import certifi
+
+        client = xai_sdk.Client(api_key=api_key)
+        broll_videos_dir = Path.home() / "Dev" / "brollvideos"
+        broll_videos_dir.mkdir(parents=True, exist_ok=True)
+
+        videos = []
+        failures = []
+        total = len(selected_rows)
+
+        for i, row in enumerate(selected_rows):
+            prompt = (row.get("description") or row.get("search_term") or "").strip()
+            if not prompt:
+                failures.append({"index": i, "error": "Missing prompt", "row": row})
+                continue
+
+            try:
+                response = client.video.generate(
+                    prompt=prompt,
+                    model="grok-imagine-video",
+                    duration=6,
+                    aspect_ratio="16:9",
+                    resolution="480p",
+                )
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_term = "".join(c if c.isalnum() else "_" for c in row.get("search_term", f"vid{i}"))[:30]
+                filename = f"grok_{timestamp}_{i}_{safe_term}.mp4"
+                local_path = broll_videos_dir / filename
+
+                with requests.get(response.url, stream=True, timeout=180, verify=certifi.where()) as dl_resp:
+                    dl_resp.raise_for_status()
+                    with open(local_path, "wb") as out_file:
+                        for chunk in dl_resp.iter_content(chunk_size=8192):
+                            if chunk:
+                                out_file.write(chunk)
+
+                videos.append({
+                    "timecode": row.get("timecode", ""),
+                    "search_term": row.get("search_term", ""),
+                    "description": prompt,
+                    "url": response.url,
+                    "filename": str(local_path),
+                })
+            except Exception as row_err:
+                failures.append({
+                    "index": i,
+                    "timecode": row.get("timecode", ""),
+                    "search_term": row.get("search_term", ""),
+                    "error": str(row_err),
+                })
+
+        return jsonify({
+            "success": True,
+            "total_requested": total,
+            "generated_count": len(videos),
+            "failed_count": len(failures),
+            "videos": videos,
+            "failures": failures,
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Grok selected generation failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/test_word")
 def test_word_page():
     """Test page for Word export functionality"""
@@ -3141,17 +3677,27 @@ def generate_test_thumbnails():
         if thumbnail_results and thumbnail_results.get("variations"):
             variations = thumbnail_results["variations"]
             print(f"\n✅ Generated {len(variations)} thumbnails successfully!")
+            output_dir = thumbnail_results.get("output_dir")
+            if output_dir:
+                print(f"📁 Thumbnails saved to: {output_dir}")
 
             return jsonify({
                 "success": True,
                 "thumbnails": variations,
+                "output_dir": thumbnail_results.get("output_dir"),
                 "count": len(variations)
             })
         else:
             print(f"\n⚠️ No thumbnails generated")
+            output_dir = (thumbnail_results or {}).get("output_dir")
+            if output_dir:
+                print(f"📁 Directory created (no thumbnails): {output_dir}")
+            if (thumbnail_results or {}).get("error"):
+                print(f"❌ Thumbnail API error: {(thumbnail_results or {}).get('error')}")
             return jsonify({
                 "success": False,
-                "error": "No thumbnails generated",
+                "error": (thumbnail_results or {}).get("error") or "No thumbnails generated",
+                "output_dir": (thumbnail_results or {}).get("output_dir"),
                 "results": thumbnail_results
             })
 
@@ -3169,13 +3715,26 @@ def generate_test_thumbnails():
 def serve_thumbnail(filename):
     """Serve generated thumbnail images"""
     try:
-        thumbnail_dir = Path.home() / "Dev" / "Thumbnails"
-        file_path = thumbnail_dir / filename
+        search_roots = [
+            Path.home() / "Dev" / "Videos" / "Edited" / "Final",
+            Path.home() / "Dev" / "Thumbnails",
+        ]
 
-        if file_path.exists() and file_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
-            return send_file(file_path, mimetype='image/png')
-        else:
-            return jsonify({"error": "Thumbnail not found"}), 404
+        file_path = None
+        for root in search_roots:
+            if not root.exists():
+                continue
+            matches = list(root.rglob(filename))
+            if matches:
+                file_path = matches[0]
+                break
+
+        if file_path and file_path.exists() and file_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
+            mimetype = 'image/png'
+            if file_path.suffix.lower() in ['.jpg', '.jpeg']:
+                mimetype = 'image/jpeg'
+            return send_file(file_path, mimetype=mimetype)
+        return jsonify({"error": "Thumbnail not found"}), 404
     except Exception as e:
         logger.error(f"Error serving thumbnail: {e}")
         return jsonify({"error": str(e)}), 500
@@ -3185,10 +3744,21 @@ def serve_thumbnail(filename):
 def serve_broll_image(filename):
     """Serve generated B-roll images"""
     try:
-        broll_dir = Path.home() / "Dev" / "brollimages"
-        file_path = broll_dir / filename
+        search_roots = [
+            Path.home() / "Dev" / "Videos" / "Edited" / "Final",
+            Path.home() / "Dev" / "brollimages",
+        ]
 
-        if file_path.exists() and file_path.suffix.lower() in ['.png', '.jpg', '.jpeg', '.webp']:
+        file_path = None
+        for root in search_roots:
+            if not root.exists():
+                continue
+            matches = list(root.rglob(filename))
+            if matches:
+                file_path = matches[0]
+                break
+
+        if file_path and file_path.exists() and file_path.suffix.lower() in ['.png', '.jpg', '.jpeg', '.webp']:
             # Determine mimetype based on extension
             mimetype = 'image/png'
             if file_path.suffix.lower() in ['.jpg', '.jpeg']:
@@ -3197,10 +3767,23 @@ def serve_broll_image(filename):
                 mimetype = 'image/webp'
 
             return send_file(file_path, mimetype=mimetype)
-        else:
-            return jsonify({"error": "B-roll image not found"}), 404
+        return jsonify({"error": "B-roll image not found"}), 404
     except Exception as e:
         logger.error(f"Error serving B-roll image: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/broll-videos/<filename>")
+def serve_broll_video(filename):
+    """Serve generated Grok B-roll videos"""
+    try:
+        broll_videos_dir = Path.home() / "Dev" / "brollvideos"
+        file_path = broll_videos_dir / filename
+        if file_path.exists() and file_path.suffix.lower() == '.mp4':
+            return send_file(file_path, mimetype='video/mp4')
+        return jsonify({"error": "B-roll video not found"}), 404
+    except Exception as e:
+        logger.error(f"Error serving B-roll video: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -3374,20 +3957,35 @@ def create_resolve_with_videos():
 
         # Sort videos by chapter/part order
         def parse_chapter_info(filename):
-            """Extract chapter and part numbers from filename like heygen_Ch1p1_abc123.mp4"""
+            """Extract chapter and part numbers from filename.
+
+            Matches any filename containing Ch{N} and p{N}, e.g.:
+              Ch1p1, Ch1p2, Ch6p1         (no separator)
+              Ch1-Pt1, Ch1-pt1, Ch2-p2   (dash + optional 't')
+              Ch1_Pt1                     (underscore)
+              Title-Ch3p2.mp4            (title prefix, any separator)
+              heygen_...-Ch1p1_id.mp4    (heygen with ID suffix)
+              Ch1p1b                     (b-duplicate sorts after Ch1p1)
+
+            'AI with Roz' intro files always sort first.
+            Unknown files sort to the end.
+            """
             import re
-            # Try to match pattern: Ch{X}p{Y} where X is chapter, Y is part
-            match = re.search(r'Ch(\d+)p(\d+)', filename, re.IGNORECASE)
+            name = filename
+
+            # Intro/exit clips always go first
+            if re.search(r'AI\s+with\s+Roz', name, re.IGNORECASE):
+                return (0, 0)
+
+            # Universal pattern: Ch{X} then optional separator then p/P then optional t/T then {Y} then optional b
+            # Covers: Ch1p1, Ch1-p1, Ch1-Pt1, Ch1-pt1, Ch1_Pt1, Ch6p1, Ch2-p2, etc.
+            match = re.search(r'Ch(\d+)[-_]?[Pp][Tt]?(\d+)(b?)', name)
             if match:
                 chapter_num = int(match.group(1))
                 part_num = int(match.group(2))
-                return (chapter_num, part_num)
-
-            # Try to match just Chapter_{X}
-            match = re.search(r'Chapter[_\s]+(\d+)', filename, re.IGNORECASE)
-            if match:
-                chapter_num = int(match.group(1))
-                return (chapter_num, 0)
+                # 'b' duplicate sorts just after the main part
+                part_frac = 0.5 if match.group(3).lower() == 'b' else 0
+                return (chapter_num, part_num + part_frac)
 
             # Default to end of list
             return (999, 999)

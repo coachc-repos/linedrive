@@ -30,12 +30,28 @@ class BRollImageGenerator:
                 "or pass api_key parameter."
             )
 
-        # Output directory
-        self.output_dir = Path.home() / "Dev" / "brollimages"
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Output directory is finalized per script title at generation time.
+        self.output_dir = Path.home() / "Dev" / "Videos" / "Edited" / "Final" / "untitled_script" / "brollimages"
 
         # Lazy loading for google.genai
         self._client = None
+
+    def _build_output_dir(self, script_title: str) -> Path:
+        """Build output path: ~/Dev/Videos/Edited/Final/{script_title}/brollimages"""
+        safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '', (script_title or '').strip())
+        safe_title = re.sub(r'\s+', '_', safe_title).strip('_.')
+        if not safe_title:
+            safe_title = "untitled_script"
+
+        return (
+            Path.home()
+            / "Dev"
+            / "Videos"
+            / "Edited"
+            / "Final"
+            / safe_title
+            / "brollimages"
+        )
 
     def _get_client(self):
         """Get or create the Google GenAI client"""
@@ -239,6 +255,9 @@ Generate an image showing: {search_term} with these specific details: {descripti
         Returns:
             Dict with success status, images list, and output directory
         """
+        self.output_dir = self._build_output_dir(script_title)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
         print(f"\n🎬 B-ROLL IMAGE GENERATION")
         print("=" * 60)
         print(f"📋 Script: {script_title}")
