@@ -1248,7 +1248,7 @@ INDIVIDUAL CHAPTER REVISION REQUEST:
 Please review and provide a revised version of this chapter ONLY.
 
 Chapter {i} of {len(chapters)} - Target audience: {audience}, Tone: {tone}
-{f"**THIS IS THE FINAL CHAPTER** - It MUST include both a Visual Cue AND a 'Summary' section at the end." if i == len(chapters) else ""}
+{('**THIS IS THE FINAL CHAPTER** - It MUST include both a Visual Cue AND a ' + chr(39) + 'Summary' + chr(39) + ' section at the end.') if i == len(chapters) else ''}
 
 ORIGINAL CHAPTER:
 {chapter_script}
@@ -1259,12 +1259,12 @@ INSTRUCTIONS:
    - Heading: Chapter {i} - [Chapter Title]
    - Visual Cue: [Describe what visual should be shown] (REQUIRED - do not skip!)
    - **Host:** [Complete dialogue]
-   {f"- Summary: [2-3 paragraph conclusion wrapping up entire series]" if i == len(chapters) else ""}
+   {'- Summary: [2-3 paragraph conclusion wrapping up entire series]' if i == len(chapters) else ''}
 3. Use ONLY ONE "**Host:**" label per chapter - remove any duplicate Host: labels
 4. Include EXACTLY ONE Visual Cue that describes what should be shown visually
 5. Ensure content is suitable for {audience} with {tone} tone
 6. CONTINUOUS VIDEO FORMAT: Remove "Welcome back", "Thanks for joining", etc.
-7. For Chapter {i}: {"Assume audience knows basic concepts - avoid oversimplified explanations" if i == 1 else "Use smooth transition from previous chapter"}
+7. For Chapter {i}: {'Assume audience knows basic concepts - avoid oversimplified explanations' if i == 1 else 'Use smooth transition from previous chapter'}
 8. Visual cues should describe actual visuals, not just be chapter titles
 
 CRITICAL - YOUR RESPONSE MUST CONTAIN ONLY:
@@ -1276,8 +1276,7 @@ Visual Cue: [Specific visual description]
 
 **Host:**
 [Complete dialogue]
-{f"""
-Summary: [Conclusive wrap-up of entire series]""" if i == len(chapters) else ""}
+{(chr(10) + 'Summary: [Conclusive wrap-up of entire series]') if i == len(chapters) else ''}
 
 DO NOT INCLUDE:
 - "=== REVIEW FEEDBACK ===" sections
@@ -1389,9 +1388,12 @@ Just provide the clean, production-ready revised chapter content above.
                         print(
                             f"   ⚠️ Chapter {i} revision failed, using original")
                         revised_chapters.append(chapter_script)
-                        revision_feedback.append(
-                            f"Chapter {i}: Used original version"
-                        )
+                        fallback_msg = "Used original version (revision failed)"
+                        revision_feedback.append({
+                            'chapter': i,
+                            'feedback': fallback_msg,
+                            'length': len(fallback_msg)
+                        })
 
                         # Brief pause even on failure
                         if i < len(chapters):
@@ -1408,7 +1410,11 @@ Just provide the clean, production-ready revised chapter content above.
                 )
 
                 # Combine all feedback without embedding the revised script
-                all_feedback = "\n".join(revision_feedback)
+                all_feedback = "\n".join(
+                    f"Chapter {item['chapter']}: {item['feedback']}"
+                    if isinstance(item, dict) else str(item)
+                    for item in revision_feedback
+                )
                 script_review = (
                     f"{script_review}\n\n"
                     f"Chapter-by-Chapter Revision Feedback:\n"
@@ -1612,116 +1618,129 @@ Just provide the clean, production-ready revised chapter content above.
 
             # Display and save reviewer feedback summary
             if revision_feedback:
-                print("\n" + "=" * 80)
-                print("📋 REVIEW FEEDBACK SUMMARY")
-                print("=" * 80)
-                print(f"Total chapters reviewed: {len(revision_feedback)}")
+                try:
+                    print("\n" + "=" * 80)
+                    print("📋 REVIEW FEEDBACK SUMMARY")
+                    print("=" * 80)
+                    print(f"Total chapters reviewed: {len(revision_feedback)}")
 
-                # Save full feedback to file
-                import datetime
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                feedback_file = f"reviewer_feedback_{timestamp}.txt"
+                    # Save full feedback to file
+                    import datetime
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    feedback_file = f"reviewer_feedback_{timestamp}.txt"
 
-                with open(feedback_file, 'w') as f:
-                    f.write("=" * 80 + "\n")
-                    f.write("SCRIPT REVIEW FEEDBACK - COMPLETE LOG\n")
-                    f.write("=" * 80 + "\n")
-                    f.write(f"Topic: {script_topic}\n")
-                    f.write(f"Audience: {audience}\n")
-                    f.write(f"Tone: {tone}\n")
-                    f.write(f"Timestamp: {timestamp}\n")
-                    f.write(f"Total Chapters: {len(revision_feedback)}\n\n")
+                    with open(feedback_file, 'w') as f:
+                        f.write("=" * 80 + "\n")
+                        f.write("SCRIPT REVIEW FEEDBACK - COMPLETE LOG\n")
+                        f.write("=" * 80 + "\n")
+                        f.write(f"Topic: {script_topic}\n")
+                        f.write(f"Audience: {audience}\n")
+                        f.write(f"Tone: {tone}\n")
+                        f.write(f"Timestamp: {timestamp}\n")
+                        f.write(f"Total Chapters: {len(revision_feedback)}\n\n")
 
-                    for item in revision_feedback:
-                        chapter_num = item['chapter']
-                        feedback = item['feedback']
-                        length = item['length']
+                        for item in revision_feedback:
+                            if isinstance(item, dict):
+                                chapter_num = item.get('chapter', '?')
+                                feedback = item.get('feedback', '')
+                                length = item.get('length', len(str(feedback)))
+                            else:
+                                chapter_num = '?'
+                                feedback = str(item)
+                                length = len(feedback)
+
+                            f.write("\n" + "=" * 80 + "\n")
+                            f.write(
+                                f"CHAPTER {chapter_num} - REVIEW FEEDBACK ({length} chars)\n")
+                            f.write("=" * 80 + "\n")
+                            f.write(feedback + "\n")
 
                         f.write("\n" + "=" * 80 + "\n")
-                        f.write(
-                            f"CHAPTER {chapter_num} - REVIEW FEEDBACK ({length} chars)\n")
+                        f.write("END OF REVIEW FEEDBACK LOG\n")
                         f.write("=" * 80 + "\n")
-                        f.write(feedback + "\n")
 
-                    f.write("\n" + "=" * 80 + "\n")
-                    f.write("END OF REVIEW FEEDBACK LOG\n")
-                    f.write("=" * 80 + "\n")
-
-                print(f"✅ Full review feedback saved to: {feedback_file}")
-                print("=" * 80)
-                sys.stdout.flush()
+                    print(f"✅ Full review feedback saved to: {feedback_file}")
+                    print("=" * 80)
+                    sys.stdout.flush()
+                except Exception as fb_error:
+                    print(f"⚠️ Failed to write review feedback file: {fb_error}")
+                    print("✅ Continuing - script content is unaffected")
 
             # Generate chapter comparison report (Original vs Revised)
             if chapter_comparisons:
-                print("\n" + "=" * 80)
-                print("📊 GENERATING CHAPTER COMPARISON REPORT")
-                print("=" * 80)
+                try:
+                    print("\n" + "=" * 80)
+                    print("📊 GENERATING CHAPTER COMPARISON REPORT")
+                    print("=" * 80)
 
-                import datetime
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                comparison_file = f"chapter_comparison_{timestamp}.md"
+                    import datetime
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    comparison_file = f"chapter_comparison_{timestamp}.md"
 
-                with open(comparison_file, 'w', encoding='utf-8') as f:
-                    # Header
-                    f.write(f"# Chapter Comparison Report\n\n")
-                    f.write(f"**Topic:** {script_topic}  \n")
-                    f.write(f"**Audience:** {audience}  \n")
-                    f.write(f"**Tone:** {tone}  \n")
-                    f.write(f"**Generated:** {timestamp}  \n")
-                    f.write(
-                        f"**Total Chapters:** {len(chapter_comparisons)}  \n\n")
-                    f.write("---\n\n")
-
-                    # Table of contents
-                    f.write("## Table of Contents\n\n")
-                    for comp in chapter_comparisons:
+                    with open(comparison_file, 'w', encoding='utf-8') as f:
+                        # Header
+                        f.write(f"# Chapter Comparison Report\n\n")
+                        f.write(f"**Topic:** {script_topic}  \n")
+                        f.write(f"**Audience:** {audience}  \n")
+                        f.write(f"**Tone:** {tone}  \n")
+                        f.write(f"**Generated:** {timestamp}  \n")
                         f.write(
-                            f"- [Chapter {comp['chapter_num']}](#chapter-{comp['chapter_num']})\n")
-                    f.write("\n---\n\n")
+                            f"**Total Chapters:** {len(chapter_comparisons)}  \n\n")
+                        f.write("---\n\n")
 
-                    # Each chapter comparison
-                    for comp in chapter_comparisons:
-                        chapter_num = comp['chapter_num']
-                        original = comp['original']
-                        revised = comp['revised']
-                        feedback = comp['feedback']
-
-                        f.write(f"## Chapter {chapter_num}\n\n")
-
-                        # Feedback section
-                        f.write(f"### 📝 Reviewer Feedback\n\n")
-                        f.write(f"```\n{feedback}\n```\n\n")
-
-                        # Comparison section - use code blocks, not tables
-                        f.write("### 📊 Comparison\n\n")
-
-                        f.write("#### 📄 Original Version\n\n")
-                        f.write("```\n")
-                        f.write(original)
-                        f.write("\n```\n\n")
-
-                        f.write("#### ✏️ Revised Version\n\n")
-                        f.write("```\n")
-                        f.write(revised)
-                        f.write("\n```\n\n")
-
+                        # Table of contents
+                        f.write("## Table of Contents\n\n")
+                        for comp in chapter_comparisons:
+                            f.write(
+                                f"- [Chapter {comp['chapter_num']}](#chapter-{comp['chapter_num']})\n")
                         f.write("\n---\n\n")
 
-                    # Summary
-                    f.write(f"## Summary\n\n")
-                    f.write(
-                        f"- **Total Chapters Reviewed:** {len(chapter_comparisons)}\n")
-                    f.write(f"- **Report Generated:** {timestamp}\n")
-                    f.write(
-                        f"- **Bold text** indicates changes made by the reviewer\n\n")
+                        # Each chapter comparison
+                        for comp in chapter_comparisons:
+                            chapter_num = comp['chapter_num']
+                            original = comp['original']
+                            revised = comp['revised']
+                            feedback = comp['feedback']
 
-                print(
-                    f"✅ Chapter comparison report saved to: {comparison_file}")
-                print("=" * 80)
-                sys.stdout.flush()
+                            f.write(f"## Chapter {chapter_num}\n\n")
 
-                # Store the file path for UI to display
-                comparison_file_path = comparison_file
+                            # Feedback section
+                            f.write(f"### 📝 Reviewer Feedback\n\n")
+                            f.write(f"```\n{feedback}\n```\n\n")
+
+                            # Comparison section - use code blocks, not tables
+                            f.write("### 📊 Comparison\n\n")
+
+                            f.write("#### 📄 Original Version\n\n")
+                            f.write("```\n")
+                            f.write(original)
+                            f.write("\n```\n\n")
+
+                            f.write("#### ✏️ Revised Version\n\n")
+                            f.write("```\n")
+                            f.write(revised)
+                            f.write("\n```\n\n")
+
+                            f.write("\n---\n\n")
+
+                        # Summary
+                        f.write(f"## Summary\n\n")
+                        f.write(
+                            f"- **Total Chapters Reviewed:** {len(chapter_comparisons)}\n")
+                        f.write(f"- **Report Generated:** {timestamp}\n")
+                        f.write(
+                            f"- **Bold text** indicates changes made by the reviewer\n\n")
+
+                    print(
+                        f"✅ Chapter comparison report saved to: {comparison_file}")
+                    print("=" * 80)
+                    sys.stdout.flush()
+
+                    # Store the file path for UI to display
+                    comparison_file_path = comparison_file
+                except Exception as comp_error:
+                    print(f"⚠️ Failed to write chapter comparison report: {comp_error}")
+                    print("✅ Continuing - script content is unaffected")
 
             return {
                 "success": True,

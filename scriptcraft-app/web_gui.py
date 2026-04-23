@@ -486,6 +486,16 @@ class ConsoleCapture:
         elif "All" in message and "chapters revised individually" in message:
             return 80
 
+        # Step 3 failure/skip paths (previously invisible to the UI)
+        elif "Script Review failed or timed out" in message:
+            return 58
+        elif "FALLBACK: Skipping review" in message:
+            return 58
+        elif "revision failed, using original" in message:
+            return 70
+        elif "Script Review skipped" in message:
+            return 80
+
         # Review feedback summary
         elif "📋 REVIEW FEEDBACK SUMMARY" in message:
             return 80
@@ -2255,7 +2265,32 @@ def test_progress_stream(session_id):
 @app.route("/")
 def index():
     """Serve the main ScriptCraft web interface"""
-    return render_template("index.html", version=VERSION)
+    # Resolve API keys with precedence: saved settings file > environment variable > empty.
+    # Environment variables can be set in ~/.zshrc (or any shell rc) for one-time setup:
+    #   export XAI_API_KEY="xai-..."
+    #   export HEYGEN_API_KEY="sk_V2_..."
+    #   export HEYGEN_VOICE_ID="..."
+    #   export GOOGLE_API_KEY="..."
+    settings = {}
+    try:
+        settings = _load_scriptcraft_settings()
+    except Exception as e:
+        logger.warning(f"⚠️ Could not preload settings for template: {e}")
+
+    def _resolve(setting_key: str, env_var: str) -> str:
+        return (
+            (settings.get(setting_key) or "").strip()
+            or os.getenv(env_var, "").strip()
+        )
+
+    return render_template(
+        "index.html",
+        version=VERSION,
+        saved_grok_api_key=_resolve("grok_api_key", "XAI_API_KEY"),
+        saved_heygen_api_key=_resolve("heygen_api_key", "HEYGEN_API_KEY"),
+        saved_heygen_voice_id=_resolve("heygen_voice_id", "HEYGEN_VOICE_ID"),
+        saved_google_api_key=_resolve("google_api_key", "GOOGLE_API_KEY"),
+    )
 
 
 @app.route("/test")

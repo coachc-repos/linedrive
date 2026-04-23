@@ -848,7 +848,7 @@
         <div style="background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; margin: 8px 0 10px 0;">
             <div style="display: block; width: 100%;">
                 <label for="grokApiKey" style="display: block; margin-bottom: 6px; font-size: 0.85em; color: #94a3b8; font-weight: 600;">🤖 Grok API Key</label>
-                <input type="text" id="grokApiKey" value="" placeholder="xai-..." style="display: block; width: 100%; padding: 8px 10px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.9em; box-sizing: border-box;">
+                <input type="text" id="grokApiKey" value="{{ saved_grok_api_key or '' }}" placeholder="xai-..." autocomplete="off" style="display: block; width: 100%; padding: 8px 10px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.9em; box-sizing: border-box;">
                 <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap;">
                     <button onclick="saveGrokApiKey()" style="padding: 6px 12px; background: linear-gradient(135deg, #0ea5e9, #0284c7); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; font-weight: 600; white-space: nowrap;">💾 Save Grok Key</button>
                     <span style="font-size: 0.75em; color: #64748b;">Saved in this browser</span>
@@ -912,13 +912,13 @@
                     <button onclick="viewHeyGenTemplateDetails()" style="padding: 4px 10px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🔍 Details</button>
                     <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
                     <label for="heygenVoiceId" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;">Voice ID:</label>
-                    <input type="text" id="heygenVoiceId" value="" placeholder="Select a voice..." style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
+                    <input type="text" id="heygenVoiceId" value="{{ saved_heygen_voice_id or '' }}" placeholder="Select a voice..." autocomplete="off" style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
                     <button onclick="browseHeyGenVoices()" style="padding: 4px 10px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🎤 Voices</button>
                     <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
                     <button onclick="openTestVideoDialog()" style="padding: 4px 10px; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🧪 Test Generate</button>
                     <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
                     <label for="heygenApiKey" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;">API Key:</label>
-                    <input type="text" id="heygenApiKey" value="sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC" style="width: 350px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
+                    <input type="text" id="heygenApiKey" value="{{ saved_heygen_api_key or 'sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC' }}" autocomplete="off" style="width: 350px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
                 </div>
             </div>
 
@@ -3825,9 +3825,10 @@ Thank you for watching!`;
 
             // Load persisted Grok API key
             try {
-                const savedGrokKey = localStorage.getItem('scriptcraft_grok_api_key') || '';
                 const grokKeyInput = document.getElementById('grokApiKey');
-                if (grokKeyInput && savedGrokKey) {
+                const savedGrokKey = localStorage.getItem('scriptcraft_grok_api_key') || '';
+                // Only fall back to localStorage if server didn't already populate the field
+                if (grokKeyInput && !grokKeyInput.value && savedGrokKey) {
                     grokKeyInput.value = savedGrokKey;
                 }
             } catch (err) {

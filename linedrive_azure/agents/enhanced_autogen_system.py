@@ -1248,7 +1248,7 @@ INDIVIDUAL CHAPTER REVISION REQUEST:
 Please review and provide a revised version of this chapter ONLY.
 
 Chapter {i} of {len(chapters)} - Target audience: {audience}, Tone: {tone}
-{f"**THIS IS THE FINAL CHAPTER** - It MUST include both a Visual Cue AND a 'Summary' section at the end." if i == len(chapters) else ""}
+{('**THIS IS THE FINAL CHAPTER** - It MUST include both a Visual Cue AND a ' + chr(39) + 'Summary' + chr(39) + ' section at the end.') if i == len(chapters) else ''}
 
 ORIGINAL CHAPTER:
 {chapter_script}
@@ -1259,12 +1259,12 @@ INSTRUCTIONS:
    - Heading: Chapter {i} - [Chapter Title]
    - Visual Cue: [Describe what visual should be shown] (REQUIRED - do not skip!)
    - **Host:** [Complete dialogue]
-   {f"- Summary: [2-3 paragraph conclusion wrapping up entire series]" if i == len(chapters) else ""}
+   {'- Summary: [2-3 paragraph conclusion wrapping up entire series]' if i == len(chapters) else ''}
 3. Use ONLY ONE "**Host:**" label per chapter - remove any duplicate Host: labels
 4. Include EXACTLY ONE Visual Cue that describes what should be shown visually
 5. Ensure content is suitable for {audience} with {tone} tone
 6. CONTINUOUS VIDEO FORMAT: Remove "Welcome back", "Thanks for joining", etc.
-7. For Chapter {i}: {"Assume audience knows basic concepts - avoid oversimplified explanations" if i == 1 else "Use smooth transition from previous chapter"}
+7. For Chapter {i}: {'Assume audience knows basic concepts - avoid oversimplified explanations' if i == 1 else 'Use smooth transition from previous chapter'}
 8. Visual cues should describe actual visuals, not just be chapter titles
 
 CRITICAL - YOUR RESPONSE MUST CONTAIN ONLY:
@@ -1276,8 +1276,7 @@ Visual Cue: [Specific visual description]
 
 **Host:**
 [Complete dialogue]
-{f"""
-Summary: [Conclusive wrap-up of entire series]""" if i == len(chapters) else ""}
+{(chr(10) + 'Summary: [Conclusive wrap-up of entire series]') if i == len(chapters) else ''}
 
 DO NOT INCLUDE:
 - "=== REVIEW FEEDBACK ===" sections

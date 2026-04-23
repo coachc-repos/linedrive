@@ -298,20 +298,32 @@ Generate an image showing: {search_term} with these specific details: {descripti
 
         # Generate 3 variations for each entry
         images = []
+        failure_count = 0
+        first_error: Optional[str] = None
         for idx, entry in enumerate(entries, 1):
             # Generate 3 variations of this entry
             for variation in range(1, 4):
-                result = self.generate_broll_image(
-                    search_term=entry['search_term'],
-                    description=entry['description'],
-                    scene_context=entry['scene_context'],
-                    index=idx,
-                    script_title=script_title,
-                    variation=variation
-                )
+                try:
+                    result = self.generate_broll_image(
+                        search_term=entry['search_term'],
+                        description=entry['description'],
+                        scene_context=entry['scene_context'],
+                        index=idx,
+                        script_title=script_title,
+                        variation=variation
+                    )
+                except Exception as gen_err:
+                    result = None
+                    failure_count += 1
+                    if first_error is None:
+                        first_error = f"{type(gen_err).__name__}: {gen_err}"
+                    print(f"❌ Exception generating image: {first_error}")
 
                 if result and result.get('success'):
                     images.append(result)
+                elif result is None:
+                    # generate_broll_image returned None (logged its own error)
+                    failure_count += 1
 
                 # Small delay between generations to avoid rate limiting
                 import time
@@ -320,16 +332,21 @@ Generate an image showing: {search_term} with these specific details: {descripti
         print(f"\n{'=' * 60}")
         print(
             f"✅ Generated {len(images)} B-roll images ({len(entries)} entries × 3 variations)")
+        if failure_count:
+            print(f"⚠️ {failure_count} generation attempts failed"
+                  + (f" (first error: {first_error})" if first_error else ""))
         print(f"📁 Saved to: {self.output_dir}")
         print(f"{'=' * 60}")
 
         return {
-            'success': True,
+            'success': len(images) > 0,
             'images': images,
             'output_dir': str(self.output_dir),
             'total_generated': len(images),
             'total_entries': len(entries),
-            'variations_per_entry': 3
+            'variations_per_entry': 3,
+            'failure_count': failure_count,
+            'error': None if len(images) > 0 else (first_error or 'All image generations failed (no successful images)')
         }
 
 
