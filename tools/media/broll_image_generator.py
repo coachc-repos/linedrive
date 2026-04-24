@@ -8,6 +8,7 @@ Uses Google's Gemini 2.0 Flash image generation model for high-quality, contextu
 
 import os
 import re
+import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -242,7 +243,10 @@ Generate an image showing: {search_term} with these specific details: {descripti
         self,
         broll_table: str,
         script_title: str,
-        max_images: int = None
+        max_images: int = None,
+        progress_callback=None,
+        cancel_check=None,
+        output_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """
         Generate images for all B-roll entries
@@ -251,11 +255,18 @@ Generate an image showing: {search_term} with these specific details: {descripti
             broll_table: Markdown table text with B-roll entries
             script_title: Script title for context
             max_images: Optional limit on number of images to generate
+            progress_callback: Optional callable(message: str, current: int, total: int, image_info: Optional[dict])
+                invoked before AND after each variation. ``image_info`` is the result dict on success, or None.
+            cancel_check: Optional callable() -> bool. When it returns True the loop bails out and
+                whatever has been generated so far is returned with ``cancelled=True``.
 
         Returns:
             Dict with success status, images list, and output directory
         """
-        self.output_dir = self._build_output_dir(script_title)
+        if output_dir is not None:
+            self.output_dir = Path(output_dir).expanduser()
+        else:
+            self.output_dir = self._build_output_dir(script_title)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"\n🎬 B-ROLL IMAGE GENERATION")
@@ -300,12 +311,33 @@ Generate an image showing: {search_term} with these specific details: {descripti
         images = []
         failure_count = 0
         first_error: Optional[str] = None
+        cancelled = False
+        completed = 0
+
+        def _emit(message: str, image_info=None):
+            print(message)
+            if progress_callback is not None:
+                try:
+                    progress_callback(message, completed, total_images, image_info)
+                except Exception as cb_err:
+                    print(f"⚠️ progress_callback raised: {cb_err}")
+
         for idx, entry in enumerate(entries, 1):
+            if cancel_check and cancel_check():
+                cancelled = True
+                break
             # Generate 3 variations of this entry
             for variation in range(1, 4):
+                if cancel_check and cancel_check():
+                    cancelled = True
+                    break
+
+                term = entry['search_term']
+                _emit(f"🎨 [{completed + 1}/{total_images}] Generating image — '{term}' (variation {variation}/3)…")
+                t0 = time.time()
                 try:
                     result = self.generate_broll_image(
-                        search_term=entry['search_term'],
+                        search_term=term,
                         description=entry['description'],
                         scene_context=entry['scene_context'],
                         index=idx,
@@ -315,23 +347,40 @@ Generate an image showing: {search_term} with these specific details: {descripti
                 except Exception as gen_err:
                     result = None
                     failure_count += 1
+                    err_msg = f"{type(gen_err).__name__}: {gen_err}"
                     if first_error is None:
-                        first_error = f"{type(gen_err).__name__}: {gen_err}"
-                    print(f"❌ Exception generating image: {first_error}")
+                        first_error = err_msg
+                    _emit(f"❌ [{completed + 1}/{total_images}] Exception generating '{term}' v{variation}: {err_msg}")
+
+                elapsed = time.time() - t0
 
                 if result and result.get('success'):
                     images.append(result)
+                    completed += 1
+                    _emit(
+                        f"✅ [{completed}/{total_images}] Saved '{term}' v{variation} → {result.get('filename', '?')} ({elapsed:.1f}s)",
+                        image_info=result,
+                    )
                 elif result is None:
                     # generate_broll_image returned None (logged its own error)
                     failure_count += 1
+                    completed += 1
+                    _emit(f"⚠️ [{completed}/{total_images}] No image returned for '{term}' v{variation} ({elapsed:.1f}s)")
+                else:
+                    completed += 1
 
                 # Small delay between generations to avoid rate limiting
-                import time
                 time.sleep(1)
+            if cancelled:
+                break
 
         print(f"\n{'=' * 60}")
-        print(
-            f"✅ Generated {len(images)} B-roll images ({len(entries)} entries × 3 variations)")
+        if cancelled:
+            print(
+                f"🛑 Generation cancelled — kept {len(images)} of {total_images} target images")
+        else:
+            print(
+                f"✅ Generated {len(images)} B-roll images ({len(entries)} entries × 3 variations)")
         if failure_count:
             print(f"⚠️ {failure_count} generation attempts failed"
                   + (f" (first error: {first_error})" if first_error else ""))
@@ -340,6 +389,7 @@ Generate an image showing: {search_term} with these specific details: {descripti
 
         return {
             'success': len(images) > 0,
+            'cancelled': cancelled,
             'images': images,
             'output_dir': str(self.output_dir),
             'total_generated': len(images),

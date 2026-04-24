@@ -1,0 +1,115 @@
+TITLE: B-Roll Markers
+FCM: NON-DROP FRAME
+
+001  001      V     C        00:00:05:00 00:00:05:00 00:00:05:00 00:00:05:00
+* FROM CLIP NAME: AI avatar presenter
+* COMMENT: Female digital twin or hologram-style presenter on a clean b
+
+002  001      V     C        00:00:18:00 00:00:18:00 00:00:18:00 00:00:18:00
+* FROM CLIP NAME: home office at night
+* COMMENT: Cozy home office with desk lamp, laptop, and subtle family/l
+
+003  001      V     C        00:00:50:00 00:00:50:00 00:00:50:00 00:00:50:00
+* FROM CLIP NAME: blank presentation deck
+* COMMENT: Laptop screen showing an empty slide deck or blank title sli
+
+004  001      V     C        00:01:15:00 00:01:15:00 00:01:15:00 00:01:15:00
+* FROM CLIP NAME: overwhelmed at laptop
+* COMMENT: Person staring at a blank screen, frozen or frustrated, hand
+
+005  001      V     C        00:01:45:00 00:01:45:00 00:01:45:00 00:01:45:00
+* FROM CLIP NAME: typing prompt
+* COMMENT: Over-the-shoulder shot of hands typing a prompt into an AI c
+
+006  001      V     C        00:02:25:00 00:02:25:00 00:02:25:00 00:02:25:00
+* FROM CLIP NAME: first draft outline
+* COMMENT: Rough presentation structure appearing on screen, simple hea
+
+007  001      V     C        00:03:00:00 00:03:00:00 00:03:00:00 00:03:00:00
+* FROM CLIP NAME: coffee shop presentation
+* COMMENT: Coffee shop storefront, café interior, or presentation about
+
+008  001      V     C        00:03:40:00 00:03:40:00 00:03:40:00 00:03:40:00
+* FROM CLIP NAME: vague AI prompt
+* COMMENT: AI chat interface showing a short, generic prompt like “make
+
+009  001      V     C        00:04:05:00 00:04:05:00 00:04:05:00 00:04:05:00
+* FROM CLIP NAME: strong prompt details
+* COMMENT: Prompt interface with audience, goal, length, and tone highl
+
+010  001      V     C        00:04:30:00 00:04:30:00 00:04:30:00 00:04:30:00
+* FROM CLIP NAME: business pitch meeting
+* COMMENT: Different presentation settings: classroom, boardroom, team 
+
+011  001      V     C        00:05:05:00 00:05:05:00 00:05:05:00 00:05:05:00
+* FROM CLIP NAME: prompt formula graphic
+* COMMENT: Simple infographic or flowchart with labels like topic, audi
+
+012  001      V     C        00:05:35:00 00:05:35:00 00:05:35:00 00:05:35:00
+* FROM CLIP NAME: presentation outline
+* COMMENT: Clean bullet list or outline building line by line on a lapt
+
+013  001      V     C        00:06:00:00 00:06:00:00 00:06:00:00 00:06:00:00
+* FROM CLIP NAME: house blueprint
+* COMMENT: Floor plan, blueprint, or architecture sketch representing s
+
+014  001      V     C        00:06:25:00 00:06:25:00 00:06:25:00 00:06:25:00
+* FROM CLIP NAME: six slide outline
+* COMMENT: Screen with a clean 6-slide outline: title, intro, 3 main po
+
+015  001      V     C        00:06:50:00 00:06:50:00 00:06:50:00 00:06:50:00
+* FROM CLIP NAME: merge slides
+* COMMENT: Editing view showing slides being shortened or combined, rem
+
+016  001      V     C        00:07:55:00 00:07:55:00 00:07:55:00 00:07:55:00
+* FROM CLIP NAME: wall of text
+* COMMENT: Dense paragraph on a slide transforming into short bullets o
+
+017  001      V     C        00:08:20:00 00:08:20:00 00:08:20:00 00:08:20:00
+* FROM CLIP NAME: signpost graphic
+* COMMENT: Simple signpost, arrows, or one-idea-per-slide visual metaph
+
+018  001      V     C        00:08:50:00 00:08:50:00 00:08:50:00 00:08:50:00
+* FROM CLIP NAME: coffee shop storefront
+* COMMENT: Exterior of a small café, neighborhood street view, or peopl
+
+019  001      V     C        00:09:15:00 00:09:15:00 00:09:15:00 00:09:15:00
+* FROM CLIP NAME: human rewrite text
+* COMMENT: AI rewriting stiff formal text into a more natural, casual v
+
+020  001      V     C        00:09:40:00 00:09:40:00 00:09:40:00 00:09:40:00
+* FROM CLIP NAME: read slide aloud
+* COMMENT: Presenter reading from slides out loud, checking tone and fl
+
+021  001      V     C        00:10:05:00 00:10:05:00 00:10:05:00 00:10:05:00
+* FROM CLIP NAME: split-screen workspace
+* COMMENT: Laptop with presentation deck on one side and AI chat or not
+
+022  001      V     C        00:10:35:00 00:10:35:00 00:10:35:00 00:10:35:00
+* FROM CLIP NAME: stock image search
+* COMMENT: Searching for café photos, icons, or visuals in a stock foot
+
+023  001      V     C        00:11:05:00 00:11:05:00 00:11:05:00 00:11:05:00
+* FROM CLIP NAME: data visualization chart
+* COMMENT: Bar chart, diagram, or simple infographic showing presentati
+
+024  001      V     C        00:11:35:00 00:11:35:00 00:11:35:00 00:11:35:00
+* FROM CLIP NAME: speaker notes panel
+* COMMENT: Screen with speaker notes being written, teleprompter-style 
+
+025  001      V     C        00:12:40:00 00:12:40:00 00:12:40:00 00:12:40:00
+* FROM CLIP NAME: fact check screen
+* COMMENT: Laptop screen checking numbers, dates, company names, or cla
+
+026  001      V     C        00:13:15:00 00:13:15:00 00:13:15:00 00:13:15:00
+* FROM CLIP NAME: font and color editing
+* COMMENT: Editing slide design: font menu, color palette, alignment, s
+
+027  001      V     C        00:13:50:00 00:13:50:00 00:13:50:00 00:13:50:00
+* FROM CLIP NAME: before after slide
+* COMMENT: Side-by-side rough AI slide versus polished final version.
+
+028  001      V     C        00:14:40:00 00:14:40:00 00:14:40:00 00:14:40:00
+* FROM CLIP NAME: checklist end card
+* COMMENT: Simple checklist filling in, calm closing montage, or minima
+

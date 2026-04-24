@@ -1,0 +1,123 @@
+TITLE: B-Roll Markers
+FCM: NON-DROP FRAME
+
+001  001      V     C        00:00:03:00 00:00:03:00 00:00:03:00 00:00:03:00
+* FROM CLIP NAME: split screen parent
+* COMMENT: [HIGH] Split-screen before/after shot: frazzled parent at a 
+
+002  001      V     C        00:00:18:00 00:00:18:00 00:00:18:00 00:00:18:00
+* FROM CLIP NAME: child worksheet
+* COMMENT: [HIGH] Child sitting at a table doing a worksheet with penci
+
+003  001      V     C        00:00:34:00 00:00:34:00 00:00:34:00 00:00:34:00
+* FROM CLIP NAME: typing prompt
+* COMMENT: [HIGH] Close-up of hands typing a prompt into a chat box and
+
+004  001      V     C        00:00:50:00 00:00:50:00 00:00:50:00 00:00:50:00
+* FROM CLIP NAME: generated lesson
+* COMMENT: [HIGH] AI-generated lesson plan appearing on screen with tit
+
+005  001      V     C        00:01:10:00 00:01:10:00 00:01:10:00 00:01:10:00
+* FROM CLIP NAME: google docs interface
+* COMMENT: [MED] Editable document window with toolbar, headings, and l
+
+006  001      V     C        00:01:25:00 00:01:25:00 00:01:25:00 00:01:25:00
+* FROM CLIP NAME: canva template
+* COMMENT: [MED] Canva-style worksheet template with text boxes, image 
+
+007  001      V     C        00:01:40:00 00:01:40:00 00:01:40:00 00:01:40:00
+* FROM CLIP NAME: chat ai window
+* COMMENT: [HIGH] Generic AI chat interface with prompt on one side and
+
+008  001      V     C        00:02:00:00 00:02:00:00 00:02:00:00 00:02:00:00
+* FROM CLIP NAME: lesson planning laptop
+* COMMENT: [HIGH] Parent planning a lesson on a laptop at a kitchen or 
+
+009  001      V     C        00:02:25:00 00:02:25:00 00:02:25:00 00:02:25:00
+* FROM CLIP NAME: homeschool trend chart
+* COMMENT: [MED] Line graph or infographic showing homeschooling growth
+
+010  001      V     C        00:02:45:00 00:02:45:00 00:02:45:00 00:02:45:00
+* FROM CLIP NAME: prompt text
+* COMMENT: [HIGH] Full-screen prompt text animating in, showing a lesso
+
+011  001      V     C        00:03:10:00 00:03:10:00 00:03:10:00 00:03:10:00
+* FROM CLIP NAME: editing text
+* COMMENT: [MED] Screen showing text being simplified or revised; bulle
+
+012  001      V     C        00:03:30:00 00:03:30:00 00:03:30:00 00:03:30:00
+* FROM CLIP NAME: google drive folder
+* COMMENT: [MED] File folder or cloud drive view labeled lesson plans; 
+
+013  001      V     C        00:03:55:00 00:03:55:00 00:03:55:00 00:03:55:00
+* FROM CLIP NAME: canva export pdf
+* COMMENT: [MED] Export/download dialog or “Download PDF” button being 
+
+014  001      V     C        00:06:40:00 00:06:40:00 00:06:40:00 00:06:40:00
+* FROM CLIP NAME: index cards
+* COMMENT: [HIGH] Three colorful index cards on a kitchen table flippin
+
+015  001      V     C        00:07:10:00 00:07:10:00 00:07:10:00 00:07:10:00
+* FROM CLIP NAME: three lesson versions
+* COMMENT: [HIGH] Side-by-side lesson summaries or split-screen lesson 
+
+016  001      V     C        00:07:45:00 00:07:45:00 00:07:45:00 00:07:45:00
+* FROM CLIP NAME: hint ladder
+* COMMENT: [HIGH] Animated graphic of Hint 1, Hint 2, Hint 3 revealing 
+
+017  001      V     C        00:08:05:00 00:08:05:00 00:08:05:00 00:08:05:00
+* FROM CLIP NAME: graphic organizer
+* COMMENT: [MED] Picture-supported worksheet or organizer with boxes, i
+
+018  001      V     C        00:08:25:00 00:08:25:00 00:08:25:00 00:08:25:00
+* FROM CLIP NAME: coins activity
+* COMMENT: [MED] Hands-on learning scene with coins or string on a tabl
+
+019  001      V     C        00:09:55:00 00:09:55:00 00:09:55:00 00:09:55:00
+* FROM CLIP NAME: chat window paste
+* COMMENT: [HIGH] Hand pasting AI output into a template on a laptop; o
+
+020  001      V     C        00:10:30:00 00:10:30:00 00:10:30:00 00:10:30:00
+* FROM CLIP NAME: canva timelapse
+* COMMENT: [HIGH] Speeded-up screen-record timelapse of Canva editing: 
+
+021  001      V     C        00:11:10:00 00:11:10:00 00:11:10:00 00:11:10:00
+* FROM CLIP NAME: printed worksheet
+* COMMENT: [MED] Framed shot of a finished black-and-white worksheet on
+
+022  001      V     C        00:12:55:00 00:12:55:00 00:12:55:00 00:12:55:00
+* FROM CLIP NAME: google forms quiz
+* COMMENT: [HIGH] Over-the-shoulder view of a quiz being built in Googl
+
+023  001      V     C        00:13:25:00 00:13:25:00 00:13:25:00 00:13:25:00
+* FROM CLIP NAME: google sheets scores
+* COMMENT: [HIGH] Spreadsheet filling with quiz results and color-coded
+
+024  001      V     C        00:16:25:00 00:16:25:00 00:16:25:00 00:16:25:00
+* FROM CLIP NAME: digital calendar
+* COMMENT: [HIGH] Weekly calendar filling in with blocks and events; sm
+
+025  001      V     C        00:17:00:00 00:17:00:00 00:17:00:00 00:17:00:00
+* FROM CLIP NAME: supply list printable
+* COMMENT: [MED] Clean printable checklist grouped by store sections, q
+
+026  001      V     C        00:17:30:00 00:17:30:00 00:17:30:00 00:17:30:00
+* FROM CLIP NAME: attendance log sheet
+* COMMENT: [MED] Attendance and lesson log template in spreadsheet or p
+
+027  001      V     C        00:19:10:00 00:19:10:00 00:19:10:00 00:19:10:00
+* FROM CLIP NAME: family laptop
+* COMMENT: [HIGH] Cozy family shot: parent and kids gathered around a l
+
+028  001      V     C        00:19:45:00 00:19:45:00 00:19:45:00 00:19:45:00
+* FROM CLIP NAME: starter checklist
+* COMMENT: [HIGH] Three-item checklist animating in with checkmarks app
+
+029  001      V     C        00:20:30:00 00:20:30:00 00:20:30:00 00:20:30:00
+* FROM CLIP NAME: expert quote card
+* COMMENT: [LOW] Clean motion-graphic quote card with author name, titl
+
+030  001      V     C        00:20:50:00 00:20:50:00 00:20:50:00 00:20:50:00
+* FROM CLIP NAME: stats infographic
+* COMMENT: [HIGH] Animated stat graphic with bold percentages, bar char
+

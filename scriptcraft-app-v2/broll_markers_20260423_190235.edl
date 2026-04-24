@@ -1,0 +1,127 @@
+TITLE: B-Roll Markers
+FCM: NON-DROP FRAME
+
+001  001      V     C        00:00:03:00 00:00:03:00 00:00:03:00 00:00:03:00
+* FROM CLIP NAME: frazzled parent, cluttered kitchen table
+* COMMENT: **[HIGH] 2–3 sec** medium shot of a stressed parent at a mes
+
+002  001      V     C        00:00:12:00 00:00:12:00 00:00:12:00 00:00:12:00
+* FROM CLIP NAME: stressed expression, tired eyes
+* COMMENT: **[HIGH] 2 sec** close-up of a worried face, temple rub, exh
+
+003  001      V     C        00:00:26:00 00:00:26:00 00:00:26:00 00:00:26:00
+* FROM CLIP NAME: calm parent laptop, tidy desk
+* COMMENT: **[HIGH] 2–3 sec** calm parent smiling at a laptop on a clea
+
+004  001      V     C        00:00:48:00 00:00:48:00 00:00:48:00 00:00:48:00
+* FROM CLIP NAME: child worksheet, engaged child
+* COMMENT: **[MED] 2–3 sec** over-the-shoulder shot of a child focused 
+
+005  001      V     C        00:01:10:00 00:01:10:00 00:01:10:00 00:01:10:00
+* FROM CLIP NAME: typing prompt, enter key
+* COMMENT: **[HIGH] 2 sec** close-up of hands typing a prompt into a ch
+
+006  001      V     C        00:01:30:00 00:01:30:00 00:01:30:00 00:01:30:00
+* FROM CLIP NAME: generated lesson, lesson outline
+* COMMENT: **[HIGH] 3 sec** screen capture of an auto-generated lesson 
+
+007  001      V     C        00:01:45:00 00:01:45:00 00:01:45:00 00:01:45:00
+* FROM CLIP NAME: google docs interface, editable document
+* COMMENT: **[MED] 3 sec** document editor view with lesson text pasted
+
+008  001      V     C        00:01:55:00 00:01:55:00 00:01:55:00 00:01:55:00
+* FROM CLIP NAME: canva template, worksheet layout
+* COMMENT: **[MED] 3 sec** worksheet template with text blocks and imag
+
+009  001      V     C        00:02:20:00 00:02:20:00 00:02:20:00 00:02:20:00
+* FROM CLIP NAME: ai sidekick graphic, workflow diagram
+* COMMENT: **[LOW/MED] 3–4 sec** simple motion graphic of AI assisting 
+
+010  001      V     C        00:02:40:00 00:02:40:00 00:02:40:00 00:02:40:00
+* FROM CLIP NAME: homeschool trend chart, pandemic homeschooling
+* COMMENT: **[MED] 3–4 sec** animated chart showing a rise in homeschoo
+
+011  001      V     C        00:03:10:00 00:03:10:00 00:03:10:00 00:03:10:00
+* FROM CLIP NAME: prompt text, science lesson prompt
+* COMMENT: **[HIGH] 4 sec** full-screen text animation of the example p
+
+012  001      V     C        00:03:40:00 00:03:40:00 00:03:40:00 00:03:40:00
+* FROM CLIP NAME: editing text, simplify language
+* COMMENT: **[HIGH] 3 sec** screen recording of refining AI output: “si
+
+013  001      V     C        00:04:20:00 00:04:20:00 00:04:20:00 00:04:20:00
+* FROM CLIP NAME: google drive folder, lesson plans
+* COMMENT: **[MED] 3 sec** folder view showing a “Lesson Plans” folder 
+
+014  001      V     C        00:04:50:00 00:04:50:00 00:04:50:00 00:04:50:00
+* FROM CLIP NAME: canva export pdf, download button
+* COMMENT: **[HIGH] 2–3 sec** export dialog with “Download PDF” button 
+
+015  001      V     C        00:05:10:00 00:05:10:00 00:05:10:00 00:05:10:00
+* FROM CLIP NAME: common core, standards mapping
+* COMMENT: **[MED] 3 sec** clean standards graphic or document note hig
+
+016  001      V     C        00:05:30:00 00:05:30:00 00:05:30:00 00:05:30:00
+* FROM CLIP NAME: index cards, level cards
+* COMMENT: **[HIGH] 3 sec** kitchen-table shot with index cards labeled
+
+017  001      V     C        00:06:40:00 00:06:40:00 00:06:40:00 00:06:40:00
+* FROM CLIP NAME: three lesson versions, remedial standard enrichment
+* COMMENT: **[HIGH] 3–4 sec** side-by-side lesson blocks showing three 
+
+018  001      V     C        00:07:20:00 00:07:20:00 00:07:20:00 00:07:20:00
+* FROM CLIP NAME: hint ladder, scaffold graphic
+* COMMENT: **[MED] 3 sec** step graphic showing Hint 1 → Hint 2 → Hint 
+
+019  001      V     C        00:07:50:00 00:07:50:00 00:07:50:00 00:07:50:00
+* FROM CLIP NAME: coins activity, string activity
+* COMMENT: **[MED] 3 sec** hands-on table shot with coins, string, or h
+
+020  001      V     C        00:08:10:00 00:08:10:00 00:08:10:00 00:08:10:00
+* FROM CLIP NAME: chat paste, worksheet prompt
+* COMMENT: **[MED] 3 sec** copy-and-paste action into an AI chat window
+
+021  001      V     C        00:09:55:00 00:09:55:00 00:09:55:00 00:09:55:00
+* FROM CLIP NAME: canva timelapse, font swap
+* COMMENT: **[HIGH] 5–7 sec** sped-up screen recording of swapping imag
+
+022  001      V     C        00:10:30:00 00:10:30:00 00:10:30:00 00:10:30:00
+* FROM CLIP NAME: printed worksheet, video timeline
+* COMMENT: **[HIGH] 3 sec** framed tabletop shot of a printed worksheet
+
+023  001      V     C        00:11:10:00 00:11:10:00 00:11:10:00 00:11:10:00
+* FROM CLIP NAME: google forms quiz, quiz mode
+* COMMENT: **[HIGH] 3 sec** over-the-shoulder shot of a Google Forms qu
+
+024  001      V     C        00:12:55:00 00:12:55:00 00:12:55:00 00:12:55:00
+* FROM CLIP NAME: google sheets scores, conditional formatting
+* COMMENT: **[HIGH] 3 sec** spreadsheet filling with scores, with red/y
+
+025  001      V     C        00:13:25:00 00:13:25:00 00:13:25:00 00:13:25:00
+* FROM CLIP NAME: progress summary, feedback paragraph
+* COMMENT: **[MED] 3 sec** polished paragraph report appearing beside s
+
+026  001      V     C        00:13:55:00 00:13:55:00 00:13:55:00 00:13:55:00
+* FROM CLIP NAME: digital calendar, weekly schedule
+* COMMENT: **[HIGH] 3–4 sec** animated weekly calendar filling with hom
+
+027  001      V     C        00:16:25:00 00:16:25:00 00:16:25:00 00:16:25:00
+* FROM CLIP NAME: supply list printable, store sections
+* COMMENT: **[MED] 3 sec** printable checklist grouped by groceries, cr
+
+028  001      V     C        00:17:00:00 00:17:00:00 00:17:00:00 00:17:00:00
+* FROM CLIP NAME: attendance log sheet, lesson log
+* COMMENT: **[MED] 3 sec** spreadsheet or printable log with date, subj
+
+029  001      V     C        00:17:30:00 00:17:30:00 00:17:30:00 00:17:30:00
+* FROM CLIP NAME: family laptop, kids pointing screen
+* COMMENT: **[HIGH] 3–4 sec** cozy wide shot of parent and two kids gat
+
+030  001      V     C        00:19:10:00 00:19:10:00 00:19:10:00 00:19:10:00
+* FROM CLIP NAME: starter checklist, three step checklist
+* COMMENT: **[HIGH] 3 sec** on-screen checklist with 3 starter actions:
+
+031  001      V     C        00:20:50:00 00:20:50:00 00:20:50:00 00:20:50:00
+* FROM CLIP NAME: stats infographic, adoption chart
+* COMMENT: **[MED/HIGH] 3–4 sec** clean infographic with bold percentag
+

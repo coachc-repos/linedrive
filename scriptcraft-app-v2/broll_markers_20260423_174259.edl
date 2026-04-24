@@ -1,0 +1,123 @@
+TITLE: B-Roll Markers
+FCM: NON-DROP FRAME
+
+001  001      V     C        00:00:08:00 00:00:08:00 00:00:08:00 00:00:08:00
+* FROM CLIP NAME: smart reply, smartphone messaging
+* COMMENT: **[HIGH
+
+002  001      V     C        00:00:22:00 00:00:22:00 00:00:22:00 00:00:22:00
+* FROM CLIP NAME: hand tapping phone
+* COMMENT: **[HIGH
+
+003  001      V     C        00:00:40:00 00:00:40:00 00:00:40:00 00:00:40:00
+* FROM CLIP NAME: robot silhouette, sci-fi robot
+* COMMENT: **[MED
+
+004  001      V     C        00:01:10:00 00:01:10:00 00:01:10:00 00:01:10:00
+* FROM CLIP NAME: gmail interface, photo edit, streaming app
+* COMMENT: **[HIGH
+
+005  001      V     C        00:02:25:00 00:02:25:00 00:02:25:00 00:02:25:00
+* FROM CLIP NAME: prediction graph, data flow
+* COMMENT: **[MED
+
+006  001      V     C        00:04:18:00 00:04:18:00 00:04:18:00 00:04:18:00
+* FROM CLIP NAME: split-screen thermostat, smart thermostat
+* COMMENT: **[HIGH
+
+007  001      V     C        00:04:45:00 00:04:45:00 00:04:45:00 00:04:45:00
+* FROM CLIP NAME: if-then code, thermostat dial
+* COMMENT: **[MED
+
+008  001      V     C        00:05:20:00 00:05:20:00 00:05:20:00 00:05:20:00
+* FROM CLIP NAME: spam folder, not spam button
+* COMMENT: **[HIGH
+
+009  001      V     C        00:06:05:00 00:06:05:00 00:06:05:00 00:06:05:00
+* FROM CLIP NAME: overfitting, repeated email
+* COMMENT: **[MED
+
+010  001      V     C        00:08:05:00 00:08:05:00 00:08:05:00 00:08:05:00
+* FROM CLIP NAME: face recognition, low-light pet
+* COMMENT: **[HIGH
+
+011  001      V     C        00:08:40:00 00:08:40:00 00:08:40:00 00:08:40:00
+* FROM CLIP NAME: Spotify recommendations, recommendation carousel
+* COMMENT: **[HIGH
+
+012  001      V     C        00:09:15:00 00:09:15:00 00:09:15:00 00:09:15:00
+* FROM CLIP NAME: Siri waveform, smart speaker
+* COMMENT: **[HIGH
+
+013  001      V     C        00:10:05:00 00:10:05:00 00:10:05:00 00:10:05:00
+* FROM CLIP NAME: image generator, background remover
+* COMMENT: **[MED
+
+014  001      V     C        00:10:40:00 00:10:40:00 00:10:40:00 00:10:40:00
+* FROM CLIP NAME: robot vacuum, smart lock
+* COMMENT: **[MED
+
+015  001      V     C        00:11:35:00 00:11:35:00 00:11:35:00 00:11:35:00
+* FROM CLIP NAME: classroom sticky notes, spam board
+* COMMENT: **[HIGH
+
+016  001      V     C        00:12:20:00 00:12:20:00 00:12:20:00 00:12:20:00
+* FROM CLIP NAME: kid sorting socks
+* COMMENT: **[LOW
+
+017  001      V     C        00:13:00:00 00:13:00:00 00:13:00:00 00:13:00:00
+* FROM CLIP NAME: server rack, cloud training
+* COMMENT: **[MED
+
+018  001      V     C        00:13:45:00 00:13:45:00 00:13:45:00 00:13:45:00
+* FROM CLIP NAME: before-after photo, auto-enhance
+* COMMENT: **[HIGH
+
+019  001      V     C        00:14:25:00 00:14:25:00 00:14:25:00 00:14:25:00
+* FROM CLIP NAME: training loop, thumbs up, bias
+* COMMENT: **[HIGH
+
+020  001      V     C        00:16:05:00 00:16:05:00 00:16:05:00 00:16:05:00
+* FROM CLIP NAME: ChatGPT interface, prompt typing
+* COMMENT: **[HIGH
+
+021  001      V     C        00:16:50:00 00:16:50:00 00:16:50:00 00:16:50:00
+* FROM CLIP NAME: photo swipe, before after
+* COMMENT: **[MED
+
+022  001      V     C        00:17:30:00 00:17:30:00 00:17:30:00 00:17:30:00
+* FROM CLIP NAME: thermostat app, daily graph
+* COMMENT: **[MED
+
+023  001      V     C        00:18:10:00 00:18:10:00 00:18:10:00 00:18:10:00
+* FROM CLIP NAME: misheard command, voice assistant
+* COMMENT: **[HIGH
+
+024  001      V     C        00:20:05:00 00:20:05:00 00:20:05:00 00:20:05:00
+* FROM CLIP NAME: four-panel AI montage
+* COMMENT: **[HIGH
+
+025  001      V     C        00:21:00:00 00:21:00:00 00:21:00:00 00:21:00:00
+* FROM CLIP NAME: speech recognition, intent mapping
+* COMMENT: **[MED
+
+026  001      V     C        00:22:05:00 00:22:05:00 00:22:05:00 00:22:05:00
+* FROM CLIP NAME: on-device chip, cloud servers, privacy settings
+* COMMENT: **[MED
+
+027  001      V     C        00:23:35:00 00:23:35:00 00:23:35:00 00:23:35:00
+* FROM CLIP NAME: AI job headline, cashier scanning, content writer
+* COMMENT: **[HIGH
+
+028  001      V     C        00:25:35:00 00:25:35:00 00:25:35:00 00:25:35:00
+* FROM CLIP NAME: hallucination citation, human judgment
+* COMMENT: **[HIGH
+
+029  001      V     C        00:28:05:00 00:28:05:00 00:28:05:00 00:28:05:00
+* FROM CLIP NAME: save chat history, cloud backup, recordings
+* COMMENT: **[HIGH
+
+030  001      V     C        00:29:20:00 00:29:20:00 00:29:20:00 00:29:20:00
+* FROM CLIP NAME: privacy toggle, final checklist, smiling person
+* COMMENT: **[MED
+

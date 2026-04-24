@@ -766,11 +766,48 @@
             <div class="header-logo">
                 <div class="logo-icon">🎬</div>
                 <div class="logo-text">
-                    <h1>ScriptCraft</h1>
-                    <p>AI-Powered Script Creation & Polishing</p>
+                    <h1>ScriptCraft <span style="font-size:0.55em;background:#6366f1;color:#fff;padding:2px 8px;border-radius:6px;vertical-align:middle;">v2 Dual-Mode</span></h1>
+                    <p>AI-Powered Script Creation &amp; Polishing</p>
                 </div>
             </div>
+            <div id="agentModeToggle" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 14px;background:#1f2937;border-radius:10px;color:#e5e7eb;font-size:14px;">
+                <span style="font-weight:600;">Agent API:</span>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                    <input type="radio" name="agentMode" value="v1" {% if (agent_mode or 'v1') == 'v1' %}checked{% endif %} onchange="setAgentMode('v1')">
+                    <span>v1 Classic</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                    <input type="radio" name="agentMode" value="v2" {% if (agent_mode or 'v1') == 'v2' %}checked{% endif %} onchange="setAgentMode('v2')">
+                    <span>v2 Foundry (new)</span>
+                </label>
+                <span id="agentModeStatus" style="margin-left:6px;padding:2px 8px;border-radius:6px;background:#374151;font-size:12px;">{{ (agent_mode or 'v1')|upper }}</span>
+            </div>
         </div>
+        <script>
+        async function setAgentMode(mode) {
+            const status = document.getElementById('agentModeStatus');
+            const prev = status.textContent;
+            status.textContent = '...';
+            try {
+                const r = await fetch('/api/agent-mode', {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({mode: mode})
+                });
+                const j = await r.json();
+                if (j.success) {
+                    status.textContent = (j.mode || mode).toUpperCase();
+                    status.style.background = mode === 'v2' ? '#7c3aed' : '#374151';
+                } else {
+                    status.textContent = prev;
+                    alert('Failed to switch mode: ' + (j.error || 'unknown'));
+                }
+            } catch (e) {
+                status.textContent = prev;
+                alert('Error switching mode: ' + e);
+            }
+        }
+        </script>
         
         <!-- Icon Toolbar -->
         <div class="toolbar">
@@ -816,13 +853,9 @@
             
             <div class="toolbar-section">
                 <span class="toolbar-label">Tools</span>
-                <button class="toolbar-btn" onclick="loadSample()" title="Load Sample">
-                    <span class="toolbar-icon">📄</span>
-                    <span class="toolbar-text">Sample</span>
-                </button>
-                <button class="toolbar-btn" onclick="document.getElementById('fileInput').click()" title="Load File">
+                <button class="toolbar-btn" onclick="document.getElementById('fileInput').click()" title="Load script from .md, .txt, or .docx">
                     <span class="toolbar-icon">📁</span>
-                    <span class="toolbar-text">Load</span>
+                    <span class="toolbar-text">Load Script</span>
                 </button>
                 <button class="toolbar-btn" onclick="testThumbnails()" id="testThumbBtn" title="Test Thumbnails">
                     <span class="toolbar-icon">🖼️</span>
@@ -831,6 +864,18 @@
                 <button class="toolbar-btn" onclick="openGrokTestVideoDialog()" title="Test Grok Video API">
                     <span class="toolbar-icon">🤖</span>
                     <span class="toolbar-text">Grok Test</span>
+                </button>
+                <button class="toolbar-btn" onclick="openApiKeysModal()" title="Manage API Keys">
+                    <span class="toolbar-icon">🔑</span>
+                    <span class="toolbar-text">API Keys</span>
+                </button>
+                <button class="toolbar-btn" onclick="openOutputDirModal()" id="outputDirBtn" title="Set base output directory for saving all generated artifacts">
+                    <span class="toolbar-icon">📁</span>
+                    <span class="toolbar-text">Output Dir</span>
+                </button>
+                <button class="toolbar-btn" onclick="saveAllOutputs()" id="saveAllOutputsBtn" title="Save current results (script, images, thumbnails, videos, EDL, curls) to the configured Output Directory" style="display:none;">
+                    <span class="toolbar-icon">💾</span>
+                    <span class="toolbar-text">Save All</span>
                 </button>
                 <!-- Test Compare button hidden - not needed for production
                 <button class="toolbar-btn" onclick="testComparisons()" id="testCompBtn" title="Test Comparisons Tab">
@@ -845,13 +890,118 @@
             </div>
         </div>
 
-        <div style="background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; margin: 8px 0 10px 0;">
-            <div style="display: block; width: 100%;">
-                <label for="grokApiKey" style="display: block; margin-bottom: 6px; font-size: 0.85em; color: #94a3b8; font-weight: 600;">🤖 Grok API Key</label>
-                <input type="text" id="grokApiKey" value="{{ saved_grok_api_key or '' }}" placeholder="xai-..." autocomplete="off" style="display: block; width: 100%; padding: 8px 10px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.9em; box-sizing: border-box;">
-                <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap;">
-                    <button onclick="saveGrokApiKey()" style="padding: 6px 12px; background: linear-gradient(135deg, #0ea5e9, #0284c7); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; font-weight: 600; white-space: nowrap;">💾 Save Grok Key</button>
-                    <span style="font-size: 0.75em; color: #64748b;">Saved in this browser</span>
+        <!-- Current Output Directory display strip -->
+        <div id="outputDirStrip" style="display:none; padding:6px 14px; margin:6px 0 4px 0; background:#0f172a; border:1px solid #334155; border-radius:6px; color:#94a3b8; font-size:0.78em;">
+            <span style="color:#64748b;">📁 Output Dir:</span>
+            <span id="outputDirDisplay" style="color:#e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">(not set)</span>
+            <button onclick="openOutputDirModal()" style="margin-left:8px; padding:2px 8px; background:#1e293b; border:1px solid #334155; color:#94a3b8; border-radius:4px; cursor:pointer; font-size:0.85em;">Change</button>
+        </div>
+
+        <div style="display:none;">
+            <!-- Hidden inputs preserve the existing JS contract; values are managed via the API Keys modal (🔑 toolbar button). -->
+            <input type="hidden" id="grokApiKey" value="{{ saved_grok_api_key or '' }}">
+            <input type="hidden" id="googleApiKey" value="{{ saved_google_api_key or '' }}">
+        </div>
+
+        <!-- API Keys Modal -->
+        <div id="apiKeysModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:10050; align-items:center; justify-content:center;">
+            <div style="background:#0f172a; border:1px solid #334155; border-radius:10px; width:min(560px, 92vw); padding:22px 24px; box-shadow:0 20px 50px rgba(0,0,0,0.6);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                    <h2 style="margin:0; color:#e2e8f0; font-size:1.15em;">🔑 API Keys</h2>
+                    <button onclick="closeApiKeysModal()" style="background:transparent; color:#94a3b8; border:none; font-size:1.4em; cursor:pointer;">×</button>
+                </div>
+                <p style="margin:0 0 16px 0; color:#94a3b8; font-size:0.85em;">
+                    Stored in <code style="color:#60a5fa;">~/.scriptcraft/web_gui_settings.json</code>. Saved keys override matching environment variables.
+                </p>
+
+                <div style="margin-bottom:14px;">
+                    <label for="modalGoogleApiKey" style="display:block; margin-bottom:6px; font-size:0.85em; color:#94a3b8; font-weight:600;">🟢 Google API Key <span style="color:#64748b; font-weight:normal;">(GOOGLE_API_KEY — Gemini / thumbnails / B-roll images)</span></label>
+                    <input type="password" id="modalGoogleApiKey" autocomplete="off" placeholder="AIza..." style="display:block; width:100%; padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:4px; color:#e2e8f0; font-family:monospace; font-size:0.9em; box-sizing:border-box;">
+                </div>
+
+                <div style="margin-bottom:14px;">
+                    <label for="modalHeygenApiKey" style="display:block; margin-bottom:6px; font-size:0.85em; color:#94a3b8; font-weight:600;">🎬 HeyGen API Key <span style="color:#64748b; font-weight:normal;">(HEYGEN_API_KEY)</span></label>
+                    <input type="password" id="modalHeygenApiKey" autocomplete="off" placeholder="sk_V2_..." style="display:block; width:100%; padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:4px; color:#e2e8f0; font-family:monospace; font-size:0.9em; box-sizing:border-box;">
+                </div>
+
+                <div style="margin-bottom:18px;">
+                    <label for="modalGrokApiKey" style="display:block; margin-bottom:6px; font-size:0.85em; color:#94a3b8; font-weight:600;">🤖 Grok API Key <span style="color:#64748b; font-weight:normal;">(XAI_API_KEY)</span></label>
+                    <input type="password" id="modalGrokApiKey" autocomplete="off" placeholder="xai-..." style="display:block; width:100%; padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:4px; color:#e2e8f0; font-family:monospace; font-size:0.9em; box-sizing:border-box;">
+                </div>
+
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <label style="display:flex; align-items:center; gap:6px; color:#94a3b8; font-size:0.8em; cursor:pointer;">
+                        <input type="checkbox" id="apiKeysShowToggle" onchange="toggleApiKeysVisible(this.checked)">
+                        Show keys
+                    </label>
+                    <div style="display:flex; gap:8px;">
+                        <button onclick="closeApiKeysModal()" style="padding:8px 14px; background:#334155; color:#e2e8f0; border:none; border-radius:4px; cursor:pointer; font-size:0.85em; font-weight:600;">Cancel</button>
+                        <button onclick="saveApiKeysModal()" style="padding:8px 14px; background:linear-gradient(135deg, #0ea5e9, #0284c7); color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.85em; font-weight:600;">💾 Save Keys</button>
+                    </div>
+                </div>
+                <div id="apiKeysModalStatus" style="margin-top:10px; font-size:0.8em; color:#64748b; min-height:1.1em;"></div>
+            </div>
+        </div>
+
+        <!-- Output Directory Modal -->
+        <div id="outputDirModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:10050; align-items:center; justify-content:center;">
+            <div style="background:#0f172a; border:1px solid #334155; border-radius:10px; width:min(620px, 92vw); padding:22px 24px; box-shadow:0 20px 50px rgba(0,0,0,0.6);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                    <h2 style="margin:0; color:#e2e8f0; font-size:1.15em;">📁 Output Directory</h2>
+                    <button onclick="closeOutputDirModal()" style="background:transparent; color:#94a3b8; border:none; font-size:1.4em; cursor:pointer;">×</button>
+                </div>
+                <p style="margin:0 0 12px 0; color:#94a3b8; font-size:0.85em; line-height:1.45;">
+                    Set a base directory for saving all generated artifacts. Click <strong>💾 Save All</strong> after a run, or it auto-saves on completion.
+                    Files are organized into subfolders:
+                </p>
+                <pre style="background:#020617; border:1px solid #1e293b; border-radius:6px; padding:10px; color:#94a3b8; font-size:0.78em; margin:0 0 14px 0; line-height:1.5;">{base}/script/        ← processed/created script (.md)
+{base}/images/        ← B-roll images
+{base}/broll/         ← Grok videos
+{base}/MDL/           ← EDL marker file
+{base}/thumbnails/    ← thumbnails
+{base}/curls/         ← HeyGen curl commands</pre>
+                <label style="display:block; margin-bottom:6px; color:#cbd5e1; font-size:0.85em;">Base directory path</label>
+                <div style="display:flex; gap:6px;">
+                    <input type="text" id="outputDirInput" placeholder="e.g. ~/Dev/ScriptCraftOutput/MyProject" style="flex:1; padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:4px; color:#e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.85em; box-sizing:border-box;">
+                    <button onclick="openDirBrowser()" style="padding:8px 12px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; cursor:pointer; font-size:0.85em; white-space:nowrap;">📂 Browse…</button>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px;">
+                    <button onclick="clearOutputDir()" style="padding:8px 12px; background:transparent; color:#94a3b8; border:1px solid #334155; border-radius:4px; cursor:pointer; font-size:0.8em;">Clear</button>
+                    <div style="display:flex; gap:8px;">
+                        <button onclick="closeOutputDirModal()" style="padding:8px 14px; background:#334155; color:#e2e8f0; border:none; border-radius:4px; cursor:pointer; font-size:0.85em; font-weight:600;">Cancel</button>
+                        <button onclick="saveOutputDir()" style="padding:8px 14px; background:linear-gradient(135deg, #10b981, #059669); color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.85em; font-weight:600;">💾 Save</button>
+                    </div>
+                </div>
+                <div id="outputDirModalStatus" style="margin-top:10px; font-size:0.8em; color:#64748b; min-height:1.1em;"></div>
+            </div>
+        </div>
+
+        <!-- Directory Browser Modal -->
+        <div id="dirBrowserModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:10060; align-items:center; justify-content:center;">
+            <div style="background:#0f172a; border:1px solid #334155; border-radius:10px; width:min(720px, 94vw); max-height:80vh; display:flex; flex-direction:column; padding:18px 20px; box-shadow:0 20px 50px rgba(0,0,0,0.6);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h2 style="margin:0; color:#e2e8f0; font-size:1.1em;">📂 Browse for folder</h2>
+                    <button onclick="closeDirBrowser()" style="background:transparent; color:#94a3b8; border:none; font-size:1.4em; cursor:pointer;">×</button>
+                </div>
+                <div style="display:flex; gap:6px; align-items:center; margin-bottom:8px;">
+                    <button onclick="dirBrowserGo(window._dirBrowserParent)" id="dirBrowserUpBtn" title="Up" style="padding:6px 10px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; cursor:pointer; font-size:0.85em;">⬆️ Up</button>
+                    <button onclick="dirBrowserGo(window._dirBrowserHome)" title="Home" style="padding:6px 10px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; cursor:pointer; font-size:0.85em;">🏠 Home</button>
+                    <input type="text" id="dirBrowserPath" placeholder="/path/to/folder" style="flex:1; padding:6px 10px; background:#1e293b; border:1px solid #334155; border-radius:4px; color:#e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.82em;" onkeydown="if(event.key==='Enter'){dirBrowserGo(this.value);}">
+                    <button onclick="dirBrowserGo(document.getElementById('dirBrowserPath').value)" style="padding:6px 10px; background:#334155; border:none; color:#e2e8f0; border-radius:4px; cursor:pointer; font-size:0.85em;">Go</button>
+                </div>
+                <label style="display:flex; align-items:center; gap:6px; color:#94a3b8; font-size:0.78em; margin-bottom:8px;">
+                    <input type="checkbox" id="dirBrowserShowHidden" onchange="dirBrowserGo(window._dirBrowserCurrent)"> Show hidden folders
+                </label>
+                <div id="dirBrowserList" style="flex:1; overflow-y:auto; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:6px; min-height:240px;">
+                    <div style="color:#64748b; padding:12px; text-align:center; font-size:0.85em;">Loading…</div>
+                </div>
+                <div id="dirBrowserStatus" style="margin-top:8px; font-size:0.78em; color:#64748b; min-height:1.1em;"></div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; gap:8px;">
+                    <button onclick="dirBrowserNewFolder()" style="padding:8px 12px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; cursor:pointer; font-size:0.82em;">➕ New Folder…</button>
+                    <div style="display:flex; gap:8px;">
+                        <button onclick="closeDirBrowser()" style="padding:8px 14px; background:#334155; color:#e2e8f0; border:none; border-radius:4px; cursor:pointer; font-size:0.85em; font-weight:600;">Cancel</button>
+                        <button onclick="dirBrowserSelect()" style="padding:8px 14px; background:linear-gradient(135deg, #10b981, #059669); color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.85em; font-weight:600;">✅ Select This Folder</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -917,8 +1067,8 @@
                     <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
                     <button onclick="openTestVideoDialog()" style="padding: 4px 10px; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🧪 Test Generate</button>
                     <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
-                    <label for="heygenApiKey" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;">API Key:</label>
-                    <input type="text" id="heygenApiKey" value="{{ saved_heygen_api_key or 'sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC' }}" autocomplete="off" style="width: 350px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
+                    <button onclick="openApiKeysModal()" style="padding: 4px 10px; background: linear-gradient(135deg, #6366f1, #4f46e5); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;" title="Manage Google / HeyGen / Grok API keys">🔑 API Keys…</button>
+                    <input type="hidden" id="heygenApiKey" value="{{ saved_heygen_api_key or 'sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC' }}">
                 </div>
             </div>
 
@@ -1007,12 +1157,20 @@
             </div>
             
             <!-- Hidden file input -->
-            <input type="file" id="fileInput" accept=".md,.txt,.markdown" style="display: none;" onchange="loadFile(event)">
+            <input type="file" id="fileInput" accept=".md,.txt,.markdown,.docx,.doc" style="display: none;" onchange="loadFile(event)">
             
             <div id="progress" class="progress">
                 <div class="progress-header">
                     <div class="spinner"></div>
                     <p id="progressText">🔄 Processing...</p>
+                    <button id="stopBrollImagesBtn" onclick="stopBrollImageGeneration()" title="Stop B-roll image generation and keep what's been generated so far"
+                            style="display:none; margin-left:auto; padding:6px 12px; background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:0.85em;">
+                        🛑 Stop B-roll Images
+                    </button>
+                    <button id="stopGrokVideosBtn" onclick="stopGrokVideoGeneration()" title="Stop Grok video generation and keep what's been saved so far"
+                            style="display:none; margin-left:8px; padding:6px 12px; background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:0.85em;">
+                        🛑 Stop Grok Videos
+                    </button>
                 </div>
                 <div id="progressLog" class="progress-log">
                     <!-- Progress messages will be appended here -->
@@ -1130,6 +1288,132 @@ Time management content here...`;
         function clearProgressLog() {
             const progressLog = document.getElementById('progressLog');
             progressLog.innerHTML = '';
+        }
+
+        // Stop in-flight B-roll image generation. The backend will keep whatever images it has produced so far.
+        async function stopBrollImageGeneration() {
+            const sid = window.currentProcessingSessionId;
+            if (!sid) {
+                addProgressMessage('⚠️ No active processing session to stop.', 'error');
+                return;
+            }
+            const btn = document.getElementById('stopBrollImagesBtn');
+            if (btn) { btn.disabled = true; btn.textContent = '🛑 Stopping…'; }
+            try {
+                const resp = await fetch(`/api/cancel-broll-images/${encodeURIComponent(sid)}`, { method: 'POST' });
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok && data.success) {
+                    addProgressMessage('🛑 Stop requested — finishing the current image then keeping partial results…', 'info');
+                } else {
+                    addProgressMessage('❌ Could not request stop: ' + (data.error || resp.status), 'error');
+                    if (btn) { btn.disabled = false; btn.textContent = '🛑 Stop B-roll Images'; }
+                }
+            } catch (err) {
+                addProgressMessage('❌ Stop request failed: ' + err.message, 'error');
+                if (btn) { btn.disabled = false; btn.textContent = '🛑 Stop B-roll Images'; }
+            }
+        }
+
+        // Stop in-flight Grok video generation. Already-saved videos are kept.
+        async function stopGrokVideoGeneration() {
+            const sid = window.currentGrokSessionId;
+            if (!sid) {
+                addProgressMessage('⚠️ No active Grok session to stop.', 'error');
+                return;
+            }
+            const btn = document.getElementById('stopGrokVideosBtn');
+            if (btn) { btn.disabled = true; btn.textContent = '🛑 Stopping…'; }
+            try {
+                const resp = await fetch(`/api/grok/cancel/${encodeURIComponent(sid)}`, { method: 'POST' });
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok && data.success) {
+                    addProgressMessage('🛑 Stop requested — finishing the current video then keeping saved results…', 'info');
+                } else {
+                    addProgressMessage('❌ Could not request stop: ' + (data.error || resp.status), 'error');
+                    if (btn) { btn.disabled = false; btn.textContent = '🛑 Stop Grok Videos'; }
+                }
+            } catch (err) {
+                addProgressMessage('❌ Stop request failed: ' + err.message, 'error');
+                if (btn) { btn.disabled = false; btn.textContent = '🛑 Stop Grok Videos'; }
+            }
+        }
+
+        // Stream Grok video generation: render each video as it's saved, allow stop, keep partials.
+        function runGrokGenerationWithProgress(selectedRows, grokApiKey, onComplete) {
+            const liveVideos = [];
+            window.currentGrokSessionId = null;
+
+            const stopBtn = document.getElementById('stopGrokVideosBtn');
+            if (stopBtn) { stopBtn.style.display = 'inline-block'; stopBtn.disabled = false; stopBtn.textContent = '🛑 Stop Grok Videos'; }
+
+            const finish = function(cancelled) {
+                if (stopBtn) { stopBtn.style.display = 'none'; stopBtn.disabled = false; stopBtn.textContent = '🛑 Stop Grok Videos'; }
+                window.currentGrokSessionId = null;
+                if (typeof onComplete === 'function') onComplete(liveVideos.slice(), cancelled);
+            };
+
+            fetch('/api/grok/generate-selected', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ selected_rows: selectedRows, api_key: grokApiKey })
+            })
+            .then(r => r.json())
+            .then(start => {
+                if (!start.success) {
+                    addProgressMessage('❌ Grok generation failed to start: ' + (start.error || 'Unknown error'), 'error');
+                    finish(false);
+                    return;
+                }
+                const sid = start.session_id;
+                window.currentGrokSessionId = sid;
+
+                const es = new EventSource(`/api/grok/progress/${encodeURIComponent(sid)}`);
+                es.onmessage = function(ev) {
+                    let payload;
+                    try { payload = JSON.parse(ev.data); } catch (_) { return; }
+
+                    if (payload.message) {
+                        addProgressMessage(payload.message,
+                            payload.type === 'video_failed' ? 'error'
+                            : payload.type === 'video_ready' ? 'success'
+                            : 'info');
+                    }
+                    if (typeof payload.current === 'number' && typeof payload.total === 'number' && payload.total > 0) {
+                        const pct = Math.min(99, 80 + Math.round((payload.current / payload.total) * 19));
+                        updateFooterProgress(pct, `🤖 Grok ${payload.current}/${payload.total}`);
+                    }
+
+                    if (payload.type === 'video_ready' && payload.video) {
+                        liveVideos.push(payload.video);
+                        try { rerenderCurrentResultWithGrokVideos(liveVideos.slice()); } catch (_) {}
+                    } else if (payload.type === 'done') {
+                        es.close();
+                        const cancelled = !!payload.cancelled;
+                        const finalList = Array.isArray(payload.videos) && payload.videos.length >= liveVideos.length
+                            ? payload.videos : liveVideos.slice();
+                        try { rerenderCurrentResultWithGrokVideos(finalList); } catch (_) {}
+                        addProgressMessage(
+                            cancelled
+                                ? `🛑 Grok generation stopped — kept ${payload.generated_count}/${payload.total_requested} videos`
+                                : `✅ Grok videos complete: ${payload.generated_count}/${payload.total_requested} (failed: ${payload.failed_count})`,
+                            cancelled ? 'info' : 'success'
+                        );
+                        if (payload.output_dir) {
+                            addProgressMessage(`📁 Saved to: ${payload.output_dir}`, 'info');
+                        }
+                        finish(cancelled);
+                    }
+                };
+                es.onerror = function() {
+                    es.close();
+                    addProgressMessage('⚠️ Grok progress stream disconnected.', 'error');
+                    finish(false);
+                };
+            })
+            .catch(err => {
+                addProgressMessage('❌ Grok start request failed: ' + err.message, 'error');
+                finish(false);
+            });
         }
         
         // Helper function to preserve debug log after completion
@@ -1266,7 +1550,9 @@ Time management content here...`;
             
             return `
                 <div class="thumbnail-gallery">
-                    <h3>🎨 Generated B-Roll Images (${brollImages.length} images)</h3>
+                    <h3>🎨 Generated B-Roll Images (${brollImages.length} images)
+                        <button onclick="downloadAllBRollImages()" style="margin-left:12px;padding:6px 12px;background:#2563eb;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;" title="Download all B-roll images as a ZIP">⬇️ Download All</button>
+                    </h3>
                     <div class="thumbnail-viewer">
                         <div class="thumbnail-main">
                             <img id="mainBRoll" src="/broll-images/${filename}" alt="${firstImage.search_term}">
@@ -1326,13 +1612,77 @@ Time management content here...`;
                 showBRoll(currentBrollIndex - 1);
             }
         }
+
+        // ---- Download-all helpers (B-roll images & Grok videos) ----
+        async function _downloadMediaZip(payload, fallbackName) {
+            try {
+                const resp = await fetch('/api/download-media-zip', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!resp.ok) {
+                    let msg = `Download failed (${resp.status})`;
+                    try { const j = await resp.json(); if (j && j.error) msg = j.error; } catch (e) {}
+                    alert('❌ ' + msg);
+                    return;
+                }
+                const blob = await resp.blob();
+                let filename = fallbackName;
+                const cd = resp.headers.get('Content-Disposition') || '';
+                const m = cd.match(/filename="?([^"]+)"?/);
+                if (m) filename = m[1];
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } catch (err) {
+                alert('❌ Download error: ' + err.message);
+            }
+        }
+
+        function downloadAllBRollImages() {
+            if (!brollData || brollData.length === 0) {
+                alert('No B-roll images to download.');
+                return;
+            }
+            const images = brollData
+                .map(img => (img && img.filename) ? img.filename.split('/').pop() : null)
+                .filter(Boolean);
+            const title = (window.currentScriptTitle || 'broll').toString();
+            _downloadMediaZip({ title: title, images: images }, 'broll-images.zip');
+        }
+
+        function downloadAllGrokVideos() {
+            const vids = window.grokVideosData || [];
+            if (!vids.length) {
+                alert('No Grok videos to download.');
+                return;
+            }
+            const videos = vids
+                .map(v => (v && v.filename) ? v.filename.split('/').pop() : null)
+                .filter(Boolean);
+            if (!videos.length) {
+                alert('No downloadable video files found (only remote URLs are present).');
+                return;
+            }
+            const title = (window.currentScriptTitle || 'grok').toString();
+            _downloadMediaZip({ title: title, videos: videos }, 'grok-videos.zip');
+        }
         
         // Function to render Grok AI-generated video gallery
         function renderGrokVideosGallery(grokVideos) {
             if (!grokVideos || grokVideos.length === 0) return '';
             
+            window.grokVideosData = grokVideos;
             let html = `<div class="thumbnail-gallery">
-                <h3>🤖 Grok AI Generated Videos (${grokVideos.length} videos)</h3>
+                <h3>🤖 Grok AI Generated Videos (${grokVideos.length} videos)
+                    <button onclick="downloadAllGrokVideos()" style="margin-left:12px;padding:6px 12px;background:#2563eb;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;" title="Download all Grok videos as a ZIP">⬇️ Download All</button>
+                </h3>
                 <p style="color: #94a3b8; font-size: 13px; margin-bottom: 15px;">Videos generated by xAI Grok from your B-Roll scene descriptions</p>
                 <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; margin-top: 10px;">`;
             
@@ -1461,7 +1811,8 @@ Time management content here...`;
                 p.edlFilename,
                 p.curlCommands,
                 p.brollImages,
-                p.grokVideos
+                p.grokVideos,
+                p.brollTable
             );
 
             const resultDiv = document.getElementById('result');
@@ -1740,7 +2091,126 @@ Time management content here...`;
         }
         
         // Function to create tabbed interface
-        function createTabbedInterface(mainScript, demoPackages, thumbnails, chapterComparisons, flowOriginal, flowImproved, flowAnalysis, edlContent, edlFilename, curlCommands, brollImages, grokVideos) {
+        // Build Shutterstock video search links from a B-roll table or main script.
+        // Splits each search-term cell by ' OR ' / commas / slashes and converts to slugs.
+        function buildShutterstockLinks(brollTable, mainScript) {
+            const sources = [];
+            if (brollTable && typeof brollTable === 'string') sources.push(brollTable);
+            if (mainScript && typeof mainScript === 'string') sources.push(mainScript);
+            const terms = [];
+            const seen = new Set();
+
+            const pushTerm = (raw) => {
+                if (!raw) return;
+                let t = String(raw).trim();
+                if (!t) return;
+                // Strip surrounding quotes/punctuation
+                t = t.replace(/^["'\s\-]+|["'\s\-]+$/g, '');
+                if (!t) return;
+                const slug = t.toLowerCase()
+                    .replace(/[^a-z0-9\s\-]/g, '')
+                    .replace(/\s+/g, '-')
+                    .replace(/-+/g, '-')
+                    .replace(/^-|-$/g, '');
+                if (!slug || seen.has(slug)) return;
+                seen.add(slug);
+                terms.push({ display: t, url: `https://www.shutterstock.com/video/search/${encodeURIComponent(slug)}` });
+            };
+
+            // 1) Parse table rows (column 2 = Search Term)
+            sources.forEach((src) => {
+                src.split('\n').forEach((line) => {
+                    const s = line.trim();
+                    if (!s.startsWith('|')) return;
+                    const onlyMarkers = s.replace(/[|\-:\s]/g, '');
+                    if (!onlyMarkers) return;
+                    const cells = s.slice(1, s.endsWith('|') ? -1 : undefined).split('|').map(c => c.trim());
+                    if (cells.length < 2) return;
+                    const headerJoined = cells.join(' ').toLowerCase();
+                    if (headerJoined.includes('timecode') && headerJoined.includes('search')) return;
+                    const cell = cells[1];
+                    if (!cell) return;
+                    cell.split(/\s+OR\s+|,|\/|\u2022/i).forEach(pushTerm);
+                });
+            });
+
+            // 2) Look for explicit "Stock Footage Search String:" lines anywhere
+            sources.forEach((src) => {
+                const re = /Stock\s+Footage\s+Search\s+String\s*:\s*([^\n]+)/gi;
+                let m;
+                while ((m = re.exec(src)) !== null) {
+                    m[1].split(/\s+OR\s+|,|\/|\u2022/i).forEach(pushTerm);
+                }
+            });
+
+            return terms;
+        }
+
+        // Kept for backward compat; the rows are now plain <a target="_blank"> links.
+        function openShutterstockInPane(url) {
+            try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (_) {}
+        }
+
+        function renderShutterstockLinks(links) {
+            let html = '<h3>🎬 Shutterstock Search Links</h3>';
+            html += '<p style="margin-bottom: 12px; color: #94a3b8;">Click a search term to preview the Shutterstock results in the right pane. Some browsers/sites may block embedding — use the open-in-new-tab button if the preview is blank.</p>';
+            if (!links || !links.length) {
+                html += '<p style="color:#94a3b8;">No search terms found in the B-roll table.</p>';
+                return html;
+            }
+
+            html += `
+                <style>
+                    .shutterstock-split { display: grid; grid-template-columns: minmax(260px, 360px) 1fr; gap: 12px; height: 70vh; min-height: 480px; }
+                    .shutterstock-list { overflow-y: auto; border: 1px solid #334155; border-radius: 6px; background: #0f172a; padding: 8px; }
+                    .shutterstock-link-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; margin-bottom: 6px; cursor: pointer; transition: background 0.15s; }
+                    .shutterstock-link-row:hover { background: #334155; }
+                    .shutterstock-link-row.active { background: #1d4ed8; border-color: #60a5fa; }
+                    .shutterstock-link-row .ss-term { color: #e2e8f0; font-weight: 600; }
+                    .shutterstock-link-row .ss-url { color: #93c5fd; font-size: 11px; word-break: break-all; }
+                    .shutterstock-pane { display: flex; flex-direction: column; border: 1px solid #334155; border-radius: 6px; overflow: hidden; background: #020617; }
+                    .shutterstock-pane-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: #1e293b; border-bottom: 1px solid #334155; }
+                    .shutterstock-pane-header .title { color: #e2e8f0; font-weight: 600; }
+                    .shutterstock-pane-header a { color: #60a5fa; text-decoration: none; font-size: 12px; }
+                    .shutterstock-pane-body { flex: 1; position: relative; background: #0f172a; }
+                    .shutterstock-pane-body iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+                    .shutterstock-pane-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #94a3b8; padding: 20px; text-align: center; }
+                </style>
+                <div class="shutterstock-split">
+                    <div class="shutterstock-list">
+            `;
+
+            links.forEach((l) => {
+                const safeDisplay = l.display.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const safeUrlAttr = l.url.replace(/"/g, '&quot;');
+                html += `
+                    <a class="shutterstock-link-row" href="${safeUrlAttr}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">
+                        <span class="ss-term">${safeDisplay}</span>
+                        <span class="ss-url">${l.url}</span>
+                    </a>
+                `;
+            });
+
+            html += `
+                    </div>
+                    <div class="shutterstock-pane">
+                        <div class="shutterstock-pane-header">
+                            <span class="title" id="shutterstockFrameTitle">🔎 Select a search term to preview</span>
+                            <a id="shutterstockOpenExternal" href="#" target="_blank" rel="noopener noreferrer">↗ Open in new tab</a>
+                        </div>
+                        <div class="shutterstock-pane-body">
+                            <div id="shutterstockFramePlaceholder" class="shutterstock-pane-placeholder">
+                                Click a search term on the left to preview Shutterstock results here.
+                            </div>
+                            <iframe id="shutterstockFrame" referrerpolicy="no-referrer" sandbox="allow-same-origin allow-scripts allow-forms allow-popups" style="display:none;"></iframe>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return html;
+        }
+
+        function createTabbedInterface(mainScript, demoPackages, thumbnails, chapterComparisons, flowOriginal, flowImproved, flowAnalysis, edlContent, edlFilename, curlCommands, brollImages, grokVideos, brollTable) {
             let html = '<div class="tab-container">';
             const thumbnailList = Array.isArray(thumbnails)
                 ? thumbnails
@@ -1766,6 +2236,11 @@ Time management content here...`;
             
             if (grokVideos && grokVideos.length > 0) {
                 html += '<button class="tab-button" onclick="switchTab(\'grokVideos\')">🤖 Grok Videos</button>';
+            }
+
+            const shutterstockLinks = buildShutterstockLinks(brollTable, mainScript);
+            if (shutterstockLinks.length > 0) {
+                html += '<button class="tab-button" onclick="switchTab(\'shutterstock\')">🎬 Shutterstock</button>';
             }
             
             if (chapterComparisons && chapterComparisons.length > 0) {
@@ -1826,6 +2301,13 @@ Time management content here...`;
             if (grokVideos && grokVideos.length > 0) {
                 html += '<div id="grokVideosTab" class="tab-content">';
                 html += renderGrokVideosGallery(grokVideos);
+                html += '</div>';
+            }
+
+            // Shutterstock Links Tab
+            if (shutterstockLinks.length > 0) {
+                html += '<div id="shutterstockTab" class="tab-content">';
+                html += renderShutterstockLinks(shutterstockLinks);
                 html += '</div>';
             }
             
@@ -2156,6 +2638,7 @@ Time management content here...`;
                 
                 // Connect to SSE progress stream
                 const sessionId = data.session_id;
+                window.currentProcessingSessionId = sessionId;
                 const eventSource = new EventSource(`/progress/${sessionId}`);
                 
                 eventSource.onmessage = function(event) {
@@ -2169,6 +2652,19 @@ Time management content here...`;
                         if (message.progress !== undefined) {
                             updateFooterProgress(message.progress, msgText);
                         }
+
+                        // Show/hide the "Stop B-roll Images" button based on the current step.
+                        const stopBtn = document.getElementById('stopBrollImagesBtn');
+                        if (stopBtn) {
+                            if (msgText.includes('Generating B-roll images') ||
+                                msgText.includes('Generating image') ||
+                                /\[\d+\/\d+\]/.test(msgText) && (msgText.includes("'") || msgText.includes('Saved'))) {
+                                stopBtn.style.display = 'inline-block';
+                            } else if (msgText.includes('B-roll image generation stopped') ||
+                                       msgText.includes('Generated') && msgText.includes('B-roll images')) {
+                                stopBtn.style.display = 'none';
+                            }
+                        }
                         
                         // Determine message type based on content
                         let msgType = 'info';
@@ -2181,6 +2677,9 @@ Time management content here...`;
                         addProgressMessage(msgText, msgType);
                     } else if (message.status === 'complete') {
                         eventSource.close();
+                        const stopBtn = document.getElementById('stopBrollImagesBtn');
+                        if (stopBtn) stopBtn.style.display = 'none';
+                        window.currentProcessingSessionId = null;
                         const processedScript = message.script || '';
                         const scriptTitle = message.script_title || 'Processed Script';
                         const thumbnails = (message.thumbnails && message.thumbnails.length > 0)
@@ -2235,6 +2734,11 @@ Time management content here...`;
                             window.currentEDLFilename = edlFilename;
                             window.currentCurlCommands = curlCommands;
                             window.currentScriptTitle = scriptTitle;
+                            window.currentBrollImages = brollImages || [];
+                            window.currentGrokVideos = grokVideos || [];
+                            window.currentThumbnails = thumbnails || [];
+                            _maybeShowSaveAllButton();
+                            if (window.currentOutputDir) saveAllOutputs(true);
                             
                             // Create tabbed interface for results with EDL support
                             const tabbedHTML = createTabbedInterface(
@@ -2249,7 +2753,8 @@ Time management content here...`;
                                 edlFilename,  // EDL filename if available
                                 curlCommands,  // Curl commands if generated
                                 brollImages,  // B-roll images if generated
-                                grokVideos  // Grok AI videos if generated
+                                grokVideos,  // Grok AI videos if generated
+                                brollTable   // B-roll table for Shutterstock links
                             );
                             
                             let resultHTML = `
@@ -2271,7 +2776,8 @@ Time management content here...`;
                                 edlFilename: edlFilename,
                                 curlCommands: curlCommands,
                                 brollImages: brollImages,
-                                grokVideos: grokVideos
+                                grokVideos: grokVideos,
+                                brollTable: brollTable
                             };
                             
                             resultDiv.innerHTML = resultHTML;
@@ -2329,35 +2835,9 @@ Time management content here...`;
                                     progressText.textContent = `🤖 Generating ${selectedRows.length} selected Grok videos...`;
                                     updateFooterProgress(99, '🤖 Generating selected videos...');
 
-                                    fetch('/api/grok/generate-selected', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({
-                                            selected_rows: selectedRows,
-                                            api_key: grokApiKey
-                                        })
-                                    })
-                                    .then(r => r.json())
-                                    .then(data => {
-                                        if (!data.success) {
-                                            addProgressMessage('❌ Grok selected generation failed: ' + (data.error || 'Unknown error'), 'error');
-                                            return;
-                                        }
-
-                                        addProgressMessage(`✅ Grok videos generated: ${data.generated_count}/${data.total_requested}`, 'success');
-                                        if (Array.isArray(data.failures) && data.failures.length > 0) {
-                                            addProgressMessage(`⚠️ Grok failures: ${data.failures.length}. Check server logs for details.`, 'error');
-                                        }
-
-                                        rerenderCurrentResultWithGrokVideos(data.videos || []);
+                                    runGrokGenerationWithProgress(selectedRows, grokApiKey, function(_videos, _cancelled) {
                                         addProgressMessage('✅ Script processing completed!', 'success');
                                         updateFooterProgress(100, '✅ Complete!');
-                                        preserveDebugLog();
-                                        progressDiv.style.display = 'none';
-                                    })
-                                    .catch(err => {
-                                        addProgressMessage('❌ Grok selected generation request failed: ' + err.message, 'error');
-                                        updateFooterProgress(100, '✅ Complete (with errors)');
                                         preserveDebugLog();
                                         progressDiv.style.display = 'none';
                                     });
@@ -2570,6 +3050,11 @@ Time management content here...`;
                         window.currentEDLFilename = edlFilename;
                         window.currentCurlCommands = curlCommands;
                         window.currentScriptTitle = scriptTitle;
+                        window.currentBrollImages = brollImages || [];
+                        window.currentGrokVideos = grokVideos || [];
+                        window.currentThumbnails = thumbnails || [];
+                        _maybeShowSaveAllButton();
+                        if (window.currentOutputDir) saveAllOutputs(true);
                         
                         if (needsGrokSelection) {
                             progressText.textContent = '⏸️ Select B-roll rows for Grok generation...';
@@ -2597,7 +3082,8 @@ Time management content here...`;
                                 edlFilename,
                                 curlCommands,
                                 brollImages,
-                                grokVideos  // Grok AI videos if generated
+                                grokVideos,  // Grok AI videos if generated
+                                brollTable   // B-roll table for Shutterstock links
                             );
                             
                             let resultHTML = `
@@ -2618,7 +3104,8 @@ Time management content here...`;
                                 edlFilename: edlFilename,
                                 curlCommands: curlCommands,
                                 brollImages: brollImages,
-                                grokVideos: grokVideos
+                                grokVideos: grokVideos,
+                                brollTable: brollTable
                             };
                             
                             resultDiv.innerHTML = resultHTML;
@@ -2661,35 +3148,9 @@ Time management content here...`;
                                     progressText.textContent = `🤖 Generating ${selectedRows.length} selected Grok videos...`;
                                     updateFooterProgress(99, '🤖 Generating selected videos...');
 
-                                    fetch('/api/grok/generate-selected', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({
-                                            selected_rows: selectedRows,
-                                            api_key: grokApiKey
-                                        })
-                                    })
-                                    .then(r => r.json())
-                                    .then(data => {
-                                        if (!data.success) {
-                                            addProgressMessage('❌ Grok selected generation failed: ' + (data.error || 'Unknown error'), 'error');
-                                            return;
-                                        }
-
-                                        addProgressMessage(`✅ Grok videos generated: ${data.generated_count}/${data.total_requested}`, 'success');
-                                        if (Array.isArray(data.failures) && data.failures.length > 0) {
-                                            addProgressMessage(`⚠️ Grok failures: ${data.failures.length}. Check server logs for details.`, 'error');
-                                        }
-
-                                        rerenderCurrentResultWithGrokVideos(data.videos || []);
+                                    runGrokGenerationWithProgress(selectedRows, grokApiKey, function(_videos, _cancelled) {
                                         addProgressMessage('✅ Script creation completed!', 'success');
                                         updateFooterProgress(100, '✅ Complete!');
-                                        preserveDebugLog();
-                                        progressDiv.style.display = 'none';
-                                    })
-                                    .catch(err => {
-                                        addProgressMessage('❌ Grok selected generation request failed: ' + err.message, 'error');
-                                        updateFooterProgress(100, '✅ Complete (with errors)');
                                         preserveDebugLog();
                                         progressDiv.style.display = 'none';
                                     });
@@ -3706,13 +4167,31 @@ Thank you for watching!`;
         async function loadFile(event) {
             const file = event.target.files[0];
             if (!file) return;
-            
+            const lower = (file.name || '').toLowerCase();
+            const isWord = lower.endsWith('.docx') || lower.endsWith('.doc');
+
             try {
-                const text = await file.text();
+                let text;
+                if (isWord) {
+                    // Word docs need server-side extraction (python-docx).
+                    const fd = new FormData();
+                    fd.append('file', file);
+                    const resp = await fetch('/api/extract-docx', { method: 'POST', body: fd });
+                    const data = await resp.json();
+                    if (!resp.ok || !data.success) {
+                        throw new Error(data.error || ('Server error ' + resp.status));
+                    }
+                    text = data.text || '';
+                } else {
+                    text = await file.text();
+                }
                 document.getElementById('scriptInput').value = text;
-                alert('File loaded successfully!');
+                alert('✅ Loaded ' + file.name + ' (' + text.length.toLocaleString() + ' chars)');
             } catch (error) {
-                alert('Error loading file: ' + error.message);
+                alert('❌ Error loading file: ' + error.message);
+            } finally {
+                // Allow re-selecting the same file later.
+                event.target.value = '';
             }
         }
 
@@ -3892,6 +4371,306 @@ Thank you for watching!`;
                 }
             });
         }
+
+        // ---- API Keys modal (Google / HeyGen / Grok) ----
+        function openApiKeysModal() {
+            const modal = document.getElementById('apiKeysModal');
+            if (!modal) return;
+            const status = document.getElementById('apiKeysModalStatus');
+            status.textContent = 'Loading…';
+            status.style.color = '#64748b';
+            // Reset visibility toggle
+            const toggle = document.getElementById('apiKeysShowToggle');
+            if (toggle) toggle.checked = false;
+            toggleApiKeysVisible(false);
+            // Pre-fill from hidden inputs as a quick default
+            document.getElementById('modalGoogleApiKey').value = (document.getElementById('googleApiKey')?.value || '').trim();
+            document.getElementById('modalHeygenApiKey').value = (document.getElementById('heygenApiKey')?.value || '').trim();
+            document.getElementById('modalGrokApiKey').value   = (document.getElementById('grokApiKey')?.value   || '').trim();
+            modal.style.display = 'flex';
+            // Then refresh from server (authoritative)
+            fetch('/api/keys')
+                .then(r => r.json())
+                .then(data => {
+                    if (data && data.success && data.keys) {
+                        document.getElementById('modalGoogleApiKey').value = data.keys.google_api_key || '';
+                        document.getElementById('modalHeygenApiKey').value = data.keys.heygen_api_key || '';
+                        document.getElementById('modalGrokApiKey').value   = data.keys.grok_api_key   || '';
+                        status.textContent = 'Loaded current values.';
+                    } else {
+                        status.textContent = (data && data.error) || 'Loaded local values only.';
+                    }
+                })
+                .catch(err => { status.textContent = 'Could not reach server: ' + err.message; });
+        }
+
+        function closeApiKeysModal() {
+            const modal = document.getElementById('apiKeysModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function toggleApiKeysVisible(show) {
+            const t = show ? 'text' : 'password';
+            ['modalGoogleApiKey', 'modalHeygenApiKey', 'modalGrokApiKey'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.type = t;
+            });
+        }
+
+        async function saveApiKeysModal() {
+            const status = document.getElementById('apiKeysModalStatus');
+            const payload = {
+                google_api_key: document.getElementById('modalGoogleApiKey').value.trim(),
+                heygen_api_key: document.getElementById('modalHeygenApiKey').value.trim(),
+                grok_api_key:   document.getElementById('modalGrokApiKey').value.trim(),
+            };
+            status.textContent = 'Saving…';
+            status.style.color = '#94a3b8';
+            try {
+                const resp = await fetch('/api/keys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    status.style.color = '#f87171';
+                    status.textContent = '❌ ' + (data.error || ('Save failed (' + resp.status + ')'));
+                    return;
+                }
+                // Sync hidden inputs so existing JS sees the new values immediately
+                const g = document.getElementById('googleApiKey'); if (g) g.value = payload.google_api_key;
+                const h = document.getElementById('heygenApiKey'); if (h) h.value = payload.heygen_api_key;
+                const k = document.getElementById('grokApiKey');   if (k) k.value = payload.grok_api_key;
+                status.style.color = '#34d399';
+                status.textContent = '✅ Saved.';
+                setTimeout(closeApiKeysModal, 700);
+            } catch (err) {
+                status.style.color = '#f87171';
+                status.textContent = '❌ ' + err.message;
+            }
+        }
+
+        // ---------- Output Directory ----------
+        async function loadOutputDir() {
+            try {
+                const resp = await fetch('/api/output-dir');
+                const data = await resp.json();
+                const dir = (data && data.success && data.output_dir) ? data.output_dir : '';
+                window.currentOutputDir = dir;
+                const strip = document.getElementById('outputDirStrip');
+                const display = document.getElementById('outputDirDisplay');
+                if (strip) strip.style.display = 'block';
+                if (display) display.textContent = dir || '(not set)';
+            } catch (e) {
+                console.warn('Could not load output dir:', e);
+            }
+        }
+
+        async function openOutputDirModal() {
+            const modal = document.getElementById('outputDirModal');
+            const input = document.getElementById('outputDirInput');
+            const status = document.getElementById('outputDirModalStatus');
+            if (status) status.textContent = '';
+            try {
+                const resp = await fetch('/api/output-dir');
+                const data = await resp.json();
+                if (input) input.value = (data && data.success && data.output_dir) ? data.output_dir : '';
+            } catch (e) {
+                if (input) input.value = window.currentOutputDir || '';
+            }
+            if (modal) modal.style.display = 'flex';
+            if (input) setTimeout(() => input.focus(), 50);
+        }
+
+        function closeOutputDirModal() {
+            const modal = document.getElementById('outputDirModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function saveOutputDir() {
+            const status = document.getElementById('outputDirModalStatus');
+            const value = (document.getElementById('outputDirInput').value || '').trim();
+            status.textContent = 'Saving…';
+            status.style.color = '#94a3b8';
+            try {
+                const resp = await fetch('/api/output-dir', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ output_dir: value }),
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    status.style.color = '#f87171';
+                    status.textContent = '❌ ' + (data.error || 'Save failed');
+                    return;
+                }
+                window.currentOutputDir = data.output_dir || '';
+                const display = document.getElementById('outputDirDisplay');
+                if (display) display.textContent = window.currentOutputDir || '(not set)';
+                status.style.color = '#34d399';
+                status.textContent = '✅ Saved: ' + (data.output_dir || '(cleared)');
+                setTimeout(closeOutputDirModal, 800);
+            } catch (err) {
+                status.style.color = '#f87171';
+                status.textContent = '❌ ' + err.message;
+            }
+        }
+
+        async function clearOutputDir() {
+            const input = document.getElementById('outputDirInput');
+            if (input) input.value = '';
+            await saveOutputDir();
+        }
+
+        // ---------- Directory Browser ----------
+        function openDirBrowser() {
+            const modal = document.getElementById('dirBrowserModal');
+            if (!modal) return;
+            modal.style.display = 'flex';
+            // Seed from current input value (or saved dir, or home)
+            const seed = (document.getElementById('outputDirInput').value || window.currentOutputDir || '').trim();
+            dirBrowserGo(seed);
+        }
+
+        function closeDirBrowser() {
+            const modal = document.getElementById('dirBrowserModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function dirBrowserGo(path) {
+            const list = document.getElementById('dirBrowserList');
+            const status = document.getElementById('dirBrowserStatus');
+            const pathInput = document.getElementById('dirBrowserPath');
+            const showHidden = document.getElementById('dirBrowserShowHidden')?.checked ? '1' : '0';
+            if (status) { status.style.color = '#64748b'; status.textContent = 'Loading…'; }
+            if (list) list.innerHTML = '<div style="color:#64748b; padding:12px; text-align:center; font-size:0.85em;">Loading…</div>';
+            try {
+                const url = '/api/browse-dirs?show_hidden=' + showHidden + '&path=' + encodeURIComponent(path || '');
+                const resp = await fetch(url);
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    if (status) { status.style.color = '#f87171'; status.textContent = '❌ ' + (data.error || resp.status); }
+                    return;
+                }
+                window._dirBrowserCurrent = data.path;
+                window._dirBrowserParent = data.parent;
+                window._dirBrowserHome = data.home;
+                if (pathInput) pathInput.value = data.path;
+                const upBtn = document.getElementById('dirBrowserUpBtn');
+                if (upBtn) upBtn.disabled = !data.parent;
+                if (!data.entries.length) {
+                    list.innerHTML = '<div style="color:#64748b; padding:12px; text-align:center; font-size:0.85em;">(no subfolders)</div>';
+                } else {
+                    list.innerHTML = data.entries.map(e => {
+                        const safeName = e.name.replace(/</g, '&lt;');
+                        const safePath = e.path.replace(/'/g, "\\'");
+                        return '<div onclick="dirBrowserGo(\'' + safePath + '\')" '
+                             + 'style="padding:6px 10px; cursor:pointer; color:#e2e8f0; border-radius:4px; font-size:0.85em; display:flex; align-items:center; gap:8px;" '
+                             + 'onmouseover="this.style.background=\'#1e293b\'" onmouseout="this.style.background=\'transparent\'">'
+                             + '📁 <span>' + safeName + '</span></div>';
+                    }).join('');
+                }
+                if (status) { status.style.color = '#64748b'; status.textContent = data.entries.length + ' folder(s)'; }
+            } catch (err) {
+                if (status) { status.style.color = '#f87171'; status.textContent = '❌ ' + err.message; }
+            }
+        }
+
+        function dirBrowserSelect() {
+            const path = window._dirBrowserCurrent || document.getElementById('dirBrowserPath').value;
+            if (!path) return;
+            const input = document.getElementById('outputDirInput');
+            if (input) input.value = path;
+            closeDirBrowser();
+        }
+
+        async function dirBrowserNewFolder() {
+            const parent = window._dirBrowserCurrent;
+            if (!parent) return;
+            const name = prompt('New folder name (inside ' + parent + '):');
+            if (!name) return;
+            const status = document.getElementById('dirBrowserStatus');
+            try {
+                const resp = await fetch('/api/create-dir', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parent: parent, name: name.trim() }),
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    if (status) { status.style.color = '#f87171'; status.textContent = '❌ ' + (data.error || resp.status); }
+                    return;
+                }
+                if (status) { status.style.color = '#34d399'; status.textContent = '✅ Created ' + data.path; }
+                // Refresh listing and navigate into the new folder
+                await dirBrowserGo(data.path);
+            } catch (err) {
+                if (status) { status.style.color = '#f87171'; status.textContent = '❌ ' + err.message; }
+            }
+        }
+
+        function _collectCurrentOutputs() {
+            return {
+                title: window.currentScriptTitle || 'script',
+                script: window.currentScript || '',
+                edl_filename: window.currentEDLFilename || '',
+                edl_content: window.currentEDLContent || '',
+                curl_commands: window.currentCurlCommands || null,
+                broll_images: window.currentBrollImages || [],
+                grok_videos: window.currentGrokVideos || [],
+                thumbnails: window.currentThumbnails || [],
+            };
+        }
+
+        async function saveAllOutputs(silent) {
+            if (!window.currentOutputDir) {
+                if (!silent) {
+                    alert('Set an Output Directory first (📁 Output Dir button).');
+                    openOutputDirModal();
+                }
+                return;
+            }
+            const payload = _collectCurrentOutputs();
+            try {
+                const resp = await fetch('/api/save-outputs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    if (!silent) alert('❌ Save failed: ' + (data.error || resp.status));
+                    return;
+                }
+                const msg = '💾 Saved ' + data.total_saved + ' file(s) to ' + data.base_dir
+                          + (data.total_skipped ? '\n⚠️ ' + data.total_skipped + ' file(s) could not be located.' : '');
+                if (!silent) alert(msg);
+                console.log('save-outputs report:', data.report);
+                const btn = document.getElementById('saveAllOutputsBtn');
+                if (btn) {
+                    const orig = btn.querySelector('.toolbar-text').textContent;
+                    btn.querySelector('.toolbar-text').textContent = '✅ Saved';
+                    setTimeout(() => { btn.querySelector('.toolbar-text').textContent = orig; }, 1800);
+                }
+            } catch (err) {
+                if (!silent) alert('❌ Save failed: ' + err.message);
+            }
+        }
+
+        // Show the Save All button whenever results become available.
+        function _maybeShowSaveAllButton() {
+            const btn = document.getElementById('saveAllOutputsBtn');
+            if (!btn) return;
+            const hasAnything = (window.currentScript
+                || window.currentEDLContent
+                || (window.currentBrollImages && window.currentBrollImages.length)
+                || (window.currentThumbnails && window.currentThumbnails.length)
+                || (window.currentGrokVideos && window.currentGrokVideos.length));
+            btn.style.display = hasAnything ? '' : 'none';
+        }
+
+        document.addEventListener('DOMContentLoaded', loadOutputDir);
     </script>
     
     <!-- HeyGen Template Details Modal -->
