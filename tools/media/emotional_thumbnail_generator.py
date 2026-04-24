@@ -383,6 +383,7 @@ CRITICAL RULES:
         headline_text=None,
         headline_options: Optional[list[str]] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ):
         """
         Generate all 6 thumbnail variations
@@ -395,6 +396,8 @@ CRITICAL RULES:
             headline_options: Optional list of custom in-image headline options.
                 When provided, generates one thumbnail per option for each emotion
                 (up to 3 options x 6 emotions = 18 total).
+            cancel_check: Optional callback that returns True when generation
+                should stop early (partial results are preserved).
 
         Returns:
             Dict with variation info and file paths
@@ -452,6 +455,7 @@ CRITICAL RULES:
             "failed_count": 0,
             "success": False,
             "aborted": False,
+            "cancelled": False,
         }
 
         print(f"\n{'='*70}")
@@ -473,6 +477,23 @@ CRITICAL RULES:
         generated_index = 0
         for emotion_idx, emotion_data in enumerate(variations, 1):
             for option_idx, selected_headline in enumerate(headline_variants, 1):
+                if cancel_check:
+                    try:
+                        if cancel_check():
+                            results["cancelled"] = True
+                            if progress_callback:
+                                try:
+                                    progress_callback(
+                                        "🛑 Thumbnail generation stop requested — keeping generated thumbnails so far"
+                                    )
+                                except Exception:
+                                    pass
+                            print("🛑 Thumbnail generation cancelled by user")
+                            break
+                    except Exception:
+                        # Never let cancel plumbing interrupt generation logic.
+                        pass
+
                 results["total_processed"] += 1
                 generated_index += 1
 
@@ -552,7 +573,7 @@ CRITICAL RULES:
                         print("🛑 Aborting remaining thumbnail attempts due to fatal API key/auth error")
                         break
 
-            if results["aborted"]:
+            if results["aborted"] or results["cancelled"]:
                 break
 
         results["success"] = results["total_generated"] > 0

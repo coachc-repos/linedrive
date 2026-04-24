@@ -1164,11 +1164,15 @@
                     <div class="spinner"></div>
                     <p id="progressText">🔄 Processing...</p>
                     <button id="stopBrollImagesBtn" onclick="stopBrollImageGeneration()" title="Stop B-roll image generation and keep what's been generated so far"
-                            style="display:none; margin-left:auto; padding:6px 12px; background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:0.85em;">
+                            style="display:none; margin-left:auto; margin-top:4px; padding:6px 12px; background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:0.85em;">
                         🛑 Stop B-roll Images
                     </button>
+                    <button id="stopThumbnailsBtn" onclick="stopThumbnailGeneration()" title="Stop thumbnail generation and keep what's been generated so far"
+                            style="display:none; margin-left:8px; margin-top:4px; padding:6px 12px; background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:0.85em;">
+                        🛑 Stop Thumbnails
+                    </button>
                     <button id="stopGrokVideosBtn" onclick="stopGrokVideoGeneration()" title="Stop Grok video generation and keep what's been saved so far"
-                            style="display:none; margin-left:8px; padding:6px 12px; background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:0.85em;">
+                            style="display:none; margin-left:8px; margin-top:4px; padding:6px 12px; background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:0.85em;">
                         🛑 Stop Grok Videos
                     </button>
                 </div>
@@ -1311,6 +1315,30 @@ Time management content here...`;
             } catch (err) {
                 addProgressMessage('❌ Stop request failed: ' + err.message, 'error');
                 if (btn) { btn.disabled = false; btn.textContent = '🛑 Stop B-roll Images'; }
+            }
+        }
+
+        // Stop in-flight thumbnail generation. The backend will keep whatever thumbnails it has produced so far.
+        async function stopThumbnailGeneration() {
+            const sid = window.currentProcessingSessionId;
+            if (!sid) {
+                addProgressMessage('⚠️ No active processing session to stop.', 'error');
+                return;
+            }
+            const btn = document.getElementById('stopThumbnailsBtn');
+            if (btn) { btn.disabled = true; btn.textContent = '🛑 Stopping…'; }
+            try {
+                const resp = await fetch(`/api/cancel-thumbnails/${encodeURIComponent(sid)}`, { method: 'POST' });
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok && data.success) {
+                    addProgressMessage('🛑 Stop requested — finishing the current thumbnail then keeping partial results…', 'info');
+                } else {
+                    addProgressMessage('❌ Could not request thumbnail stop: ' + (data.error || resp.status), 'error');
+                    if (btn) { btn.disabled = false; btn.textContent = '🛑 Stop Thumbnails'; }
+                }
+            } catch (err) {
+                addProgressMessage('❌ Thumbnail stop request failed: ' + err.message, 'error');
+                if (btn) { btn.disabled = false; btn.textContent = '🛑 Stop Thumbnails'; }
             }
         }
 
@@ -2665,6 +2693,20 @@ Time management content here...`;
                                 stopBtn.style.display = 'none';
                             }
                         }
+
+                        const stopThumbBtn = document.getElementById('stopThumbnailsBtn');
+                        if (stopThumbBtn) {
+                            if (msgText.includes('Generating thumbnail') ||
+                                msgText.includes('thumbnail variations')) {
+                                stopThumbBtn.style.display = 'inline-block';
+                                stopThumbBtn.disabled = false;
+                                stopThumbBtn.textContent = '🛑 Stop Thumbnails';
+                            } else if (msgText.includes('Generated') && msgText.includes('thumbnails') ||
+                                       msgText.includes('Thumbnail generation stopped') ||
+                                       msgText.includes('stop requested') && msgText.includes('thumbnail')) {
+                                stopThumbBtn.style.display = 'none';
+                            }
+                        }
                         
                         // Determine message type based on content
                         let msgType = 'info';
@@ -2679,6 +2721,12 @@ Time management content here...`;
                         eventSource.close();
                         const stopBtn = document.getElementById('stopBrollImagesBtn');
                         if (stopBtn) stopBtn.style.display = 'none';
+                        const stopThumbBtn = document.getElementById('stopThumbnailsBtn');
+                        if (stopThumbBtn) {
+                            stopThumbBtn.style.display = 'none';
+                            stopThumbBtn.disabled = false;
+                            stopThumbBtn.textContent = '🛑 Stop Thumbnails';
+                        }
                         window.currentProcessingSessionId = null;
                         const processedScript = message.script || '';
                         const scriptTitle = message.script_title || 'Processed Script';
@@ -2882,6 +2930,15 @@ Time management content here...`;
                 eventSource.onerror = function(error) {
                     console.error('SSE Error:', error);
                     eventSource.close();
+                    const stopBtn = document.getElementById('stopBrollImagesBtn');
+                    if (stopBtn) stopBtn.style.display = 'none';
+                    const stopThumbBtn = document.getElementById('stopThumbnailsBtn');
+                    if (stopThumbBtn) {
+                        stopThumbBtn.style.display = 'none';
+                        stopThumbBtn.disabled = false;
+                        stopThumbBtn.textContent = '🛑 Stop Thumbnails';
+                    }
+                    window.currentProcessingSessionId = null;
                     updateFooterProgress(0, 'Ready');
                     progressDiv.style.display = 'none';
                     resultDiv.innerHTML = `<h3>❌ Connection Error</h3><p>Lost connection to server. Please try again.</p>`;
@@ -2982,6 +3039,19 @@ Time management content here...`;
                 
                 // Connect to SSE progress stream
                 const sessionId = data.session_id;
+                window.currentProcessingSessionId = sessionId;
+                const stopBtnAtStart = document.getElementById('stopBrollImagesBtn');
+                if (stopBtnAtStart) {
+                    stopBtnAtStart.style.display = 'none';
+                    stopBtnAtStart.disabled = false;
+                    stopBtnAtStart.textContent = '🛑 Stop B-roll Images';
+                }
+                const stopThumbBtnAtStart = document.getElementById('stopThumbnailsBtn');
+                if (stopThumbBtnAtStart) {
+                    stopThumbBtnAtStart.style.display = 'none';
+                    stopThumbBtnAtStart.disabled = false;
+                    stopThumbBtnAtStart.textContent = '🛑 Stop Thumbnails';
+                }
                 const eventSource = new EventSource(`/progress/${sessionId}`);
                 let finalScript = '';
                 
@@ -2995,6 +3065,35 @@ Time management content here...`;
                         // Update footer progress if percentage is provided
                         if (message.progress !== undefined) {
                             updateFooterProgress(message.progress, msgText);
+                        }
+
+                        // Show/hide the B-roll stop button based on live progress messages.
+                        const stopBtn = document.getElementById('stopBrollImagesBtn');
+                        if (stopBtn) {
+                            if (msgText.includes('Generating B-roll images') ||
+                                msgText.includes('Generating image') ||
+                                ((/\[\d+\/\d+\]/.test(msgText)) && (msgText.includes("'") || msgText.includes('Saved')))) {
+                                stopBtn.style.display = 'inline-block';
+                                stopBtn.disabled = false;
+                                stopBtn.textContent = '🛑 Stop B-roll Images';
+                            } else if (msgText.includes('B-roll image generation stopped') ||
+                                       (msgText.includes('Generated') && msgText.includes('B-roll images'))) {
+                                stopBtn.style.display = 'none';
+                            }
+                        }
+
+                        const stopThumbBtn = document.getElementById('stopThumbnailsBtn');
+                        if (stopThumbBtn) {
+                            if (msgText.includes('Generating thumbnail') ||
+                                msgText.includes('thumbnail variations')) {
+                                stopThumbBtn.style.display = 'inline-block';
+                                stopThumbBtn.disabled = false;
+                                stopThumbBtn.textContent = '🛑 Stop Thumbnails';
+                            } else if ((msgText.includes('Generated') && msgText.includes('thumbnails')) ||
+                                       msgText.includes('Thumbnail generation stopped') ||
+                                       (msgText.includes('stop requested') && msgText.includes('thumbnail'))) {
+                                stopThumbBtn.style.display = 'none';
+                            }
                         }
                         
                         // Determine message type based on content
@@ -3010,6 +3109,19 @@ Time management content here...`;
                         addProgressMessage(msgText, msgType);
                     } else if (message.status === 'complete') {
                         eventSource.close();
+                        const stopBtn = document.getElementById('stopBrollImagesBtn');
+                        if (stopBtn) {
+                            stopBtn.style.display = 'none';
+                            stopBtn.disabled = false;
+                            stopBtn.textContent = '🛑 Stop B-roll Images';
+                        }
+                        const stopThumbBtn = document.getElementById('stopThumbnailsBtn');
+                        if (stopThumbBtn) {
+                            stopThumbBtn.style.display = 'none';
+                            stopThumbBtn.disabled = false;
+                            stopThumbBtn.textContent = '🛑 Stop Thumbnails';
+                        }
+                        window.currentProcessingSessionId = null;
                         finalScript = message.script || '';
                         const thumbnails = (message.thumbnails && message.thumbnails.length > 0)
                             ? message.thumbnails
@@ -3177,6 +3289,19 @@ Time management content here...`;
                         resultDiv.style.display = 'block';
                     } else if (message.status === 'error') {
                         eventSource.close();
+                        const stopBtn = document.getElementById('stopBrollImagesBtn');
+                        if (stopBtn) {
+                            stopBtn.style.display = 'none';
+                            stopBtn.disabled = false;
+                            stopBtn.textContent = '🛑 Stop B-roll Images';
+                        }
+                        const stopThumbBtn = document.getElementById('stopThumbnailsBtn');
+                        if (stopThumbBtn) {
+                            stopThumbBtn.style.display = 'none';
+                            stopThumbBtn.disabled = false;
+                            stopThumbBtn.textContent = '🛑 Stop Thumbnails';
+                        }
+                        window.currentProcessingSessionId = null;
                         
                         // Reset footer progress on error
                         updateFooterProgress(0, 'Ready');
@@ -3193,6 +3318,19 @@ Time management content here...`;
                 eventSource.onerror = function(error) {
                     console.error('SSE Error:', error);
                     eventSource.close();
+                    const stopBtn = document.getElementById('stopBrollImagesBtn');
+                    if (stopBtn) {
+                        stopBtn.style.display = 'none';
+                        stopBtn.disabled = false;
+                        stopBtn.textContent = '🛑 Stop B-roll Images';
+                    }
+                    const stopThumbBtn = document.getElementById('stopThumbnailsBtn');
+                    if (stopThumbBtn) {
+                        stopThumbBtn.style.display = 'none';
+                        stopThumbBtn.disabled = false;
+                        stopThumbBtn.textContent = '🛑 Stop Thumbnails';
+                    }
+                    window.currentProcessingSessionId = null;
                     progressDiv.style.display = 'none';
                     resultDiv.innerHTML = `<h3>❌ Connection Error</h3><p>Lost connection to server. Please try again.</p>`;
                     resultDiv.className = 'result error';
@@ -3200,6 +3338,19 @@ Time management content here...`;
                 };
                 
             } catch (error) {
+                const stopBtn = document.getElementById('stopBrollImagesBtn');
+                if (stopBtn) {
+                    stopBtn.style.display = 'none';
+                    stopBtn.disabled = false;
+                    stopBtn.textContent = '🛑 Stop B-roll Images';
+                }
+                const stopThumbBtn = document.getElementById('stopThumbnailsBtn');
+                if (stopThumbBtn) {
+                    stopThumbBtn.style.display = 'none';
+                    stopThumbBtn.disabled = false;
+                    stopThumbBtn.textContent = '🛑 Stop Thumbnails';
+                }
+                window.currentProcessingSessionId = null;
                 progressDiv.style.display = 'none';
                 resultDiv.innerHTML = `<h3>❌ Network Error</h3><p>${error.message}</p>`;
                 resultDiv.className = 'result error';

@@ -179,10 +179,11 @@ app = Flask(__name__)
 progress_streams = {}
 results = {}
 running_tasks = {}
-# Per-session cancel events for long-running, cancellable steps (B-roll image and Grok video generation).
+# Per-session cancel events for long-running, cancellable steps.
 import threading as _threading
 import queue as _queue
 broll_image_cancel_events: "dict[str, _threading.Event]" = {}
+thumbnail_cancel_events: "dict[str, _threading.Event]" = {}
 grok_video_cancel_events: "dict[str, _threading.Event]" = {}
 grok_video_streams: "dict[str, _queue.Queue]" = {}
 grok_video_results: "dict[str, dict]" = {}
@@ -1550,8 +1551,11 @@ async def process_script_creation(session_id, topic, audience, tone,
                     print(
                         f"   Environment API key: {api_key[:20]}... (length: {len(api_key)})")
 
+                    # Route thumbnails into configured output_dir/thumbnails when available.
+                    _thumb_out_base = _get_output_base_dir()
+                    _thumb_out_dir = (_thumb_out_base / "thumbnails") if _thumb_out_base else None
                     # No api_key param - use environment
-                    thumbnail_gen = EmotionalThumbnailGenerator()
+                    thumbnail_gen = EmotionalThumbnailGenerator(output_dir=_thumb_out_dir)
                     print(f"✅ Generator initialized successfully")
                     print(f"   Template: {thumbnail_gen.template_path}")
                     print(f"   Output: {thumbnail_gen.output_dir}")
@@ -1561,6 +1565,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                         f"   API Key matches: {thumbnail_gen.api_key == api_key}")
 
                     print(f"\n🎬 Calling generate_all_thumbnails()...")
+                    thumb_cancel_evt = thumbnail_cancel_events.setdefault(session_id, _threading.Event())
                     thumbnail_results = thumbnail_gen.generate_all_thumbnails(
                         script_title=topic,
                         script_content=final_script_content,
@@ -1568,6 +1573,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                         headline_text=thumbnail_hook_text or None,
                         headline_options=thumbnail_hook_text_options or None,
                         progress_callback=lambda msg: streamer.send_update(msg, 98),
+                        cancel_check=thumb_cancel_evt.is_set,
                     )
 
                     print(f"\n🔍 THUMBNAIL GENERATION RESULTS:")
@@ -1596,6 +1602,11 @@ async def process_script_creation(session_id, topic, audience, tone,
                             streamer.send_update(
                                 f"✅ Generated {len(variations)} thumbnails", 99
                             )
+                            if thumbnail_results.get("cancelled"):
+                                streamer.send_update(
+                                    f"🛑 Thumbnail generation stopped — keeping {len(variations)} thumbnails so far",
+                                    99,
+                                )
                         else:
                             print("   ⚠️ Thumbnail directory created, but no thumbnails were generated")
                             if output_dir:
@@ -1627,6 +1638,8 @@ async def process_script_creation(session_id, topic, audience, tone,
                     print("\n📋 Full traceback:")
                     traceback.print_exc()
                     print("="*70 + "\n")
+                finally:
+                    thumbnail_cancel_events.pop(session_id, None)
 
             streamer.result = {
                 "success": True,
@@ -2334,13 +2347,16 @@ async def process_existing_script(
                     EmotionalThumbnailGenerator,
                 )
 
-                thumbnail_gen = EmotionalThumbnailGenerator()
+                _thumb_out_base = _get_output_base_dir()
+                _thumb_out_dir = (_thumb_out_base / "thumbnails") if _thumb_out_base else None
+                thumbnail_gen = EmotionalThumbnailGenerator(output_dir=_thumb_out_dir)
                 if thumbnail_hook_text_options:
                     logger.info(
                         f"🏷️ Script processing will use thumbnail hook text options instead of script title: {thumbnail_hook_text_options}")
                 else:
                     logger.warning(
                         "⚠️ Script processing did not find thumbnail hook text; using script title fallback")
+                thumb_cancel_evt = thumbnail_cancel_events.setdefault(session_id, _threading.Event())
                 thumbnail_results = thumbnail_gen.generate_all_thumbnails(
                     script_title=script_title,
                     script_content=cleaned_script,
@@ -2349,6 +2365,7 @@ async def process_existing_script(
                     progress_callback=lambda msg: streamer.send_update(
                         msg, int(current_progress)
                     ),
+                    cancel_check=thumb_cancel_evt.is_set,
                 )
                 logger.info(
                     f"🔍 DEBUG: script processing headline options passed to thumbnail generator = {repr(thumbnail_hook_text_options or None)}")
@@ -2379,6 +2396,11 @@ async def process_existing_script(
                         f"✅ Generated {len(variations)} thumbnails",
                         int(progress)
                     )
+                    if (thumbnail_results or {}).get("cancelled"):
+                        streamer.send_update(
+                            f"🛑 Thumbnail generation stopped — keeping {len(variations)} thumbnails so far",
+                            int(progress)
+                        )
                     api_error = (thumbnail_results or {}).get("error")
                     if api_error:
                         logger.warning(f"⚠️ Thumbnail API returned errors during generation: {api_error}")
@@ -2405,6 +2427,8 @@ async def process_existing_script(
                         )
             except Exception as e:
                 logger.error(f"❌ Thumbnail generation error: {e}")
+            finally:
+                thumbnail_cancel_events.pop(session_id, None)
 
         # Generate Flow & Repetition Analysis if requested
         # IMPORTANT: This should run AFTER all other content is assembled
@@ -3713,6 +3737,23 @@ def api_cancel_broll_images(session_id):
         return jsonify({"success": True, "session_id": session_id})
     except Exception as e:
         logger.error(f"❌ Failed to cancel B-roll image generation: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/cancel-thumbnails/<session_id>", methods=["POST"])
+def api_cancel_thumbnails(session_id):
+    """Signal in-flight thumbnail generation to stop and keep partial results."""
+    try:
+        evt = thumbnail_cancel_events.get(session_id)
+        if evt is None:
+            # Pre-create in case cancel arrives before generation fully starts.
+            evt = _threading.Event()
+            thumbnail_cancel_events[session_id] = evt
+        evt.set()
+        logger.info(f"🛑 Thumbnail generation cancel requested for session {session_id}")
+        return jsonify({"success": True, "session_id": session_id})
+    except Exception as e:
+        logger.error(f"❌ Failed to cancel thumbnail generation: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
