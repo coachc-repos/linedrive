@@ -35,6 +35,8 @@ PROJECT_ENDPOINT = (
     "https://linedrive-ai-foundry.services.ai.azure.com/api/projects/linedriveAgents"
 )
 
+DEFAULT_OPENAI_API_VERSION = "2024-12-01-preview"
+
 # Map v1 agent_name -> v2 (new Foundry) agent_name. Lookup is case-insensitive
 # (see _resolve_v2_name). Add entries for any v1 name that does not match the
 # corresponding v2 name verbatim, including alternative casings/prefixes used
@@ -86,6 +88,16 @@ class BaseAgentClient(ABC):
         self._v2_project: Optional[AIProjectClient] = None
         self._v2_openai = None
         self._v1_validated = False
+        self._active_api_mode: Optional[str] = None
+
+    def _get_openai_api_version(self) -> str:
+        api_version = (
+            os.environ.get("OPENAI_API_VERSION")
+            or os.environ.get("AZURE_OPENAI_API_VERSION")
+            or DEFAULT_OPENAI_API_VERSION
+        )
+        os.environ.setdefault("OPENAI_API_VERSION", api_version)
+        return api_version
 
     # ------------------------------------------------------------------ helpers
     def _v1(self) -> AgentsClient:
@@ -129,7 +141,9 @@ class BaseAgentClient(ABC):
             self._v2_project = AIProjectClient(
                 endpoint=PROJECT_ENDPOINT, credential=self._credential
             )
-            self._v2_openai = self._v2_project.get_openai_client()
+            self._v2_openai = self._v2_project.get_openai_client(
+                api_version=self._get_openai_api_version()
+            )
         return self._v2_project, self._v2_openai
 
     # ------------------------------------------------------------------ public API
@@ -144,6 +158,7 @@ class BaseAgentClient(ABC):
                 try:
                     _, openai = self._v2()
                     conv = openai.conversations.create()
+                    self._active_api_mode = "v2"
                     return conv  # has .id
                 except Exception as e:
                     last_err = e
@@ -165,10 +180,20 @@ class BaseAgentClient(ABC):
                     self._v2_project = None
                     self._v2_openai = None
                     _time.sleep(1.5 * (attempt + 1))
+            fallback_msg = str(last_err).lower() if last_err is not None else ""
+            if "404" in fallback_msg or "resource not found" in fallback_msg:
+                print(
+                    "⚠️ v2 conversation endpoint unavailable for this project; falling back to v1 agent threads"
+                )
+                thread = self._v1().threads.create()
+                self._active_api_mode = "v1"
+                return thread
             raise Exception(f"Failed to create v2 conversation: {last_err}")
         # v1
         try:
-            return self._v1().threads.create()
+            thread = self._v1().threads.create()
+            self._active_api_mode = "v1"
+            return thread
         except Exception as e:
             raise Exception(f"Failed to create v1 thread: {e}")
 
@@ -180,7 +205,8 @@ class BaseAgentClient(ABC):
         timeout: int = 300,
         max_retries: int = 3,
     ) -> Dict[str, Any]:
-        if get_api_mode() == "v2":
+        active_mode = self._active_api_mode or get_api_mode()
+        if active_mode == "v2":
             return self._send_v2(thread_id, message_content, timeout, max_retries)
         return self._send_v1(
             thread_id, message_content, show_sources, timeout, max_retries

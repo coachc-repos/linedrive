@@ -1086,7 +1086,7 @@
             <div id="topicInputSection">
                 <div class="form-group">
                     <label for="createTopic">💡 Topic/Subject:</label>
-                    <textarea id="createTopic" placeholder="Enter the topic or subject you want to create a script about...">Top 5 AI Tools for Consumers</textarea>
+                    <textarea id="createTopic" oninput="refreshOutputDirPreview()" placeholder="Enter the topic or subject you want to create a script about...">Top 5 AI Tools for Consumers</textarea>
                 </div>
                 
                 <div class="form-group">
@@ -1383,7 +1383,11 @@ Time management content here...`;
             fetch('/api/grok/generate-selected', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ selected_rows: selectedRows, api_key: grokApiKey })
+                body: JSON.stringify({
+                    selected_rows: selectedRows,
+                    api_key: grokApiKey,
+                    script_title: window.currentScriptTitle || ''
+                })
             })
             .then(r => r.json())
             .then(start => {
@@ -2493,27 +2497,32 @@ Time management content here...`;
             const topicInputSection = document.getElementById('topicInputSection');
             const primaryBtn = document.getElementById('primaryBtn');
             
-            if (scriptChecked) {
-                // Script will be generated, show topic inputs
-                scriptInputSection.style.display = 'none';
-                topicInputSection.style.display = 'block';
-                primaryBtn.onclick = processWorkflow;
-                primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Generate</span>';
-                primaryBtn.title = 'Generate selected outputs from topic';
-            } else {
-                // Script must be provided, show script input
-                scriptInputSection.style.display = 'block';
-                topicInputSection.style.display = 'none';
-                primaryBtn.onclick = processWorkflow;
-                primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Process</span>';
-                primaryBtn.title = 'Process script with selected outputs';
+            if (scriptInputSection && topicInputSection && primaryBtn) {
+                if (scriptChecked) {
+                    // Script will be generated, show topic inputs
+                    scriptInputSection.style.display = 'none';
+                    topicInputSection.style.display = 'block';
+                    primaryBtn.onclick = processWorkflow;
+                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Generate</span>';
+                    primaryBtn.title = 'Generate selected outputs from topic';
+                } else {
+                    // Script must be provided, show script input
+                    scriptInputSection.style.display = 'block';
+                    topicInputSection.style.display = 'none';
+                    primaryBtn.onclick = processWorkflow;
+                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Process</span>';
+                    primaryBtn.title = 'Process script with selected outputs';
+                }
             }
             
             // If "All" is checked, uncheck it since individual selection changed
             const allCheckbox = document.getElementById('checkAll');
-            if (allCheckbox.checked) {
+            if (allCheckbox && allCheckbox.checked) {
                 allCheckbox.checked = false;
             }
+
+            // Keep output directory preview in sync when switching modes.
+            refreshOutputDirPreview();
         }
         
         function toggleAllCheckboxes() {
@@ -3152,6 +3161,16 @@ Time management content here...`;
                         const needsGrokSelection =
                             checkboxes.grok_videos && Array.isArray(rowsForSelection) && rowsForSelection.length > 0;
                         const scriptTitle = message.script_title || document.getElementById('createTopic')?.value.trim() || 'AI Video Project';
+                        const markdownPath = message.markdown_path || null;
+                        const docxPath = message.docx_path || null;
+
+                        if (markdownPath || docxPath) {
+                            let saveMsg = '💾 Saved script files:';
+                            if (markdownPath) saveMsg += ` MD → ${markdownPath}`;
+                            if (docxPath) saveMsg += ` | DOCX → ${docxPath}`;
+                            addProgressMessage(saveMsg, 'success');
+                            addToDebugLog(saveMsg);
+                        }
                         
                         // Store scripts globally for export functions
                         window.currentScript = finalScript;
@@ -3401,7 +3420,7 @@ Time management content here...`;
                     a.click();
                     document.body.removeChild(a);
                     window.URL.revokeObjectURL(url);
-                    alert('✅ Script exported to Word document!');
+                    // (success confirmation suppressed)
                 } else {
                     alert('❌ Failed to export to Word document');
                 }
@@ -3453,7 +3472,7 @@ Time management content here...`;
                     a.click();
                     document.body.removeChild(a);
                     window.URL.revokeObjectURL(url);
-                    alert('✅ Script exported to Markdown!');
+                    // (success confirmation suppressed)
                 } else {
                     alert('❌ Failed to export to Markdown');
                 }
@@ -3483,7 +3502,7 @@ Time management content here...`;
                 a.click();
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
-                alert(`✅ EDL file downloaded: ${edlFilename}`);
+                // (success confirmation suppressed)
             } catch (error) {
                 alert('❌ Error exporting EDL: ' + error.message);
             }
@@ -3500,7 +3519,7 @@ Time management content here...`;
             
             try {
                 navigator.clipboard.writeText(edlContent).then(() => {
-                    alert('✅ EDL content copied to clipboard!');
+                    // (success confirmation suppressed)
                 }).catch(err => {
                     // Fallback for older browsers
                     const textarea = document.createElement('textarea');
@@ -3511,7 +3530,7 @@ Time management content here...`;
                     textarea.select();
                     document.execCommand('copy');
                     document.body.removeChild(textarea);
-                    alert('✅ EDL content copied to clipboard!');
+                    // (success confirmation suppressed)
                 });
             } catch (error) {
                 alert('❌ Error copying EDL: ' + error.message);
@@ -3538,7 +3557,7 @@ Time management content here...`;
                 a.click();
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
-                alert('✅ Curl commands downloaded: heygen_curl_commands.sh');
+                // (success confirmation suppressed)
             } catch (error) {
                 alert('❌ Error downloading curl commands: ' + error.message);
             }
@@ -3555,7 +3574,7 @@ Time management content here...`;
             
             try {
                 navigator.clipboard.writeText(curlContent).then(() => {
-                    alert('✅ Curl commands copied to clipboard!');
+                    // (success confirmation suppressed)
                 }).catch(err => {
                     // Fallback for older browsers
                     const textarea = document.createElement('textarea');
@@ -3566,7 +3585,7 @@ Time management content here...`;
                     textarea.select();
                     document.execCommand('copy');
                     document.body.removeChild(textarea);
-                    alert('✅ Curl commands copied to clipboard!');
+                    // (success confirmation suppressed)
                 });
             } catch (error) {
                 alert('❌ Error copying curl commands: ' + error.message);
@@ -3630,7 +3649,7 @@ Time management content here...`;
                         message += `\n\n📝 ${result.edl_message || 'EDL markers available in EDL tab'}`;
                     }
                     
-                    alert(message);
+                    // (success confirmation suppressed)
                 } else {
                     alert(`❌ Failed to create project: ${result.error}`);
                 }
@@ -3679,13 +3698,25 @@ Time management content here...`;
                     const davinciButton = document.getElementById('davinciButton');
                     if (davinciButton) {
                         davinciButton.disabled = false;
+                        window.useDefaultArollForDaVinci = false;
                         davinciButton.title = `Create DaVinci Project with ${result.video_count} video(s)`;
                         addToDebugLog(`✅ Found ${result.video_count} aRoll video(s) - DaVinci button enabled`);
                         console.log('✅ DaVinci button enabled');
                     }
+                } else if (result.success && result.default_available && result.default_video_count > 0) {
+                    const davinciButton = document.getElementById('davinciButton');
+                    if (davinciButton) {
+                        davinciButton.disabled = false;
+                        window.useDefaultArollForDaVinci = true;
+                        const source = result.default_source || 'default source';
+                        davinciButton.title = `Create DaVinci Project with ${result.default_video_count} default test video(s)`;
+                        addToDebugLog(`🧪 No project aRoll videos found. Using ${result.default_video_count} default test clip(s) from ${source}`);
+                        console.log('🧪 DaVinci button enabled with default A-roll test clips');
+                    }
                 } else {
                     console.log(`ℹ️ No videos found (count: ${result.video_count || 0})`);
                     addToDebugLog(`ℹ️ No aRoll videos found yet. Download videos first.`);
+                    window.useDefaultArollForDaVinci = false;
                 }
             } catch (error) {
                 console.error('❌ Error checking aRoll videos:', error);
@@ -3714,7 +3745,9 @@ Time management content here...`;
                     body: JSON.stringify({ 
                         script_title: scriptTitle,
                         edl_content: edlContent,
-                        edl_filename: edlFilename
+                        edl_filename: edlFilename,
+                        use_default_aroll: !!window.useDefaultArollForDaVinci,
+                        generate_subtitles: true
                     })
                 });
                 
@@ -3729,13 +3762,24 @@ Time management content here...`;
                             message += `  ${index + 1}. ${video}\n`;
                         });
                     }
+
+                    if (result.used_default_aroll) {
+                        const source = result.default_aroll_source || result.aroll_source || 'default source';
+                        message += `\n🧪 Test mode: Used default A-roll clips from ${source}`;
+                    }
+
+                    if (result.subtitle_generation && result.subtitle_generation.attempted) {
+                        const subtitlePrefix = result.subtitle_generation.success ? '✅' : '⚠️';
+                        message += `\n\n${subtitlePrefix} Subtitles: ${result.subtitle_generation.message}`;
+                        addToDebugLog(`${subtitlePrefix} Subtitles: ${result.subtitle_generation.message}`);
+                    }
                     
                     if (result.bins_created) {
                         message += `\n📁 Bins: ${result.bins_created.join(', ')}`;
                     }
                     
                     addToDebugLog(`✅ DaVinci project created with ${result.videos_added ? result.videos_added.length : 0} videos`);
-                    alert(message);
+                    // (success confirmation suppressed)
                 } else {
                     addToDebugLog(`❌ Failed to create DaVinci project: ${result.error}`);
                     alert(`❌ Failed to create project: ${result.error}`);
@@ -3786,7 +3830,7 @@ Time management content here...`;
                     a.click();
                     document.body.removeChild(a);
                     window.URL.revokeObjectURL(url);
-                    alert('✅ Script exported to Word document!');
+                    // (success confirmation suppressed)
                 } else {
                     const errorData = await response.json();
                     alert('❌ Failed to export: ' + (errorData.error || 'Unknown error'));
@@ -3816,7 +3860,7 @@ Time management content here...`;
                 a.click();
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
-                alert('✅ HeyGen curl commands exported successfully!');
+                // (success confirmation suppressed)
             } catch (error) {
                 alert('❌ Error exporting HeyGen curl commands: ' + error.message);
             }
@@ -3863,10 +3907,6 @@ Time management content here...`;
             
             if (selectedIndices.length === 0) {
                 alert('⚠️ Please select at least one curl command to execute');
-                return;
-            }
-            
-            if (!confirm(`Execute ${selectedIndices.length} curl command(s)?\n\n⚠️ Make sure you have:\n• Replaced 'your_api_key_here' with your actual HeyGen API key\n• Updated the avatar_id with your preferred avatar\n\nProceed?`)) {
                 return;
             }
             
@@ -3981,7 +4021,7 @@ Time management content here...`;
                             statusCell.style.cursor = 'pointer';
                             statusCell.onclick = () => {
                                 navigator.clipboard.writeText(result.job_id);
-                                alert('Job ID copied to clipboard!');
+                                // (success confirmation suppressed)
                             };
                             
                             // Start polling video status
@@ -4015,7 +4055,7 @@ Time management content here...`;
             document.body.style.cursor = 'default';
             
             addToDebugLog(`✅ Completed executing ${selectedIndices.length} curl command(s)`);
-            alert(`✅ Completed executing ${selectedIndices.length} curl command(s)`);
+            // (success confirmation suppressed)
         }
         
         // Poll video status function
@@ -4123,7 +4163,7 @@ Time management content here...`;
                 
                 if (result.success) {
                     // Video saved to project folder
-                    alert(`✅ Video saved to project:\n${result.path}`);
+                    // (success confirmation suppressed)
                     
                     // Check if we can now enable DaVinci button
                     await checkArollVideos();
@@ -4160,7 +4200,7 @@ Time management content here...`;
                     a.click();
                     document.body.removeChild(a);
                     window.URL.revokeObjectURL(url);
-                    alert('✅ Comparison report downloaded! You can open it in VS Code or any markdown viewer.');
+                    // (success confirmation suppressed)
                 } else {
                     const errorData = await response.json();
                     alert('❌ Failed to download comparison file: ' + (errorData.error || 'Unknown error'));
@@ -4286,8 +4326,9 @@ Time management content here...`;
                 if (topicElement && descriptionElement) {
                     topicElement.value = 'AI at Home';
                     descriptionElement.value = 'How is GenAI coming to our homes';
+                    refreshOutputDirPreview();
                     console.log('Values set successfully');
-                    alert('✅ Sample topic and description loaded for create mode!');
+                    // (success confirmation suppressed)
                 } else {
                     console.error('Could not find topic or description elements');
                     alert('❌ Error: Could not find input fields. Make sure you are in Create mode.');
@@ -4308,7 +4349,8 @@ Thank you for watching!`;
                 const scriptElement = document.getElementById('scriptInput');
                 if (scriptElement) {
                     scriptElement.value = sample;
-                    alert('✅ Sample script loaded for polish mode!');
+                    refreshOutputDirPreview();
+                    // (success confirmation suppressed)
                 } else {
                     alert('❌ Error: Could not find script input field.');
                 }
@@ -4337,7 +4379,16 @@ Thank you for watching!`;
                     text = await file.text();
                 }
                 document.getElementById('scriptInput').value = text;
-                alert('✅ Loaded ' + file.name + ' (' + text.length.toLocaleString() + ' chars)');
+
+                // Loading a script means we should process from script input mode.
+                const checkScript = document.getElementById('checkScript');
+                if (checkScript && checkScript.checked) {
+                    checkScript.checked = false;
+                    toggleScriptInput();
+                }
+
+                refreshOutputDirPreview();
+                // (success confirmation suppressed)
             } catch (error) {
                 alert('❌ Error loading file: ' + error.message);
             } finally {
@@ -4367,7 +4418,7 @@ Thank you for watching!`;
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
             
-            alert(`✅ Script saved as: ${filename}`);
+            // (success confirmation suppressed)
         }
         
         let grokKeySaveTimer = null;
@@ -4452,8 +4503,10 @@ Thank you for watching!`;
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             // Set initial state: Only Script checkbox checked by default
-            document.getElementById('checkScript').checked = true;
-            document.getElementById('checkAll').checked = false;
+            const checkScript = document.getElementById('checkScript');
+            const checkAll = document.getElementById('checkAll');
+            if (checkScript) checkScript.checked = true;
+            if (checkAll) checkAll.checked = false;
             toggleScriptInput(); // Initialize the UI based on Script checkbox state
 
             // Load persisted Grok API key
@@ -4489,6 +4542,26 @@ Thank you for watching!`;
                 grokKeyInput.addEventListener('blur', () => { persistGrokApiKey(true); });
                 grokKeyInput.addEventListener('change', () => { persistGrokApiKey(true); });
             }
+
+            const modeInput = document.getElementById('mode');
+            const topicInput = document.getElementById('createTopic');
+            const scriptInput = document.getElementById('scriptInput');
+
+            if (modeInput) {
+                modeInput.addEventListener('change', refreshOutputDirPreview);
+            }
+            if (topicInput) {
+                topicInput.addEventListener('input', refreshOutputDirPreview);
+                topicInput.addEventListener('change', refreshOutputDirPreview);
+                topicInput.addEventListener('blur', refreshOutputDirPreview);
+            }
+            if (scriptInput) {
+                scriptInput.addEventListener('input', refreshOutputDirPreview);
+                scriptInput.addEventListener('change', refreshOutputDirPreview);
+                scriptInput.addEventListener('blur', refreshOutputDirPreview);
+            }
+
+            refreshOutputDirPreview();
             
             // Add individual checkbox listeners to uncheck "All" when individual selections change
             const checkboxes = [
@@ -4518,7 +4591,7 @@ Thank you for watching!`;
         function saveGrokApiKey() {
             persistGrokApiKey(false).then((ok) => {
                 if (ok) {
-                    alert('✅ Grok API key saved (browser + server).');
+                    // (success confirmation suppressed)
                 }
             });
         }
@@ -4603,18 +4676,162 @@ Thank you for watching!`;
         }
 
         // ---------- Output Directory ----------
+        const DEFAULT_OUTPUT_DIR_ROOT = '~/Dev/Videos/Edited/Final';
+
+        function _safeTitleForOutputDir(rawTitle) {
+            const normalized = String(rawTitle || '')
+                .trim()
+                .replace(/^#\s*/, '')
+                .replace(/^Direct\s+Video\s*-\s*/i, '');
+
+            const cleaned = normalized
+                .trim()
+                .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
+                .replace(/\s+/g, '_')
+                .replace(/_+/g, '_')
+                .replace(/^_+|_+$/g, '');
+            return cleaned || 'untitled_script';
+        }
+
+        function _extractScriptTitleForOutputPreview(scriptText, fallback = '') {
+            const text = String(scriptText || '');
+
+            // HIGHEST priority: explicit "Title: ..." line at the top of the
+            // script (plain or markdown-bolded like "**Title:** Foo" or
+            // "Title: **Foo**"). This wins over per-chapter Heading: lines and
+            // any H1/Chapter-1 fallback so a user-supplied Title always sticks.
+            const titleMatch = text.match(/^[ \t]*\**[ \t]*Title[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*\**[ \t]*$/im);
+            if (titleMatch && titleMatch[1]) {
+                const titleVal = titleMatch[1].trim().replace(/^\*+|\*+$/g, '').trim();
+                if (titleVal) return titleVal;
+            }
+
+            // Prefer explicit Direct Video title format when present.
+            const directVideoMatch = text.match(/^\s*#\s*Direct\s+Video\s*-\s*(.+)$/im);
+            if (directVideoMatch && directVideoMatch[1]) {
+                return directVideoMatch[1].trim() || fallback;
+            }
+
+            const headingMatch = text.match(/^\s*Heading:\s*(.+)$/im);
+            if (headingMatch && headingMatch[1]) {
+                return headingMatch[1].trim() || fallback;
+            }
+
+            const h1Match = text.match(/^#\s+(.+)$/m);
+            if (h1Match && h1Match[1]) {
+                let title = h1Match[1].trim();
+                // If the h1 heading contains "Direct Video - " prefix, strip it
+                const stripDirectPrefix = title.match(/^Direct\s+Video\s*-\s*(.+)$/i);
+                if (stripDirectPrefix && stripDirectPrefix[1]) {
+                    title = stripDirectPrefix[1].trim();
+                }
+                return title || fallback;
+            }
+
+            const lines = text.split(/\r?\n/).slice(0, 20);
+            for (const rawLine of lines) {
+                const line = rawLine.trim();
+                if (!line) continue;
+                if (/^[#*\-\[]/.test(line)) continue;
+                if (/^[_=\-~]+$/.test(line)) continue;
+                if (line.length > 150) continue;
+                return line;
+            }
+
+            return fallback;
+        }
+
+        function _normalizePathForCompare(path) {
+            return String(path || '')
+                .trim()
+                .replace(/\\/g, '/')
+                .replace(/\/+$/, '')
+                .toLowerCase();
+        }
+
+        function _isDefaultOutputRoot(path) {
+            const normalizedPath = _normalizePathForCompare(path);
+            const normalizedDefault = _normalizePathForCompare(DEFAULT_OUTPUT_DIR_ROOT);
+
+            // API returns absolute paths (e.g. /Users/<user>/Dev/Videos/Edited/Final)
+            // while DEFAULT_OUTPUT_DIR_ROOT uses ~. Treat both as the same root.
+            return normalizedPath === normalizedDefault
+                || normalizedPath.endsWith('/dev/videos/edited/final');
+        }
+
+        function _getDefaultRootPrefix(path) {
+            const normalizedPath = String(path || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+            const m = normalizedPath.match(/^(.*\/dev\/videos\/edited\/final)(?:\/.*)?$/i);
+            return m ? m[1] : '';
+        }
+
+        function _getOutputDirBase() {
+            return (window.currentOutputDirBase || DEFAULT_OUTPUT_DIR_ROOT || '').trim();
+        }
+
+        function _getOutputDirPreviewTitle() {
+            const scriptIsGenerated = document.getElementById('checkScript')?.checked ?? true;
+            if (scriptIsGenerated) {
+                return (document.getElementById('createTopic')?.value || '').trim();
+            }
+
+            const scriptTitle = _extractScriptTitleForOutputPreview(
+                document.getElementById('scriptInput')?.value || '',
+                ''
+            );
+
+            // Fallback to topic to avoid empty path if user toggles modes mid-edit.
+            return scriptTitle || (document.getElementById('createTopic')?.value || '').trim();
+        }
+
+        // Debounce timer for auto-saving output dir as topic/script title changes
+        let _outputDirSaveTimer = null;
+
+        function refreshOutputDirPreview() {
+            const strip = document.getElementById('outputDirStrip');
+            const display = document.getElementById('outputDirDisplay');
+            const configuredBaseDir = _getOutputDirBase();
+            const title = _getOutputDirPreviewTitle();
+            const defaultRootPrefix = _getDefaultRootPrefix(configuredBaseDir);
+            const baseDir = defaultRootPrefix || configuredBaseDir;
+            const shouldAppendTitle = _isDefaultOutputRoot(configuredBaseDir) || !!defaultRootPrefix;
+            const previewDir = (shouldAppendTitle && title)
+                ? `${baseDir}/${_safeTitleForOutputDir(title)}`
+                : configuredBaseDir;
+
+            window.currentOutputDir = previewDir;
+
+            if (strip) strip.style.display = 'block';
+            if (display) display.textContent = previewDir || '(not set)';
+
+            // Persist preview path for backend processing, but do not create dirs here.
+            if (previewDir) {
+                clearTimeout(_outputDirSaveTimer);
+                _outputDirSaveTimer = setTimeout(async () => {
+                    try {
+                        await fetch('/api/output-dir', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ output_dir: previewDir }),
+                        });
+                        window.currentOutputDirBase = previewDir;
+                    } catch (e) {
+                        // silent — preview remains visible even if save fails
+                    }
+                }, 450);
+            }
+        }
+
         async function loadOutputDir() {
             try {
                 const resp = await fetch('/api/output-dir');
                 const data = await resp.json();
                 const dir = (data && data.success && data.output_dir) ? data.output_dir : '';
-                window.currentOutputDir = dir;
-                const strip = document.getElementById('outputDirStrip');
-                const display = document.getElementById('outputDirDisplay');
-                if (strip) strip.style.display = 'block';
-                if (display) display.textContent = dir || '(not set)';
+                window.currentOutputDirBase = dir;
+                refreshOutputDirPreview();
             } catch (e) {
                 console.warn('Could not load output dir:', e);
+                refreshOutputDirPreview();
             }
         }
 
@@ -4628,7 +4845,7 @@ Thank you for watching!`;
                 const data = await resp.json();
                 if (input) input.value = (data && data.success && data.output_dir) ? data.output_dir : '';
             } catch (e) {
-                if (input) input.value = window.currentOutputDir || '';
+                if (input) input.value = window.currentOutputDirBase || '';
             }
             if (modal) modal.style.display = 'flex';
             if (input) setTimeout(() => input.focus(), 50);
@@ -4656,9 +4873,8 @@ Thank you for watching!`;
                     status.textContent = '❌ ' + (data.error || 'Save failed');
                     return;
                 }
-                window.currentOutputDir = data.output_dir || '';
-                const display = document.getElementById('outputDirDisplay');
-                if (display) display.textContent = window.currentOutputDir || '(not set)';
+                window.currentOutputDirBase = data.output_dir || '';
+                refreshOutputDirPreview();
                 status.style.color = '#34d399';
                 status.textContent = '✅ Saved: ' + (data.output_dir || '(cleared)');
                 setTimeout(closeOutputDirModal, 800);
@@ -4680,7 +4896,7 @@ Thank you for watching!`;
             if (!modal) return;
             modal.style.display = 'flex';
             // Seed from current input value (or saved dir, or home)
-            const seed = (document.getElementById('outputDirInput').value || window.currentOutputDir || '').trim();
+            const seed = (document.getElementById('outputDirInput').value || window.currentOutputDirBase || '').trim();
             dirBrowserGo(seed);
         }
 
@@ -4794,9 +5010,7 @@ Thank you for watching!`;
                     if (!silent) alert('❌ Save failed: ' + (data.error || resp.status));
                     return;
                 }
-                const msg = '💾 Saved ' + data.total_saved + ' file(s) to ' + data.base_dir
-                          + (data.total_skipped ? '\n⚠️ ' + data.total_skipped + ' file(s) could not be located.' : '');
-                if (!silent) alert(msg);
+                // (success confirmation suppressed)
                 console.log('save-outputs report:', data.report);
                 const btn = document.getElementById('saveAllOutputsBtn');
                 if (btn) {

@@ -49,6 +49,7 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 SCRIPTCRAFT_SETTINGS_PATH = Path.home() / ".scriptcraft" / "web_gui_settings.json"
+DEFAULT_OUTPUT_PARENT = Path.home() / "Dev" / "Videos" / "Edited" / "Final"
 
 
 def _load_scriptcraft_settings() -> dict:
@@ -95,27 +96,62 @@ def _hydrate_env_from_settings() -> None:
 _hydrate_env_from_settings()
 
 
-def _get_output_base_dir() -> Optional[Path]:
-    """Return the user's configured base output directory, or None if unset/invalid."""
+def _get_output_parent_dir() -> Path:
+    """Return configured output directory as-is, or Final root as fallback."""
     try:
         s = _load_scriptcraft_settings()
         raw = (s.get("output_dir") or "").strip()
-        if not raw:
-            return None
-        p = Path(raw).expanduser()
-        return p if p.is_dir() else None
+        base = Path(raw).expanduser().resolve() if raw else DEFAULT_OUTPUT_PARENT
+    except Exception:
+        base = DEFAULT_OUTPUT_PARENT
+    if base.exists() and not base.is_dir():
+        logger.warning(f"⚠️ Configured output path is not a directory: {base}. Using default.")
+        base = DEFAULT_OUTPUT_PARENT
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _get_output_base_dir() -> Optional[Path]:
+    """Back-compat helper: returns the output parent directory."""
+    try:
+        return _get_output_parent_dir()
     except Exception:
         return None
 
 
-def _copy_to_output_subfolder(src, subfolder: str) -> Optional[Path]:
+def _get_run_output_dir(script_title: str, create: bool = True) -> Path:
+    """Resolve run directory for this execution.
+
+    Rules:
+    - If configured output_dir is the bare Final root, derive Final/<safe_title>.
+    - If configured output_dir is any subdirectory/custom path, use it exactly.
+    """
+    configured_dir = _get_output_parent_dir()
+    default_root = DEFAULT_OUTPUT_PARENT.resolve()
+
+    try:
+        configured_is_default_root = configured_dir.resolve() == default_root
+    except Exception:
+        configured_is_default_root = False
+
+    if configured_is_default_root:
+        run_dir = configured_dir / _safe_title_for_paths(script_title)
+    else:
+        run_dir = configured_dir
+
+    if create:
+        run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def _copy_to_output_subfolder(src, subfolder: str, script_title: Optional[str] = None) -> Optional[Path]:
     """Copy a source file into {output_base}/{subfolder}/ if a base dir is configured.
 
     Returns the destination path on success; None if no base dir, src missing, or copy fails.
     Best-effort: errors are logged but never raised so generation flows aren't disrupted.
     """
     try:
-        base = _get_output_base_dir()
+        base = _get_run_output_dir(script_title, create=True) if script_title else _get_output_parent_dir()
         if not base:
             return None
         if not src:
@@ -151,9 +187,7 @@ def _save_curl_commands_live(curl_commands, script_title: str) -> Optional[Path]
     try:
         if not curl_commands:
             return None
-        base = _get_output_base_dir()
-        if not base:
-            return None
+        base = _get_run_output_dir(script_title, create=True)
         safe_title = re.sub(r'[^A-Za-z0-9._-]+', '_',
                             (script_title or 'script').strip()).strip('._') or 'script'
         curl_dir = base / "curls"
@@ -169,6 +203,72 @@ def _save_curl_commands_live(curl_commands, script_title: str) -> Optional[Path]
     except Exception as e:
         logger.warning(f"⚠️ Live curl save failed: {e}")
         return None
+
+
+def _sync_generated_media_to_project(project_path: Path) -> dict:
+    """Copy generated media into DaVinci project folders.
+
+    - Grok videos: {project}/broll -> {project}/bRoll
+    - Generated images: fallback copy from ~/Dev/brollimages -> {project}/images
+      (only used when project/images does not already contain generated files)
+    """
+    import shutil as _shutil
+
+    project_path = Path(project_path)
+    broll_src = project_path / "broll"
+    broll_dst = project_path / "bRoll"
+    images_dst = project_path / "images"
+
+    broll_dst.mkdir(parents=True, exist_ok=True)
+    images_dst.mkdir(parents=True, exist_ok=True)
+
+    videos_copied = 0
+    images_copied = 0
+
+    # Sync Grok videos into DaVinci bRoll folder.
+    if broll_src.exists() and broll_src.is_dir():
+        for src in broll_src.rglob('*'):
+            if not src.is_file():
+                continue
+            if src.suffix.lower() not in {'.mp4', '.mov', '.m4v'}:
+                continue
+            dst = broll_dst / src.name
+            try:
+                if dst.exists() and dst.stat().st_size == src.stat().st_size:
+                    continue
+                _shutil.copy2(src, dst)
+                videos_copied += 1
+            except Exception as copy_err:
+                logger.warning(f"⚠️ Could not copy Grok video {src.name}: {copy_err}")
+
+    # If images are already generated into project/images, leave them as-is.
+    local_generated_images = []
+    for pattern in ('*.png', '*.jpg', '*.jpeg', '*.webp'):
+        local_generated_images.extend(images_dst.glob(pattern))
+
+    # Back-compat fallback: copy from legacy global brollimages folder.
+    if len(local_generated_images) == 0:
+        legacy_images_src = Path.home() / "Dev" / "brollimages"
+        if legacy_images_src.exists() and legacy_images_src.is_dir():
+            for src in legacy_images_src.iterdir():
+                if not src.is_file() or src.suffix.lower() not in {'.png', '.jpg', '.jpeg', '.webp'}:
+                    continue
+                dst = images_dst / src.name
+                try:
+                    if dst.exists() and dst.stat().st_size == src.stat().st_size:
+                        continue
+                    _shutil.copy2(src, dst)
+                    images_copied += 1
+                except Exception as copy_err:
+                    logger.warning(f"⚠️ Could not copy legacy image {src.name}: {copy_err}")
+
+    return {
+        "videos_copied": videos_copied,
+        "images_copied": images_copied,
+        "broll_source": str(broll_src),
+        "broll_target": str(broll_dst),
+        "images_target": str(images_dst),
+    }
 
 
 # Paths already added above - no need to duplicate
@@ -340,9 +440,88 @@ EMOTION_BY_VARIATION = {
 
 def _safe_title_for_paths(script_title: str) -> str:
     """Normalize script title to filesystem-safe folder name used by generators."""
-    safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '', (script_title or '').strip())
+    normalized = (script_title or '').strip()
+    normalized = re.sub(r'^\s*#\s*', '', normalized)
+    normalized = re.sub(r'^\s*Direct\s+Video\s*-\s*', '', normalized, flags=re.IGNORECASE)
+    safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '', normalized)
     safe_title = re.sub(r'\s+', '_', safe_title).strip('_.')
     return safe_title or "untitled_script"
+
+
+def _extract_script_title_for_output(script_text: str, fallback: str = "Untitled Script") -> str:
+    """Extract a stable script title from generated markdown content."""
+    text = script_text or ""
+
+    # HIGHEST priority: explicit "Title: ..." line (plain or **Title:** Foo).
+    # Wins over per-chapter Heading: lines and any H1/Chapter-1 fallback.
+    title_match = re.search(
+        r'^[ \t]*\**[ \t]*Title[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*\**[ \t]*$',
+        text,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if title_match:
+        title = title_match.group(1).strip().strip('*').strip()
+        if title:
+            return title
+
+    direct_video_match = re.search(
+        r'^\s*#\s*Direct\s+Video\s*-\s*(.+)$',
+        text,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if direct_video_match:
+        return direct_video_match.group(1).strip() or fallback
+
+    heading_match = re.search(r'^\s*Heading:\s*(.+)$', text, re.MULTILINE | re.IGNORECASE)
+    if heading_match:
+        return heading_match.group(1).strip() or fallback
+
+    h1_match = re.search(r'^#\s+(.+)$', text, re.MULTILINE)
+    if h1_match:
+        title = h1_match.group(1).strip()
+        title = re.sub(r'^\s*Direct\s+Video\s*-\s*', '', title, flags=re.IGNORECASE)
+        return title or fallback
+
+    for raw_line in text.splitlines()[:20]:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith(("#", "*", "-", "[")):
+            continue
+        if all(c in "_=-~" for c in line):
+            continue
+        if len(line) > 150:
+            continue
+        return line
+
+    return fallback
+
+
+async def _save_script_md_and_docx(script_title: str, script_content: str) -> tuple[Optional[str], Optional[str]]:
+    """Save script outputs as .md and .docx in {run_folder}/Script/."""
+    run_dir = _get_run_output_dir(script_title, create=True)
+    script_dir = run_dir / "Script"
+    script_dir.mkdir(parents=True, exist_ok=True)
+    safe_title = _safe_title_for_paths(script_title)
+
+    md_path = script_dir / f"{safe_title}.md"
+    md_path.write_text(script_content or "", encoding="utf-8")
+
+    docx_path = script_dir / f"{safe_title}.docx"
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent / "console_ui"))
+        from word_processing import convert_markdown_to_word
+
+        await convert_markdown_to_word(
+            markdown_content=script_content or "",
+            output_file_path=str(docx_path),
+            template_path=None,
+            title=script_title,
+        )
+        return str(md_path), str(docx_path)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not save DOCX output: {e}")
+        return str(md_path), None
 
 
 def _guess_emotion_from_filename(filename: str) -> str:
@@ -363,15 +542,7 @@ def _collect_all_thumbnail_entries(script_title: str, thumbnail_results: dict | 
     if output_dir_hint:
         thumbnail_dir = Path(output_dir_hint)
     else:
-        thumbnail_dir = (
-            Path.home()
-            / "Dev"
-            / "Videos"
-            / "Edited"
-            / "Final"
-            / _safe_title_for_paths(script_title)
-            / "thumbnails"
-        )
+        thumbnail_dir = _get_run_output_dir(script_title, create=False) / "thumbnails"
 
     generated_by_filename = {}
     for variation in generated_variations:
@@ -888,6 +1059,8 @@ async def process_script_creation(session_id, topic, audience, tone,
             return
 
         streamer = progress_streams[session_id]
+        resolved_script_title = topic
+        run_output_dir = _get_run_output_dir(resolved_script_title, create=True)
 
         # Initial progress
         streamer.send_update("🚀 Initializing script creation system...", 5)
@@ -1025,6 +1198,13 @@ async def process_script_creation(session_id, topic, audience, tone,
             # Use enhanced script as final content (EXACT COPY)
             final_script_content = enhanced_script_content
 
+            # Use the user's requested topic for folder/file naming.
+            # If topic is empty, fall back to a title extracted from the generated content.
+            extracted_script_title = _extract_script_title_for_output(final_script_content, fallback=topic)
+            resolved_script_title = (topic or extracted_script_title or "Untitled Script").strip()
+            run_output_dir = _get_run_output_dir(resolved_script_title, create=True)
+            print(f"📁 Using run folder: {run_output_dir}")
+
             # Extract tool links for YouTube description (EXACT COPY - NO TIMEOUTS!)
             tool_links = extract_tool_links_and_info(final_script_content)
             tool_count = len(tool_links.splitlines())
@@ -1111,10 +1291,13 @@ async def process_script_creation(session_id, topic, audience, tone,
                                 # Create filename with timestamp
                                 timestamp = time.strftime("%Y%m%d_%H%M%S")
                                 edl_filename = f"broll_markers_{timestamp}.edl"
+                                edl_dir = run_output_dir / "MDL"
+                                edl_dir.mkdir(parents=True, exist_ok=True)
+                                edl_path = edl_dir / edl_filename
 
                                 edl_result = broll_agent.create_edl_markers(
                                     broll_data=parsed_data,
-                                    output_file=edl_filename,
+                                    output_file=str(edl_path),
                                     frame_rate='24'
                                 )
 
@@ -1126,7 +1309,7 @@ async def process_script_creation(session_id, topic, audience, tone,
 
                                     # Read EDL content for frontend display
                                     try:
-                                        with open(edl_filename, 'r', encoding='utf-8') as f:
+                                        with open(edl_path, 'r', encoding='utf-8') as f:
                                             edl_content = f.read()
                                         print(
                                             f"✅ EDL content read ({len(edl_content)} bytes)")
@@ -1186,7 +1369,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                         try:
                             if image_info and image_info.get("success"):
                                 src = image_info.get("filename") or image_info.get("filepath")
-                                dst = _copy_to_output_subfolder(src, "images")
+                                dst = _copy_to_output_subfolder(src, "images", script_title=resolved_script_title)
                                 if dst:
                                     streamer.send_update(f"💾 Saved → {dst}", 99)
                         except Exception as copy_err:
@@ -1195,8 +1378,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                     # Generate images from ALL entries in the B-roll table
                     # max_images now refers to max ENTRIES (each gets 3 variations)
                     # Set to None to generate ALL entries with 3 variations each
-                    _broll_out_base = _get_output_base_dir()
-                    _broll_out_dir = (_broll_out_base / "images") if _broll_out_base else None
+                    _broll_out_dir = run_output_dir / "images"
                     image_results = broll_gen.generate_all_broll_images(
                         broll_table=broll_table,
                         script_title=topic,
@@ -1310,7 +1492,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                                     # Store curl commands separately (don't append to script)
                                     print(
                                         f"✅ Generated {curl_commands.count('curl --request POST')} curl commands")
-                                    _live_curl_dst = _save_curl_commands_live(curl_commands, topic)
+                                    _live_curl_dst = _save_curl_commands_live(curl_commands, resolved_script_title)
                                     if _live_curl_dst:
                                         print(f"💾 Saved curl commands → {_live_curl_dst}")
                                 else:
@@ -1520,7 +1702,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                     print("\n" + "="*70)
                     print("🖼️  THUMBNAIL GENERATION STARTING")
                     print("="*70)
-                    print(f"📝 Topic: {topic}")
+                    print(f"📝 Topic: {resolved_script_title}")
                     print(
                         f"📄 Script length: {len(final_script_content)} chars")
                     print(
@@ -1552,8 +1734,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                         f"   Environment API key: {api_key[:20]}... (length: {len(api_key)})")
 
                     # Route thumbnails into configured output_dir/thumbnails when available.
-                    _thumb_out_base = _get_output_base_dir()
-                    _thumb_out_dir = (_thumb_out_base / "thumbnails") if _thumb_out_base else None
+                    _thumb_out_dir = run_output_dir / "thumbnails"
                     # No api_key param - use environment
                     thumbnail_gen = EmotionalThumbnailGenerator(output_dir=_thumb_out_dir)
                     print(f"✅ Generator initialized successfully")
@@ -1567,7 +1748,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                     print(f"\n🎬 Calling generate_all_thumbnails()...")
                     thumb_cancel_evt = thumbnail_cancel_events.setdefault(session_id, _threading.Event())
                     thumbnail_results = thumbnail_gen.generate_all_thumbnails(
-                        script_title=topic,
+                        script_title=resolved_script_title,
                         script_content=final_script_content,
                         youtube_upload_details=youtube_upload_details,
                         headline_text=thumbnail_hook_text or None,
@@ -1641,9 +1822,15 @@ async def process_script_creation(session_id, topic, audience, tone,
                 finally:
                     thumbnail_cancel_events.pop(session_id, None)
 
+            saved_markdown_path, saved_docx_path = await _save_script_md_and_docx(
+                resolved_script_title,
+                final_script_with_tools,
+            )
+
             streamer.result = {
                 "success": True,
                 "enhanced_script": final_script_with_tools,
+                "script_title": resolved_script_title,
                 "demo_packages": demo_packages,
                 "youtube_details": youtube_upload_details,
                 "thumbnail_results": thumbnail_results,
@@ -1663,6 +1850,8 @@ async def process_script_creation(session_id, topic, audience, tone,
                 "edl_content": edl_content,
                 "edl_filename": edl_filename,
                 "curl_commands": curl_commands,
+                "markdown_path": saved_markdown_path,
+                "docx_path": saved_docx_path,
             }
 
             # Debug: Log what's in the result
@@ -1786,6 +1975,27 @@ async def process_existing_script(
                     script_title = line
                     logger.info(f"📰 ✅ Using line as title: '{script_title}'")
                     break
+
+                script_title = re.sub(r'^\s*#\s*', '', (script_title or '').strip())
+                script_title = re.sub(r'^\s*Direct\s+Video\s*-\s*', '', script_title, flags=re.IGNORECASE)
+                script_title = script_title or "Untitled Script"
+                run_output_dir = _get_run_output_dir(script_title, create=True)
+                logger.info(f"📁 Using run folder: {run_output_dir}")
+
+        # 0) FINAL OVERRIDE: an explicit "Title: ..." line in the script always
+        # wins over Heading: / H1 / first-line fallbacks. This keeps the
+        # DaVinci project name and run output folder consistent with the
+        # human-authored Title line (e.g. "Title: Homeschool Heroes with AI").
+        _explicit_title_match = re.search(
+            r'^[ \t]*\**[ \t]*Title[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*\**[ \t]*$',
+            script_content,
+            re.MULTILINE | re.IGNORECASE,
+        )
+        if _explicit_title_match:
+            _explicit_title = _explicit_title_match.group(1).strip().strip('*').strip()
+            if _explicit_title:
+                script_title = _explicit_title
+                logger.info(f"📰 ⭐ Overriding with explicit 'Title:' line: '{script_title}'")
 
         # Clean the script
         streamer.send_update("🧹 Cleaning script formatting...", 10)
@@ -2032,17 +2242,20 @@ async def process_existing_script(
                             import time
                             timestamp = time.strftime("%Y%m%d_%H%M%S")
                             edl_filename = f"broll_markers_{timestamp}.edl"
+                            edl_dir = run_output_dir / "MDL"
+                            edl_dir.mkdir(parents=True, exist_ok=True)
+                            edl_path = edl_dir / edl_filename
 
                             edl_result = broll_agent.create_edl_markers(
                                 broll_data=parsed_data,
-                                output_file=edl_filename,
+                                output_file=str(edl_path),
                                 frame_rate='24'
                             )
 
                             if edl_result.get("success"):
                                 # Read EDL content for frontend display
                                 try:
-                                    with open(edl_filename, 'r', encoding='utf-8') as f:
+                                    with open(edl_path, 'r', encoding='utf-8') as f:
                                         edl_content = f.read()
                                     logger.info(
                                         f"✅ EDL content read ({len(edl_content)} bytes)")
@@ -2127,7 +2340,7 @@ async def process_existing_script(
                     try:
                         if image_info and image_info.get("success"):
                             src = image_info.get("filename") or image_info.get("filepath")
-                            dst = _copy_to_output_subfolder(src, "images")
+                            dst = _copy_to_output_subfolder(src, "images", script_title=script_title)
                             if dst:
                                 streamer.send_update(f"💾 Saved → {dst}", pct)
                     except Exception as copy_err:
@@ -2136,8 +2349,7 @@ async def process_existing_script(
                 # Generate images from the B-roll table
                 # max_images now refers to max ENTRIES (each gets 3 variations)
                 # Set to None to generate ALL entries, or set a limit if needed
-                _broll_out_base = _get_output_base_dir()
-                _broll_out_dir = (_broll_out_base / "images") if _broll_out_base else None
+                _broll_out_dir = run_output_dir / "images"
                 image_results = broll_gen.generate_all_broll_images(
                     broll_table=broll_table,
                     script_title=script_title,
@@ -2347,8 +2559,7 @@ async def process_existing_script(
                     EmotionalThumbnailGenerator,
                 )
 
-                _thumb_out_base = _get_output_base_dir()
-                _thumb_out_dir = (_thumb_out_base / "thumbnails") if _thumb_out_base else None
+                _thumb_out_dir = run_output_dir / "thumbnails"
                 thumbnail_gen = EmotionalThumbnailGenerator(output_dir=_thumb_out_dir)
                 if thumbnail_hook_text_options:
                     logger.info(
@@ -2734,16 +2945,20 @@ def test_capture_page():
                 document.getElementById('progress').innerHTML = 'Test started...';
                 watchProgress(data.session_id);
             });
+                resp = make_response(render_template(
+                    "index.html",
+                    version=VERSION,
+                    agent_mode=(os.environ.get("FOUNDRY_API_MODE") or "v2").lower(),
+                    saved_grok_api_key=_resolve("grok_api_key", "XAI_API_KEY"),
+                    saved_heygen_api_key=_resolve("heygen_api_key", "HEYGEN_API_KEY"),
+                    saved_heygen_voice_id=_resolve("heygen_voice_id", "HEYGEN_VOICE_ID"),
+                    saved_google_api_key=_resolve("google_api_key", "GOOGLE_API_KEY"),
+                ))
+                resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+                resp.headers['Pragma'] = 'no-cache'
+                resp.headers['Expires'] = '0'
+                return resp
         }
-        
-        function watchProgress(sessionId) {
-            const eventSource = new EventSource('/progress/' + sessionId);
-            eventSource.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                document.getElementById('progress').innerHTML = 
-                    `Progress: ${data.progress}% - ${data.message}`;
-                if (data.done) {
-                    eventSource.close();
                     document.getElementById('result').innerHTML = 'Test completed!';
                 }
             };
@@ -3145,6 +3360,8 @@ def progress_stream(session_id):
                                 "edl_content": streamer.result.get("edl_content"),
                                 "edl_filename": streamer.result.get("edl_filename"),
                                 "curl_commands": streamer.result.get("curl_commands"),
+                                "markdown_path": streamer.result.get("markdown_path"),
+                                "docx_path": streamer.result.get("docx_path"),
                                 "broll_images": streamer.result.get("broll_images"),
                                 "grok_videos": streamer.result.get("grok_videos"),
                                 "broll_table": streamer.result.get("broll_table"),
@@ -3882,7 +4099,7 @@ def api_output_dir_get():
 
 @app.route("/api/output-dir", methods=["POST"])
 def api_output_dir_save():
-    """Persist the base output directory. Path is expanded (~) and created if missing."""
+    """Persist the base output directory path without creating it immediately."""
     try:
         data = request.get_json(silent=True) or {}
         raw = (data.get("output_dir") or "").strip()
@@ -3894,12 +4111,10 @@ def api_output_dir_save():
             return jsonify({"success": True, "output_dir": "", "cleared": True})
 
         expanded = Path(raw).expanduser().resolve()
-        try:
-            expanded.mkdir(parents=True, exist_ok=True)
-        except Exception as mk_err:
+        if expanded.exists() and not expanded.is_dir():
             return jsonify({
                 "success": False,
-                "error": f"Could not create directory: {mk_err}",
+                "error": "Path exists but is not a directory",
             }), 400
 
         settings["output_dir"] = str(expanded)
@@ -3997,34 +4212,24 @@ def api_create_dir():
 
 @app.route("/api/save-outputs", methods=["POST"])
 def api_save_outputs():
-    """Copy the current run's artifacts into the user's configured base output directory.
+    """Copy the current run's artifacts into {output_parent}/{safe_script_title}.
 
     Layout:
-        {base}/script/<title>.md
-        {base}/images/<broll image files>
-        {base}/broll/<grok video files>
-        {base}/MDL/<edl file>
-        {base}/thumbnails/<thumbnail files>
-        {base}/curls/<title>_curls.json
+        {run_dir}/script/<title>.md
+        {run_dir}/images/<broll image files>
+        {run_dir}/broll/<grok video files>
+        {run_dir}/MDL/<edl file>
+        {run_dir}/thumbnails/<thumbnail files>
+        {run_dir}/curls/<title>_curls.json
     """
     import shutil
     import re as _re
 
     try:
-        settings = _load_scriptcraft_settings()
-        base = (settings.get("output_dir") or "").strip()
-        if not base:
-            return jsonify({
-                "success": False,
-                "error": "No output directory configured. Click '📁 Output Dir' to set one first.",
-            }), 400
-
-        base_path = Path(base).expanduser().resolve()
-        base_path.mkdir(parents=True, exist_ok=True)
-
         data = request.get_json(silent=True) or {}
         title_raw = (data.get("title") or "script").strip() or "script"
         safe_title = _re.sub(r'[^A-Za-z0-9._-]+', '_', title_raw).strip('_') or "script"
+        base_path = _get_run_output_dir(title_raw, create=True)
 
         script_text = data.get("script") or ""
         edl_filename = (data.get("edl_filename") or "").strip()
@@ -4143,7 +4348,7 @@ def api_save_outputs():
             + len(report["thumbnails_skipped"])
         )
         logger.info(
-            f"💾 save-outputs → base={base_path} | saved={total_saved} skipped={total_skipped}"
+            f"💾 save-outputs → run_dir={base_path} | saved={total_saved} skipped={total_skipped}"
         )
         return jsonify({
             "success": True,
@@ -4191,13 +4396,13 @@ def grok_save_key():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-def _grok_get_output_dir() -> Path:
-    """Resolve directory for Grok video output: prefer {output_dir}/broll, fall back to ~/Dev/brollvideos."""
-    base = _get_output_base_dir()
-    if base is not None:
-        target = base / "broll"
+def _grok_get_output_dir(script_title: Optional[str] = None) -> Path:
+    """Resolve directory for Grok video output under the active run folder."""
+    if script_title:
+        base = _get_run_output_dir(script_title, create=True)
     else:
-        target = Path.home() / "Dev" / "brollvideos"
+        base = _get_output_parent_dir()
+    target = base / "broll"
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -4211,10 +4416,10 @@ def _grok_emit(session_id: str, payload: dict) -> None:
             pass
 
 
-def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str) -> None:
+def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, script_title: str = "") -> None:
     """Background worker: generate Grok videos one-by-one, streaming progress and honoring cancel."""
     cancel_evt = grok_video_cancel_events.setdefault(session_id, _threading.Event())
-    out_dir = _grok_get_output_dir()
+    out_dir = _grok_get_output_dir(script_title or None)
     videos: list = []
     failures: list = []
     total = len(selected_rows)
@@ -4370,6 +4575,7 @@ def grok_generate_selected_videos():
         data = request.get_json() or {}
         selected_rows = data.get("selected_rows") or []
         api_key = (data.get("api_key") or "").strip() or os.getenv("XAI_API_KEY", "").strip()
+        script_title = (data.get("script_title") or "").strip()
         session_id = (data.get("session_id") or "").strip() or str(uuid.uuid4())
 
         if not api_key:
@@ -4384,7 +4590,7 @@ def grok_generate_selected_videos():
 
         thread = _threading.Thread(
             target=_grok_generate_worker,
-            args=(session_id, selected_rows, api_key),
+            args=(session_id, selected_rows, api_key, script_title),
             daemon=True,
         )
         thread.start()
@@ -4778,7 +4984,7 @@ def serve_thumbnail(filename):
     """Serve generated thumbnail images"""
     try:
         search_roots = [
-            Path.home() / "Dev" / "Videos" / "Edited" / "Final",
+            _get_output_parent_dir(),
             Path.home() / "Dev" / "Thumbnails",
         ]
 
@@ -4807,7 +5013,7 @@ def serve_broll_image(filename):
     """Serve generated B-roll images"""
     try:
         search_roots = [
-            Path.home() / "Dev" / "Videos" / "Edited" / "Final",
+            _get_output_parent_dir(),
             Path.home() / "Dev" / "brollimages",
         ]
 
@@ -4844,6 +5050,8 @@ def serve_broll_video(filename):
         base = _get_output_base_dir()
         if base is not None:
             candidates.append(base / "broll" / safe_name)
+            for run_broll in base.glob("*/broll"):
+                candidates.append(run_broll / safe_name)
         candidates.append(Path.home() / "Dev" / "brollvideos" / safe_name)
         for file_path in candidates:
             if file_path.exists() and file_path.suffix.lower() == '.mp4':
@@ -4866,6 +5074,8 @@ def _resolve_media_file(filename: str, kind: str):
         base = _get_output_base_dir()
         if base is not None:
             candidates.append(base / "broll" / safe_name)
+            for run_broll in base.glob("*/broll"):
+                candidates.append(run_broll / safe_name)
         candidates.append(Path.home() / "Dev" / "brollvideos" / safe_name)
         for candidate in candidates:
             if candidate.exists() and candidate.suffix.lower() == '.mp4':
@@ -4874,7 +5084,7 @@ def _resolve_media_file(filename: str, kind: str):
 
     if kind == 'thumbnail':
         search_roots = [
-            Path.home() / "Dev" / "Videos" / "Edited" / "Final",
+            _get_output_parent_dir(),
             Path.home() / "Dev" / "Thumbnails",
         ]
         allowed_ext = {'.png', '.jpg', '.jpeg'}
@@ -4887,7 +5097,17 @@ def _resolve_media_file(filename: str, kind: str):
         return None
 
     if kind == 'edl':
-        # EDLs are written into the script working dir (cwd) by the B-roll agent.
+        base = _get_output_base_dir()
+        if base is not None:
+            direct = base / "MDL" / safe_name
+            if direct.exists() and direct.suffix.lower() == '.edl':
+                return direct
+            for run_mdl in base.glob("*/MDL"):
+                candidate = run_mdl / safe_name
+                if candidate.exists() and candidate.suffix.lower() == '.edl':
+                    return candidate
+
+        # Legacy fallback: previous flow wrote EDLs in cwd.
         candidate = Path.cwd() / safe_name
         if candidate.exists() and candidate.suffix.lower() == '.edl':
             return candidate
@@ -4901,7 +5121,7 @@ def _resolve_media_file(filename: str, kind: str):
 
     # images: search the same roots used by serve_broll_image
     search_roots = [
-        Path.home() / "Dev" / "Videos" / "Edited" / "Final",
+        _get_output_parent_dir(),
         Path.home() / "Dev" / "brollimages",
     ]
     allowed_ext = {'.png', '.jpg', '.jpeg', '.webp'}
@@ -4994,11 +5214,24 @@ def create_resolve_project():
         script_title = data.get("script_title", "AI_Video_Project")
         edl_content = data.get("edl_content")
         edl_filename = data.get("edl_filename")
+        generate_subtitles = bool(data.get("generate_subtitles", True))
 
         logger.info(f"📊 Script Title: {script_title}")
         logger.info(f"📄 EDL Filename: {edl_filename}")
         logger.info(
             f"📄 EDL Content Length: {len(edl_content) if edl_content else 0}")
+
+        # Ensure generated Grok videos/images are in expected DaVinci project folders.
+        try:
+            sync_info = _sync_generated_media_to_project(
+                _get_run_output_dir(script_title, create=True)
+            )
+            logger.info(
+                f"🎞️ Pre-Resolve media sync: {sync_info['videos_copied']} video(s), "
+                f"{sync_info['images_copied']} image(s) copied"
+            )
+        except Exception as sync_err:
+            logger.warning(f"⚠️ Media sync before create_resolve_project failed: {sync_err}")
 
         # Save EDL content to temp file if provided
         edl_file_path = None
@@ -5014,11 +5247,20 @@ def create_resolve_project():
                 logger.error(f"❌ Failed to write EDL temp file: {write_error}")
                 edl_file_path = None
 
+        project_root = _get_run_output_dir(script_title, create=True)
+        broll_media_path = str(project_root / "bRoll")
+        images_media_path = str(project_root / "images")
+
         # Import the DaVinci Resolve API module
         from davinci_resolve_api import create_resolve_project as create_project
 
         # Create the project with EDL file path
-        result = create_project(script_title, edl_file_path)
+        result = create_project(
+            script_title,
+            edl_file_path,
+            broll_folder=broll_media_path,
+            images_folder=images_media_path,
+        )
 
         # Clean up temp file
         if edl_file_path and os.path.exists(edl_file_path):
@@ -5057,6 +5299,35 @@ def check_aroll_videos():
     """Check if aRoll folder has any videos"""
     logger.info("=== CHECKING AROLL VIDEOS ===")
 
+    def _is_video_file(filename: str) -> bool:
+        return filename.lower().endswith((".mp4", ".mov", ".m4v"))
+
+    def _get_default_aroll_source():
+        """Return (folder_path, sorted_video_files) for default A-roll test clips.
+
+        Search order:
+        1. SCRIPTCRAFT_DEFAULT_AROLL_DIR env var (if set)
+        2. ~/Dev/Davinci/Template/aRoll
+        3. ~/Dev/Davinci/Template/Raw
+        """
+        candidate_dirs = []
+
+        env_dir = (os.environ.get("SCRIPTCRAFT_DEFAULT_AROLL_DIR") or "").strip()
+        if env_dir:
+            candidate_dirs.append(os.path.expanduser(env_dir))
+
+        candidate_dirs.append(os.path.expanduser("~/Dev/Davinci/Template/aRoll"))
+        candidate_dirs.append(os.path.expanduser("~/Dev/Davinci/Template/Raw"))
+
+        for folder in candidate_dirs:
+            if not os.path.isdir(folder):
+                continue
+            files = sorted([f for f in os.listdir(folder) if _is_video_file(f)])
+            if files:
+                return folder, files
+
+        return None, []
+
     try:
         data = request.json
         script_title = data.get("script_title", "")
@@ -5067,24 +5338,17 @@ def check_aroll_videos():
                 "error": "No script title provided"
             }), 400
 
-        # Sanitize title for folder name
-        import re
-        safe_title = re.sub(r'[<>:"/\\|?*]', '_', script_title)
-        safe_title = safe_title.replace(' ', '_')
-        safe_title = re.sub(r'_+', '_', safe_title)  # Collapse multiple underscores
-        safe_title = safe_title.strip('_')  # Remove leading/trailing underscores
-
-        # Build path to aRoll folder
-        base_path = os.path.expanduser("~/Dev/Videos/Edited/Final")
-        aroll_path = os.path.join(base_path, safe_title, "aRoll")
+        project_path = _get_run_output_dir(script_title, create=False)
+        aroll_path = str(project_path / "aRoll")
 
         logger.info(f"📁 Script title: '{script_title}'")
-        logger.info(f"📁 Safe title: '{safe_title}'")
+        logger.info(f"📁 Run folder: '{project_path}'")
         logger.info(f"📁 Checking aroll path: {aroll_path}")
         logger.info(f"📁 Path exists: {os.path.exists(aroll_path)}")
 
         if not os.path.exists(aroll_path):
-            # List what's actually in the base path to help debug
+            # List what's actually in the output parent path to help debug
+            base_path = _get_output_parent_dir()
             if os.path.exists(base_path):
                 logger.info(f"📁 Base path exists, folders found:")
                 for folder in os.listdir(base_path):
@@ -5093,23 +5357,35 @@ def check_aroll_videos():
                 logger.info(f"📁 Base path does not exist: {base_path}")
 
             logger.info(f"📁 aRoll folder does not exist yet")
+
+            default_source, default_videos = _get_default_aroll_source()
             return jsonify({
                 "success": True,
                 "video_count": 0,
-                "videos": []
+                "videos": [],
+                "default_available": len(default_videos) > 0,
+                "default_video_count": len(default_videos),
+                "default_source": default_source,
+                "default_videos": default_videos,
             })
 
-        # Count .mp4 files in aRoll folder
-        video_files = [f for f in os.listdir(aroll_path) if f.endswith('.mp4')]
+        # Count local project video files in aRoll folder
+        video_files = [f for f in os.listdir(aroll_path) if _is_video_file(f)]
 
         logger.info(f"✅ Found {len(video_files)} video(s) in aRoll folder:")
         for vf in video_files:
             logger.info(f"   - {vf}")
 
+        default_source, default_videos = _get_default_aroll_source()
+
         return jsonify({
             "success": True,
             "video_count": len(video_files),
-            "videos": video_files
+            "videos": video_files,
+            "default_available": len(default_videos) > 0,
+            "default_video_count": len(default_videos),
+            "default_source": default_source,
+            "default_videos": default_videos,
         })
 
     except Exception as e:
@@ -5131,26 +5407,72 @@ def create_resolve_with_videos():
         script_title = data.get("script_title", "AI_Video_Project")
         edl_content = data.get("edl_content")
         edl_filename = data.get("edl_filename")
+        generate_subtitles = bool(data.get("generate_subtitles", True))
 
         logger.info(f"📊 Script Title: {script_title}")
 
-        # Sanitize title for folder name
-        import re
-        safe_title = re.sub(r'[<>:"/\\|?*]', '_', script_title)
-        safe_title = safe_title.replace(' ', '_')
-        safe_title = re.sub(r'_+', '_', safe_title)  # Collapse multiple underscores
-        safe_title = safe_title.strip('_')  # Remove leading/trailing underscores
+        # Ensure generated Grok videos/images are in expected DaVinci project folders.
+        try:
+            sync_info = _sync_generated_media_to_project(
+                _get_run_output_dir(script_title, create=True)
+            )
+            logger.info(
+                f"🎞️ Pre-Resolve media sync: {sync_info['videos_copied']} video(s), "
+                f"{sync_info['images_copied']} image(s) copied"
+            )
+        except Exception as sync_err:
+            logger.warning(f"⚠️ Media sync before create_resolve_with_videos failed: {sync_err}")
 
-        # Build path to aRoll folder
-        base_path = os.path.expanduser("~/Dev/Videos/Edited/Final")
-        aroll_path = os.path.join(base_path, safe_title, "aRoll")
+        def _is_video_file(filename: str) -> bool:
+            return filename.lower().endswith((".mp4", ".mov", ".m4v"))
+
+        def _get_default_aroll_source():
+            candidate_dirs = []
+
+            env_dir = (os.environ.get("SCRIPTCRAFT_DEFAULT_AROLL_DIR") or "").strip()
+            if env_dir:
+                candidate_dirs.append(os.path.expanduser(env_dir))
+
+            candidate_dirs.append(os.path.expanduser("~/Dev/Davinci/Template/aRoll"))
+            candidate_dirs.append(os.path.expanduser("~/Dev/Davinci/Template/Raw"))
+
+            for folder in candidate_dirs:
+                if not os.path.isdir(folder):
+                    continue
+                files = sorted([f for f in os.listdir(folder) if _is_video_file(f)])
+                if files:
+                    return folder, files
+
+            return None, []
+
+        use_default_aroll = bool(data.get("use_default_aroll", False))
+
+        project_path = _get_run_output_dir(script_title, create=False)
+        aroll_path = str(project_path / "aRoll")
 
         # Get list of video files
         video_files = []
         if os.path.exists(aroll_path):
-            video_files = [f for f in os.listdir(
-                aroll_path) if f.endswith('.mp4')]
+            video_files = [f for f in os.listdir(aroll_path) if _is_video_file(f)]
             logger.info(f"📹 Found {len(video_files)} video(s) in aroll folder")
+
+        # Optional fallback for testing DaVinci flow without downloaded HeyGen aRoll.
+        used_default_aroll = False
+        default_source = None
+        if use_default_aroll and len(video_files) == 0:
+            default_source, default_videos = _get_default_aroll_source()
+            if default_source and default_videos:
+                logger.info(
+                    f"🧪 Using default A-roll test clips from: {default_source} "
+                    f"({len(default_videos)} videos)"
+                )
+                aroll_path = default_source
+                video_files = default_videos
+                used_default_aroll = True
+            else:
+                logger.warning(
+                    "⚠️ use_default_aroll requested, but no default clips were found"
+                )
 
         # Sort videos by chapter/part order
         def parse_chapter_info(filename):
@@ -5224,13 +5546,25 @@ def create_resolve_with_videos():
         logger.info(f"   aRoll path: {aroll_path}")
         logger.info(f"   Videos to add: {len(sorted_videos)}")
 
+        broll_media_path = str(project_path / "bRoll")
+        images_media_path = str(project_path / "images")
+
         # Create the project with videos
         result = create_resolve_project_with_videos(
             script_title,
             edl_file_path,
             aroll_path,
-            sorted_videos
+            sorted_videos,
+            broll_media_path,
+            images_media_path,
+            generate_subtitles,
         )
+
+        if isinstance(result, dict):
+            result["used_default_aroll"] = used_default_aroll
+            result["aroll_source"] = aroll_path
+            if used_default_aroll:
+                result["default_aroll_source"] = default_source
 
         # Clean up temp file
         if edl_file_path and os.path.exists(edl_file_path):
@@ -5379,16 +5713,9 @@ def setup_project():
         import shutil
         from pathlib import Path
 
-        # Create safe directory name
-        safe_title = "".join(
-            c for c in script_title
-            if c.isalnum() or c in (' ', '-', '_')
-        ).rstrip()
-        safe_title = safe_title.replace(' ', '_')
-
         # Define paths
-        base_path = Path.home() / "Dev" / "Videos" / "Edited" / "Final"
-        project_path = base_path / safe_title
+        safe_title = _safe_title_for_paths(script_title)
+        project_path = _get_run_output_dir(script_title, create=True)
         template_path = Path.home() / "Dev" / "Davinci" / "Template"
 
         logger.info(f"📁 Creating project folder: {project_path}")
@@ -5456,40 +5783,15 @@ def setup_project():
         script_dir = project_path / "script"
         script_dir.mkdir(exist_ok=True)
 
-        # Copy B-roll images to images folder if they exist
-        broll_images_dir = Path.home() / "Dev" / "brollimages"
-        images_dir = project_path / "images"
-
-        if broll_images_dir.exists():
-            images_dir.mkdir(exist_ok=True)
-
-            # Get all image files from broll images directory
-            image_files = list(broll_images_dir.glob("*.png")) + \
-                list(broll_images_dir.glob("*.jpg")) + \
-                list(broll_images_dir.glob("*.jpeg")) + \
-                list(broll_images_dir.glob("*.webp"))
-
-            if image_files:
-                logger.info(
-                    f"📸 Found {len(image_files)} B-roll images to copy")
-                copied_count = 0
-
-                for image_file in image_files:
-                    try:
-                        dest_file = images_dir / image_file.name
-                        shutil.copy2(image_file, dest_file)
-                        copied_count += 1
-                    except Exception as copy_error:
-                        logger.warning(
-                            f"⚠️ Could not copy {image_file.name}: {copy_error}")
-
-                logger.info(
-                    f"✅ Copied {copied_count} B-roll images to project")
-            else:
-                logger.info("ℹ️ No B-roll images found to copy")
-        else:
-            logger.info(
-                f"ℹ️ B-roll images directory not found: {broll_images_dir}")
+        # Sync generated media into DaVinci project structure.
+        # - Grok videos: broll -> bRoll
+        # - Generated images already produced in project/images are kept there
+        # - Legacy fallback copies from ~/Dev/brollimages when needed
+        media_sync = _sync_generated_media_to_project(project_path)
+        logger.info(
+            f"🎞️ Media sync complete: {media_sync['videos_copied']} video(s) -> bRoll, "
+            f"{media_sync['images_copied']} image(s) copied"
+        )
 
         # Save script as Word document if content provided
         if script_content:
@@ -5521,7 +5823,8 @@ def setup_project():
         return jsonify({
             "success": True,
             "project_path": str(project_path),
-            "script_dir": str(script_dir)
+            "script_dir": str(script_dir),
+            "media_sync": media_sync,
         })
 
     except Exception as e:
@@ -5682,9 +5985,7 @@ def download_heygen_video():
 
             # Save to project aroll folder if script title provided
             if script_title:
-                base_path = Path.home() / "Dev" / "Videos" / "Edited"
-                base_path = base_path / "Final"
-                project_path = base_path / safe_title
+                project_path = _get_run_output_dir(script_title, create=True)
                 aroll_path = project_path / "aRoll"
 
                 # Create project folders if they don't exist

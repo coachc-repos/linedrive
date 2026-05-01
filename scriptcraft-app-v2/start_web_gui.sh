@@ -18,9 +18,19 @@ if [ -d "$REPO_ROOT/venv314_v2" ]; then
     source "$REPO_ROOT/venv314_v2/bin/activate"
     VENV_PYTHON="$REPO_ROOT/venv314_v2/bin/python3"
     echo "✅ v2 virtual environment activated"
+elif [ -d "$REPO_ROOT/venv314" ]; then
+    echo "🐍 Activating fallback virtual environment (venv314)..."
+    source "$REPO_ROOT/venv314/bin/activate"
+    VENV_PYTHON="$REPO_ROOT/venv314/bin/python3"
+    echo "✅ Fallback virtual environment activated"
+elif [ -d "$REPO_ROOT/.venv" ]; then
+    echo "🐍 Activating fallback virtual environment (.venv)..."
+    source "$REPO_ROOT/.venv/bin/activate"
+    VENV_PYTHON="$REPO_ROOT/.venv/bin/python3"
+    echo "✅ Fallback virtual environment activated"
 else
-    echo "❌ venv314_v2 not found at $REPO_ROOT/venv314_v2"
-    echo "   Create it with:  python3.14 -m venv $REPO_ROOT/venv314_v2"
+    echo "❌ No supported virtual environment found"
+    echo "   Checked: $REPO_ROOT/venv314_v2, $REPO_ROOT/venv314, $REPO_ROOT/.venv"
     exit 1
 fi
 echo ""
