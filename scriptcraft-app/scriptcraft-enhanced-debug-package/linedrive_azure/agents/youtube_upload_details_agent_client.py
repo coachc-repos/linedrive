@@ -127,8 +127,9 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         duration_mins = estimated_seconds // 60
         duration_secs = estimated_seconds % 60
         calculated_duration = f"{duration_mins}:{duration_secs:02d}"
-        
-        print(f"📊 Client-side validation: {word_count} words = {calculated_duration} estimated duration")
+
+        print(
+            f"📊 Client-side validation: {word_count} words = {calculated_duration} estimated duration")
 
         # Build video length context (only user-provided target, not our calculation)
         length_context = ""
@@ -291,9 +292,10 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
 
         # Parse the response to extract structured data
         response_text = result.get("response", "")
-        
+
         # VALIDATION: Check if agent's timestamps exceed our calculated duration
-        self._validate_timestamps(response_text, estimated_seconds, calculated_duration)
+        self._validate_timestamps(
+            response_text, estimated_seconds, calculated_duration)
 
         return {
             "success": result.get("success", False),
@@ -376,54 +378,56 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
             "tags_count": len(self.extract_tags(upload_details)),
             "description_length": len(self.extract_description(upload_details)),
         }
-    
+
     def _validate_timestamps(self, upload_details: str, max_seconds: int, duration_str: str) -> None:
         """Validate that agent's timestamps don't exceed calculated duration"""
         import re
-        
+
         # Extract all timestamps from the response (format: MM:SS or M:SS or H:MM:SS)
         timestamp_pattern = r'(?:^|\s)(\d{1,2}):([0-5]\d)(?::([0-5]\d))?'
         matches = re.findall(timestamp_pattern, upload_details)
-        
+
         if not matches:
             print("⚠️ No timestamps found in agent response")
             return
-        
+
         max_timestamp = 0
         max_timestamp_str = "0:00"
         invalid_count = 0
-        
+
         for match in matches:
             hours = 0
             minutes = int(match[0])
             seconds = int(match[1])
-            
+
             # Check if H:MM:SS format (match[2] would be seconds, match[1] would be minutes)
             if match[2]:  # H:MM:SS format
                 hours = minutes
                 minutes = seconds
                 seconds = int(match[2])
-            
+
             # Convert to total seconds
             total_seconds = (hours * 3600) + (minutes * 60) + seconds
-            
+
             if total_seconds > max_timestamp:
                 max_timestamp = total_seconds
                 if hours > 0:
                     max_timestamp_str = f"{hours}:{minutes:02d}:{seconds:02d}"
                 else:
                     max_timestamp_str = f"{minutes}:{seconds:02d}"
-            
+
             # Check if exceeds calculated duration
             if total_seconds > max_seconds:
                 invalid_count += 1
-        
+
         # Report validation results
         if invalid_count > 0:
-            print(f"❌ VALIDATION FAILED: {invalid_count} timestamp(s) exceed calculated duration")
+            print(
+                f"❌ VALIDATION FAILED: {invalid_count} timestamp(s) exceed calculated duration")
             print(f"   Max timestamp in response: {max_timestamp_str}")
             print(f"   Calculated duration limit: {duration_str}")
             print(f"   Agent should calculate duration from word count!")
         else:
-            print(f"✅ VALIDATION PASSED: All timestamps within {duration_str} limit")
+            print(
+                f"✅ VALIDATION PASSED: All timestamps within {duration_str} limit")
             print(f"   Max timestamp found: {max_timestamp_str}")

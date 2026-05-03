@@ -1,54 +1,201 @@
 #!/usr/bin/env python3
 """
-BaseAgentClient - Generic Azure AI Agent Client
+BaseAgentClient (v2 app) - DUAL-MODE Azure AI Agent Client
 
-This module provides a base client class for interacting with Azure AI Agents
-in the linedrive project. All specific agents inherit from this base class.
+Supports BOTH:
+  - "v1" mode (classic Assistants API via azure-ai-agents AgentsClient).
+    Same agent IDs and behavior as scriptcraft-app (the working v1 app).
+  - "v2" mode (new Microsoft Foundry Agents experience: Conversations + Responses
+    via project.get_openai_client() with agent_reference by NAME).
+
+The active mode is controlled by the env var FOUNDRY_API_MODE ("v1" or "v2"),
+which the web GUI sets at runtime via a toggle.
+
+Subclasses do NOT need to change. They keep calling
+    super().__init__(agent_id="asst_...", agent_name="...")
+and using self.create_thread() / self.send_message(...).
+The base class transparently dispatches to the right backend.
 """
 
-import time
 import os
-from typing import Optional, Dict, Any, List
-from azure.ai.projects import AIProjectClient
-from azure.identity import DefaultAzureCredential
-from azure.ai.agents.models import ListSortOrder
+import time
 from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
+
+from azure.identity import DefaultAzureCredential
+
+# v2 / new Foundry SDK (azure-ai-projects >= 2.0.0)
+from azure.ai.projects import AIProjectClient
+
+# Classic Assistants SDK still ships in azure-ai-agents 1.1.0 (separate package)
+from azure.ai.agents import AgentsClient
+from azure.ai.agents.models import ListSortOrder
+
+PROJECT_ENDPOINT = (
+    "https://linedrive-ai-foundry.services.ai.azure.com/api/projects/linedriveAgents"
+)
+
+DEFAULT_OPENAI_API_VERSION = "2024-12-01-preview"
+
+# Map v1 agent_name -> v2 (new Foundry) agent_name. Lookup is case-insensitive
+# (see _resolve_v2_name). Add entries for any v1 name that does not match the
+# corresponding v2 name verbatim, including alternative casings/prefixes used
+# by v1 client constructors.
+V1_TO_V2_AGENT_NAME: Dict[str, str] = {
+    "Script-Review-Agent": "Script-Reviewer-Agent",
+    "Script-Quotes-and-Statistics-Agent": "Statistics-and-Quotes-Finder-Agent",
+    # YouTube upload (v1 client uses capital T in constructor)
+    "Youtube-Upload-Details-Agent": "Script-Youtube-Upload-Details-Agent",
+    "YouTube-Upload-Details-Agent": "Script-Youtube-Upload-Details-Agent",
+    # Hook-and-Summary (v1 client constructor omits the "Script-" prefix)
+    "Hook-and-Summary-Agent": "Script-Hook-and-Summary-Agent",
+    "Script-Hook-and-Summary-Agent": "Script-Hook-and-Summary-Agent",
+    "Script-Repeat-and-Flow-Agent": "Script-Repeat-and-Flow-Agent",
+    "Script-Polisher-Agent": "Script-Polisher-Agent",
+    "Script-bRoll-Agent": "Script-bRoll-Agent",
+    "Script-Writer-Agent": "Script-Writer-Agent",
+    "Script-Topic-Assistant-Agent": "Script-Topic-Assistant-Agent",
+    "Script-Demo-Assistant-Agent": "Script-Demo-Assistant-Agent",
+}
+
+# Lower-cased lookup for robustness against minor casing differences.
+_V1_TO_V2_LOWER: Dict[str, str] = {k.lower(): v for k, v in V1_TO_V2_AGENT_NAME.items()}
+
+
+def _resolve_v2_name(v1_name: str) -> str:
+    """Return the v2 agent name for a given v1 name (case-insensitive). Falls back to the v1 name."""
+    if not v1_name:
+        return v1_name
+    return _V1_TO_V2_LOWER.get(v1_name.lower(), v1_name)
+
+
+def get_api_mode() -> str:
+    """Return 'v1' (default, classic) or 'v2' (new Foundry) based on FOUNDRY_API_MODE env."""
+    mode = (os.environ.get("FOUNDRY_API_MODE") or "v1").strip().lower()
+    return "v2" if mode == "v2" else "v1"
 
 
 class BaseAgentClient(ABC):
-    """Base client for Azure AI Agent interactions"""
+    """Dual-mode base client. Public surface is unchanged from the v1 app."""
 
     def __init__(self, agent_id: str, agent_name: str = None):
-        """
-        Initialize the AI Agent connection
+        self.agent_id = agent_id
+        self.agent_name = agent_name or f"Agent-{agent_id}"
+        self.v2_agent_name = _resolve_v2_name(self.agent_name)
+        self._credential = DefaultAzureCredential()
+        # Lazy-init clients so we never touch the v1 SDK if user only uses v2 (and vice-versa)
+        self._v1_client: Optional[AgentsClient] = None
+        self._v2_project: Optional[AIProjectClient] = None
+        self._v2_openai = None
+        self._v1_validated = False
+        self._active_api_mode: Optional[str] = None
 
-        Args:
-            agent_id: The Azure AI Agent ID
-            agent_name: Optional display name for the agent
-        """
-        self.project = AIProjectClient(
-            credential=DefaultAzureCredential(),
-            api_key=os.environ.get("AI_PROJECT_API_KEY"),
-            endpoint="https://linedrive-ai-foundry.services.ai.azure.com/api/projects/linedriveAgents",
+    def _get_openai_api_version(self) -> str:
+        api_version = (
+            os.environ.get("OPENAI_API_VERSION")
+            or os.environ.get("AZURE_OPENAI_API_VERSION")
+            or DEFAULT_OPENAI_API_VERSION
         )
+        os.environ.setdefault("OPENAI_API_VERSION", api_version)
+        return api_version
 
-        try:
-            # Get the specific agent by ID
-            self.agent = self.project.agents.get_agent(agent_id)
-            self.agent_id = agent_id
-            self.agent_name = agent_name or getattr(
-                self.agent, "name", f"Agent-{agent_id}"
+    # ------------------------------------------------------------------ helpers
+    def _v1(self) -> AgentsClient:
+        if self._v1_client is None:
+            self._v1_client = AgentsClient(
+                endpoint=PROJECT_ENDPOINT, credential=self._credential
             )
-        except Exception as e:
-            raise Exception(f"Failed to initialize agent {agent_id}: {e}")
+        if not self._v1_validated:
+            # Retry validation to ride through transient SSL/network blips
+            # (e.g. SSL: UNEXPECTED_EOF_WHILE_READING from Azure front door).
+            import time as _time
+            last_err = None
+            for attempt in range(3):
+                try:
+                    self._v1_client.get_agent(self.agent_id)
+                    self._v1_validated = True
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    msg = str(e).lower()
+                    transient = (
+                        "ssl" in msg
+                        or "eof" in msg
+                        or "timed out" in msg
+                        or "timeout" in msg
+                        or "connection" in msg
+                        or "reset" in msg
+                    )
+                    if not transient or attempt == 2:
+                        break
+                    _time.sleep(1.5 * (attempt + 1))
+            if last_err is not None:
+                raise Exception(
+                    f"Failed to initialize v1 agent {self.agent_id}: {last_err}"
+                )
+        return self._v1_client
 
+    def _v2(self):
+        if self._v2_project is None:
+            self._v2_project = AIProjectClient(
+                endpoint=PROJECT_ENDPOINT, credential=self._credential
+            )
+            self._v2_openai = self._v2_project.get_openai_client(
+                api_version=self._get_openai_api_version()
+            )
+        return self._v2_project, self._v2_openai
+
+    # ------------------------------------------------------------------ public API
     def create_thread(self) -> Optional[Any]:
-        """Create a new conversation thread"""
+        """Create a new conversation/thread for the active API mode.
+        Returned object exposes an `.id` attribute that callers should pass back to send_message."""
+        mode = get_api_mode()
+        if mode == "v2":
+            import time as _time
+            last_err = None
+            for attempt in range(3):
+                try:
+                    _, openai = self._v2()
+                    conv = openai.conversations.create()
+                    self._active_api_mode = "v2"
+                    return conv  # has .id
+                except Exception as e:
+                    last_err = e
+                    msg = str(e).lower()
+                    transient = (
+                        "ssl" in msg
+                        or "eof" in msg
+                        or "timed out" in msg
+                        or "timeout" in msg
+                        or "connection" in msg
+                        or "reset" in msg
+                        or "remote disconnected" in msg
+                        or "broken pipe" in msg
+                    )
+                    if not transient or attempt == 2:
+                        break
+                    # Force re-init of the openai client on next attempt in case
+                    # the underlying httpx session is in a bad state.
+                    self._v2_project = None
+                    self._v2_openai = None
+                    _time.sleep(1.5 * (attempt + 1))
+            fallback_msg = str(last_err).lower() if last_err is not None else ""
+            if "404" in fallback_msg or "resource not found" in fallback_msg:
+                print(
+                    "⚠️ v2 conversation endpoint unavailable for this project; falling back to v1 agent threads"
+                )
+                thread = self._v1().threads.create()
+                self._active_api_mode = "v1"
+                return thread
+            raise Exception(f"Failed to create v2 conversation: {last_err}")
+        # v1
         try:
-            thread = self.project.agents.threads.create()
+            thread = self._v1().threads.create()
+            self._active_api_mode = "v1"
             return thread
         except Exception as e:
-            raise Exception(f"Failed to create thread: {e}")
+            raise Exception(f"Failed to create v1 thread: {e}")
 
     def send_message(
         self,
@@ -58,124 +205,220 @@ class BaseAgentClient(ABC):
         timeout: int = 300,
         max_retries: int = 3,
     ) -> Dict[str, Any]:
-        """
-        Send a message to the agent and get response with retry logic
+        active_mode = self._active_api_mode or get_api_mode()
+        if active_mode == "v2":
+            return self._send_v2(thread_id, message_content, timeout, max_retries)
+        return self._send_v1(
+            thread_id, message_content, show_sources, timeout, max_retries
+        )
 
-        Args:
-            thread_id: The conversation thread ID
-            message_content: The user's message
-            show_sources: Whether to include source information in response
-            timeout: Maximum time to wait for response (seconds)
-            max_retries: Maximum number of retry attempts (default: 3)
+    # ------------------------------------------------------------------ v2 backend
+    def _send_v2(
+        self,
+        conversation_id: str,
+        message_content: str,
+        timeout: int,
+        max_retries: int,
+    ) -> Dict[str, Any]:
+        _, openai = self._v2()
+        delay = 5
+        last_err: Optional[str] = None
 
-        Returns:
-            Dictionary with 'success', 'response', 'sources', and 'error' keys
-        """
-        # Check for any active runs on this thread and cancel them
+        for attempt in range(max_retries + 1):
+            try:
+                t0 = time.time()
+                print(
+                    f"⏱️ [v2] Running {self.v2_agent_name} on conv {conversation_id} (timeout={timeout}s)..."
+                )
+                response = openai.responses.create(
+                    input=message_content,
+                    conversation=conversation_id,
+                    extra_body={
+                        "agent_reference": {
+                            "name": self.v2_agent_name,
+                            "type": "agent_reference",
+                        }
+                    },
+                    timeout=timeout,
+                )
+                elapsed = time.time() - t0
+                print(f"✅ [v2] {self.v2_agent_name} completed in {elapsed:.1f}s")
+
+                text_parts: List[str] = []
+                for item in getattr(response, "output", []) or []:
+                    if getattr(item, "type", None) != "message":
+                        continue
+                    for block in getattr(item, "content", []) or []:
+                        txt = getattr(block, "text", None)
+                        if isinstance(txt, str) and txt:
+                            text_parts.append(txt)
+                        elif isinstance(block, dict) and isinstance(
+                            block.get("text"), str
+                        ):
+                            text_parts.append(block["text"])
+                response_text = "\n".join(text_parts).strip()
+
+                if not response_text:
+                    return {
+                        "success": False,
+                        "error": "Empty response from v2 agent",
+                        "response": None,
+                        "sources": [],
+                    }
+                return {
+                    "success": True,
+                    "response": response_text,
+                    "sources": [],
+                    "error": None,
+                }
+
+            except Exception as e:
+                last_err = str(e)
+                low = last_err.lower()
+                is_retryable = (
+                    "rate" in low
+                    or "429" in last_err
+                    or "timeout" in low
+                    or "timed out" in low
+                    or "connection" in low
+                    or "ssl" in low
+                    or "eof" in low
+                    or "reset" in low
+                    or "remote disconnected" in low
+                    or "broken pipe" in low
+                )
+                if is_retryable and attempt < max_retries:
+                    print(
+                        f"⏳ [v2] {last_err[:120]} — retry {attempt+1}/{max_retries} in {delay}s"
+                    )
+                    # Reset openai client on connection-class errors so we get a fresh session
+                    if "connection" in low or "ssl" in low or "eof" in low or "reset" in low:
+                        self._v2_project = None
+                        self._v2_openai = None
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                break
+
+        return {
+            "success": False,
+            "error": last_err or "v2 send failed",
+            "response": None,
+            "sources": [],
+        }
+
+    # ------------------------------------------------------------------ v1 backend (classic Assistants)
+    def _send_v1(
+        self,
+        thread_id: str,
+        message_content: str,
+        show_sources: bool,
+        timeout: int,
+        max_retries: int,
+    ) -> Dict[str, Any]:
+        client = self._v1()
+
+        # Cancel any active runs on the thread first
         try:
-            runs = self.project.agents.runs.list(thread_id=thread_id)
+            runs = client.runs.list(thread_id=thread_id)
             for run in runs:
                 if run.status in ["in_progress", "queued", "requires_action"]:
                     print(
-                        f"⚠️ Found active run {run.id} with status {run.status}, cancelling...")
+                        f"⚠️ Found active run {run.id} with status {run.status}, cancelling..."
+                    )
                     try:
-                        self.project.agents.runs.cancel(
-                            thread_id=thread_id, run_id=run.id)
+                        client.runs.cancel(thread_id=thread_id, run_id=run.id)
                         print(f"✅ Cancelled active run {run.id}")
-                        # Wait longer for cancellation to take effect
                         time.sleep(3)
                     except Exception as cancel_error:
                         print(f"⚠️ Could not cancel run: {cancel_error}")
-                        # If we can't cancel, wait a bit and hope it completes
                         time.sleep(5)
         except Exception as list_error:
             print(f"⚠️ Could not check for active runs: {list_error}")
 
         retry_count = 0
-        base_delay = 5  # Start with 5 second delay
+        base_delay = 5
 
         while retry_count <= max_retries:
             try:
-                # Send user message
                 if retry_count == 0:
-                    message = self.project.agents.messages.create(
-                        thread_id=thread_id, role="user", content=message_content
+                    client.messages.create(
+                        thread_id=thread_id,
+                        role="user",
+                        content=message_content,
                     )
                 else:
-                    # Message already sent, just retry the run
                     print(
-                        f"🔄 Retry {retry_count}/{max_retries} for {self.agent_name}...")
+                        f"🔄 Retry {retry_count}/{max_retries} for {self.agent_name}..."
+                    )
 
-                # Process the run with native Azure SDK timeout
-                # Note: signal-based timeouts don't work in Flask worker threads
                 run = None
                 try:
                     print(
-                        f"⏱️ Running {self.agent_name} with {timeout}s timeout...")
-                    print(f"📊 Agent: {self.agent_name} (ID: {self.agent.id})")
+                        f"⏱️ [v1] Running {self.agent_name} with {timeout}s timeout..."
+                    )
+                    print(f"📊 Agent: {self.agent_name} (ID: {self.agent_id})")
                     print(f"🧵 Thread ID: {thread_id}")
-                    print(f"⏳ This may take 1-3 minutes for large scripts...")
 
                     start_time = time.time()
                     last_status_time = start_time
 
-                    # Create the run (non-blocking)
-                    # Note: Pass empty dict for additional_instructions to ensure
-                    # agent uses its configured tools (including grounding)
-                    run = self.project.agents.runs.create(
+                    run = client.runs.create(
                         thread_id=thread_id,
-                        agent_id=self.agent.id,
-                        additional_instructions=""
+                        agent_id=self.agent_id,
+                        additional_instructions="",
                     )
 
-                    # Poll for completion with progress updates
                     while True:
-                        run = self.project.agents.runs.get(
-                            thread_id=thread_id, run_id=run.id)
+                        run = client.runs.get(thread_id=thread_id, run_id=run.id)
                         current_time = time.time()
 
-                        # Show progress every 30 seconds with detailed status
                         if current_time - last_status_time >= 30:
                             elapsed = current_time - start_time
                             print(
-                                f"⏳ Status: {run.status} | Elapsed: {int(elapsed)}s | Timeout in: {int(timeout - elapsed)}s")
+                                f"⏳ Status: {run.status} | Elapsed: {int(elapsed)}s | "
+                                f"Timeout in: {int(timeout - elapsed)}s"
+                            )
                             last_status_time = current_time
 
-                        # Check for completion
-                        if run.status in ["completed", "failed", "cancelled", "expired"]:
+                        if run.status in [
+                            "completed",
+                            "failed",
+                            "cancelled",
+                            "expired",
+                        ]:
                             break
 
-                        # Check timeout
                         if current_time - start_time > timeout:
                             print(f"🛑 Timeout reached! Cancelling run...")
                             try:
-                                self.project.agents.runs.cancel(
-                                    thread_id=thread_id, run_id=run.id)
-
-                                # CRITICAL: Wait for cancellation to complete
+                                client.runs.cancel(
+                                    thread_id=thread_id, run_id=run.id
+                                )
                                 print(
-                                    f"⏳ Waiting for run {run.id} to finish cancelling...")
-                                # 60 seconds max (Azure can be slow)
+                                    f"⏳ Waiting for run {run.id} to finish cancelling..."
+                                )
                                 for wait_attempt in range(30):
                                     time.sleep(2)
-                                    check_run = self.project.agents.runs.get(
-                                        thread_id=thread_id, run_id=run.id)
+                                    check_run = client.runs.get(
+                                        thread_id=thread_id, run_id=run.id
+                                    )
                                     print(
-                                        f"   Status: {check_run.status} (attempt {wait_attempt + 1}/30)")
-                                    if check_run.status in ["cancelled", "completed", "failed", "expired"]:
-                                        print(
-                                            f"✅ Run {run.id} finished: {check_run.status}")
+                                        f"   Status: {check_run.status} (attempt {wait_attempt + 1}/30)"
+                                    )
+                                    if check_run.status in [
+                                        "cancelled",
+                                        "completed",
+                                        "failed",
+                                        "expired",
+                                    ]:
                                         break
-                                else:
-                                    print(
-                                        f"⚠️ Run {run.id} still not finished after 60 seconds")
                             except Exception as cancel_error:
-                                print(
-                                    f"⚠️ Error during cancellation: {cancel_error}")
+                                print(f"⚠️ Error during cancellation: {cancel_error}")
                             raise Exception(
-                                f"Agent run timed out after {timeout} seconds")
+                                f"Agent run timed out after {timeout} seconds"
+                            )
 
-                        # Wait before next poll
                         time.sleep(2)
 
                     elapsed = time.time() - start_time
@@ -183,81 +426,73 @@ class BaseAgentClient(ABC):
 
                 except Exception as e:
                     error_str = str(e)
-
-                    # Check for "already has an active run" error
                     if "already has an active run" in error_str:
                         print(f"⚠️ Thread has active run. Attempting cleanup...")
                         try:
-                            # List all runs and try to cancel active ones
-                            runs = self.project.agents.runs.list(
-                                thread_id=thread_id)
+                            runs = client.runs.list(thread_id=thread_id)
                             for existing_run in runs:
-                                if existing_run.status in ["in_progress", "queued", "requires_action", "cancelling"]:
+                                if existing_run.status in [
+                                    "in_progress",
+                                    "queued",
+                                    "requires_action",
+                                    "cancelling",
+                                ]:
                                     print(
-                                        f"🛑 Cancelling conflicting run {existing_run.id} (status: {existing_run.status})")
-
-                                    # Try to cancel (might already be cancelling)
+                                        f"🛑 Cancelling conflicting run {existing_run.id}"
+                                    )
                                     try:
-                                        self.project.agents.runs.cancel(
-                                            thread_id=thread_id, run_id=existing_run.id)
+                                        client.runs.cancel(
+                                            thread_id=thread_id,
+                                            run_id=existing_run.id,
+                                        )
                                     except Exception as cancel_error:
-                                        # Already cancelling is OK
-                                        if "cancelling" not in str(cancel_error).lower():
+                                        if (
+                                            "cancelling"
+                                            not in str(cancel_error).lower()
+                                        ):
                                             raise
-
-                                    # Wait for cancellation to complete (up to 60 seconds)
-                                    print(
-                                        f"⏳ Waiting for run {existing_run.id} to finish cancelling...")
-                                    # 30 attempts x 2 seconds = 60 seconds
                                     for wait_attempt in range(30):
                                         time.sleep(2)
-                                        check_run = self.project.agents.runs.get(
-                                            thread_id=thread_id, run_id=existing_run.id)
-                                        print(
-                                            f"   Status: {check_run.status} (attempt {wait_attempt + 1}/30)")
-                                        if check_run.status in ["cancelled", "completed", "failed", "expired"]:
-                                            print(
-                                                f"✅ Run {existing_run.id} finished: {check_run.status}")
+                                        check_run = client.runs.get(
+                                            thread_id=thread_id,
+                                            run_id=existing_run.id,
+                                        )
+                                        if check_run.status in [
+                                            "cancelled",
+                                            "completed",
+                                            "failed",
+                                            "expired",
+                                        ]:
                                             break
-                                    else:
-                                        print(
-                                            f"⚠️ Run {existing_run.id} still not finished after 60 seconds")
-
                         except Exception as cleanup_error:
                             print(f"⚠️ Cleanup failed: {cleanup_error}")
 
-                        # If we have retries left, try again
                         if retry_count < max_retries:
-                            delay = base_delay * (2 ** retry_count)
+                            delay = base_delay * (2**retry_count)
                             print(f"⏳ Waiting {delay} seconds before retry...")
                             time.sleep(delay)
                             retry_count += 1
                             continue
 
-                    # Try to cancel the run if it was created
                     if run:
                         try:
-                            print(f"🛑 Cancelling failed run...")
-                            self.project.agents.runs.cancel(
-                                thread_id=thread_id, run_id=run.id)
+                            client.runs.cancel(thread_id=thread_id, run_id=run.id)
                             time.sleep(2)
-                        except:
-                            pass  # Best effort cleanup
+                        except Exception:
+                            pass
                     raise e
 
                 if run.status == "failed":
                     error_msg = f"Run failed: {run.last_error}"
-
-                    # Check if it's a rate limit error
-                    if "rate" in str(run.last_error).lower() or "429" in str(run.last_error):
+                    if "rate" in str(run.last_error).lower() or "429" in str(
+                        run.last_error
+                    ):
                         if retry_count < max_retries:
-                            delay = base_delay * (2 ** retry_count)
-                            print(
-                                f"⏳ Rate limit detected. Waiting {delay} seconds before retry...")
+                            delay = base_delay * (2**retry_count)
+                            print(f"⏳ Rate limit. Waiting {delay}s before retry...")
                             time.sleep(delay)
                             retry_count += 1
                             continue
-
                     return {
                         "success": False,
                         "error": error_msg,
@@ -265,21 +500,15 @@ class BaseAgentClient(ABC):
                         "sources": [],
                     }
 
-                # Get all messages and return the latest agent response
-                messages = self.project.agents.messages.list(
+                messages = client.messages.list(
                     thread_id=thread_id, order=ListSortOrder.ASCENDING
                 )
-
-                # Find the latest assistant message
                 for message in reversed(list(messages)):
                     if message.role == "assistant" and message.text_messages:
                         response_text = message.text_messages[-1].text.value
-                        sources = self._extract_sources(
-                            message) if show_sources else []
-
-                        if retry_count > 0:
-                            print(f"✅ Retry successful for {self.agent_name}")
-
+                        sources = (
+                            self._extract_sources(message) if show_sources else []
+                        )
                         return {
                             "success": True,
                             "response": response_text,
@@ -296,29 +525,30 @@ class BaseAgentClient(ABC):
 
             except Exception as e:
                 error_str = str(e)
-
-                # Check if it's a rate limit or timeout error
-                is_rate_limit = "rate" in error_str.lower() or "429" in error_str
-                is_timeout = "timeout" in error_str.lower() or "timed out" in error_str.lower()
-
+                low = error_str.lower()
+                is_rate_limit = "rate" in low or "429" in error_str
+                is_timeout = "timeout" in low or "timed out" in low
                 if (is_rate_limit or is_timeout) and retry_count < max_retries:
-                    delay = base_delay * (2 ** retry_count)
-                    error_type = "Rate limit" if is_rate_limit else "Timeout"
+                    delay = base_delay * (2**retry_count)
+                    err_type = "Rate limit" if is_rate_limit else "Timeout"
                     print(
-                        f"⏳ {error_type} detected. Waiting {delay} seconds before retry {retry_count + 1}/{max_retries}...")
+                        f"⏳ {err_type} detected. Waiting {delay}s before retry "
+                        f"{retry_count + 1}/{max_retries}..."
+                    )
                     time.sleep(delay)
                     retry_count += 1
                     continue
-
-                # Not retryable or max retries exceeded
                 return {
                     "success": False,
-                    "error": f"{error_str} (after {retry_count} retries)" if retry_count > 0 else error_str,
+                    "error": (
+                        f"{error_str} (after {retry_count} retries)"
+                        if retry_count > 0
+                        else error_str
+                    ),
                     "response": None,
-                    "sources": []
+                    "sources": [],
                 }
 
-        # Max retries exceeded
         return {
             "success": False,
             "error": f"Max retries ({max_retries}) exceeded for {self.agent_name}",
@@ -326,11 +556,10 @@ class BaseAgentClient(ABC):
             "sources": [],
         }
 
+    # ------------------------------------------------------------------ misc
     def _extract_sources(self, message) -> List[Dict[str, Any]]:
-        """Extract source information from message (if available)"""
-        sources = []
+        sources: List[Dict[str, Any]] = []
         try:
-            # Extract sources if available in the message
             if hasattr(message, "attachments") and message.attachments:
                 for attachment in message.attachments:
                     if hasattr(attachment, "file_citation"):
@@ -345,38 +574,89 @@ class BaseAgentClient(ABC):
                                 ),
                             }
                         )
-        except Exception as e:
-            # Sources extraction is optional, don't fail the entire response
+        except Exception:
             pass
         return sources
 
     def get_agent_info(self) -> Dict[str, str]:
-        """Get basic information about the agent"""
         return {
             "name": self.agent_name,
+            "v2_name": self.v2_agent_name,
             "id": self.agent_id,
-            "endpoint": "https://linedrive-ai-foundry.services.ai.azure.com/api/projects/linedriveAgents",
+            "endpoint": PROJECT_ENDPOINT,
+            "api_mode": get_api_mode(),
         }
 
     @abstractmethod
     def get_specialized_info(self) -> Dict[str, Any]:
-        """Get specialized information about this agent type - must be implemented by subclasses"""
-        pass
+        """Subclasses provide a description of their specialty."""
 
     def health_check(self) -> Dict[str, Any]:
-        """Perform a health check on the agent"""
         try:
-            # Try to get agent details
             agent_info = self.get_agent_info()
-
-            # Try to create a test thread
-            test_thread = self.create_thread()
-
+            self.create_thread()
             return {
                 "success": True,
                 "agent_info": agent_info,
                 "thread_creation": "OK",
-                "status": "Healthy",
+                "status": f"Healthy ({get_api_mode()})",
             }
         except Exception as e:
             return {"success": False, "error": str(e), "status": "Unhealthy"}
+
+
+# Compat shim: legacy callers use `self.project.agents.threads.create()` etc.
+# In the new SDK AIProjectClient no longer has a `.agents` attr, so we wrap the
+# AgentsClient and expose itself as `.agents` so all old call patterns keep
+# working in v1 mode (project.agents.threads / messages / runs / get_agent).
+# IMPORTANT: in v2 mode `.threads.create()` must return a Foundry conversation,
+# not a v1 thread, so we intercept that one call and dispatch via the owning
+# BaseAgentClient.create_thread().
+class _ThreadsShim:
+    def __init__(self, owner):
+        self._owner = owner  # BaseAgentClient
+
+    def create(self, *args, **kwargs):
+        # Mode-aware: returns v1 thread or v2 conversation as appropriate.
+        return self._owner.create_thread()
+
+    def __getattr__(self, name):
+        # Any other thread op falls through to the v1 ThreadsOperations
+        # (delete/get/list/update). Only meaningful in v1 mode.
+        return getattr(self._owner._v1().threads, name)
+
+
+class _LegacyAgentsShim:
+    def __init__(self, owner):
+        self._owner = owner
+        self._agents_client = owner._v1()
+        self._threads_shim = _ThreadsShim(owner)
+
+    @property
+    def threads(self):
+        return self._threads_shim
+
+    def __getattr__(self, name):
+        # messages / runs / get_agent / etc. → real v1 AgentsClient
+        return getattr(self._agents_client, name)
+
+
+class _LegacyProjectShim:
+    def __init__(self, owner):
+        self._owner = owner
+        self._agents_shim = _LegacyAgentsShim(owner)
+
+    @property
+    def agents(self):
+        return self._agents_shim
+
+    def __getattr__(self, name):
+        # Fall through to AgentsClient for any other attribute access
+        return getattr(self._owner._v1(), name)
+
+
+def _legacy_project_property(self):
+    return _LegacyProjectShim(self)
+
+
+BaseAgentClient.project = property(_legacy_project_property)  # type: ignore[attr-defined]

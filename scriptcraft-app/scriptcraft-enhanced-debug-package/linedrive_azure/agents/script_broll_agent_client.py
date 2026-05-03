@@ -45,7 +45,7 @@ class ScriptBRollAgentClient(BaseAgentClient):
         self,
         script_content: str,
         script_title: str = None,
-        max_terms: int = 30,
+        max_terms: int = 40,
         timeout: int = 180,
     ) -> Dict[str, Any]:
         """
@@ -206,7 +206,7 @@ Create a comprehensive table of B-roll search terms with the following format:
 | [term] | [what to look for] | [when to use in script] |
 
 REQUIREMENTS:
-1. Generate 25-30 rows (comprehensive coverage)
+1. Generate 33-40 rows (comprehensive coverage — about 1/3 more entries than a typical pass)
 2. Each search term should be specific and visual
 3. Description explains what type of footage to find
 4. Scene Context indicates where in the script to use it
@@ -283,7 +283,7 @@ Create a comprehensive table of B-roll search terms with the following format:
 | [HH:MM:SS] | [term] | [what to look for] | [when to use in script] |
 
 REQUIREMENTS:
-1. Generate 25-30 rows (comprehensive coverage)
+1. Generate 33-40 rows (comprehensive coverage — about 1/3 more entries than a typical pass)
 2. For each entry, estimate the timecode by analyzing WHERE in the script the term appears
 3. Timecode should be in HH:MM:SS format (e.g., 00:01:23 for 1 minute 23 seconds)
 4. Calculate timecodes assuming approximately {words_per_minute} words per minute speaking pace
@@ -325,7 +325,7 @@ Generate the comprehensive B-roll table with timecodes:
                 # Create OR-separated search string from all search terms
                 search_terms = [entry['search_term'] for entry in parsed_data]
                 or_search_string = " OR ".join(search_terms)
-                
+
                 # Append the OR search string below the table
                 table_with_search = f"{table_content}\n\n**Stock Footage Search String:**\n\n{or_search_string}"
 

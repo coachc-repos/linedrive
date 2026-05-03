@@ -268,13 +268,16 @@ YOUTUBE STRATEGY ALIGNMENT:
                     hook3_text = hook3_section.strip()
 
             # Extract Opening Statement
-            opening_parts = response_text.split("OPENING STATEMENT (15-20 SECONDS)")
+            opening_parts = response_text.split(
+                "OPENING STATEMENT (15-20 SECONDS)")
             if len(opening_parts) > 1:
-                opening_section = opening_parts[1].split("SUMMARY/CONCLUSION")[0]
+                opening_section = opening_parts[1].split(
+                    "SUMMARY/CONCLUSION")[0]
                 opening_subparts = opening_section.split("ANALYSIS:")
                 if len(opening_subparts) > 1:
                     opening_statement = opening_subparts[0].strip()
-                    opening_analysis = "ANALYSIS:" + opening_subparts[1].strip()
+                    opening_analysis = "ANALYSIS:" + \
+                        opening_subparts[1].strip()
                 else:
                     opening_statement = opening_section.strip()
 
@@ -323,10 +326,19 @@ YOUTUBE STRATEGY ALIGNMENT:
 
             thumbnail_hook_text = thumbnail_hook_text_options[0] if thumbnail_hook_text_options else ""
 
+            if not thumbnail_hook_text_options:
+                print("⚠️ Thumbnail hook text options not parsed from Hook-and-Summary response")
+                print("🔍 Looking for 'THUMBNAIL_HOOK_TEXT_1/2/3:' markers in response...")
+                marker_present = "THUMBNAIL_HOOK_TEXT" in response_text
+                section_present = "THUMBNAIL HOOK" in response_text.upper()
+                print(f"   Marker present: {marker_present}")
+                print(f"   Section present: {section_present}")
+
             print(f"✅ Hook 1 generated: {len(hook1_text)} characters")
             print(f"✅ Hook 2 generated: {len(hook2_text)} characters")
             print(f"✅ Hook 3 generated: {len(hook3_text)} characters")
-            print(f"✅ Opening statement generated: {len(opening_statement)} characters")
+            print(
+                f"✅ Opening statement generated: {len(opening_statement)} characters")
             print(f"✅ Summary generated: {len(summary_text)} characters")
             if flow_analysis:
                 print(

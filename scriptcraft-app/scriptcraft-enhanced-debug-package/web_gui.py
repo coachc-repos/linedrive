@@ -16,9 +16,11 @@ import threading
 import logging
 from datetime import datetime
 from io import BytesIO
-from flask import Flask, render_template, request, jsonify, Response, make_response, send_file
+from flask import Flask, render_template, request, jsonify, Response, make_response, send_file, stream_with_context
+import requests
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Add paths for imports - prioritize local scriptcraft-app directory
 current_dir = Path(__file__).parent
@@ -46,6 +48,229 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+SCRIPTCRAFT_SETTINGS_PATH = Path.home() / ".scriptcraft" / "web_gui_settings.json"
+DEFAULT_OUTPUT_PARENT = Path.home() / "Dev" / "Videos" / "Edited" / "Final"
+
+
+def _load_scriptcraft_settings() -> dict:
+    try:
+        if SCRIPTCRAFT_SETTINGS_PATH.exists():
+            with open(SCRIPTCRAFT_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not load ScriptCraft settings: {e}")
+    return {}
+
+
+def _save_scriptcraft_settings(settings: dict) -> bool:
+    try:
+        SCRIPTCRAFT_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(SCRIPTCRAFT_SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+        return True
+    except Exception as e:
+        logger.error(f"❌ Could not save ScriptCraft settings: {e}")
+        return False
+
+
+# On startup, hydrate environment variables from saved settings so any module
+# that reads os.getenv(...) (e.g. GOOGLE_API_KEY for Gemini) picks them up
+# even when the user only set them through the API Keys modal.
+def _hydrate_env_from_settings() -> None:
+    try:
+        s = _load_scriptcraft_settings()
+        mapping = {
+            "google_api_key": "GOOGLE_API_KEY",
+            "heygen_api_key": "HEYGEN_API_KEY",
+            "heygen_voice_id": "HEYGEN_VOICE_ID",
+            "grok_api_key": "XAI_API_KEY",
+        }
+        for setting_key, env_var in mapping.items():
+            val = (s.get(setting_key) or "").strip()
+            if val and not os.environ.get(env_var):
+                os.environ[env_var] = val
+    except Exception as e:
+        logger.warning(f"⚠️ Could not hydrate env from saved settings: {e}")
+
+
+_hydrate_env_from_settings()
+
+
+def _get_output_parent_dir() -> Path:
+    """Return configured output directory as-is, or Final root as fallback."""
+    try:
+        s = _load_scriptcraft_settings()
+        raw = (s.get("output_dir") or "").strip()
+        base = Path(raw).expanduser().resolve() if raw else DEFAULT_OUTPUT_PARENT
+    except Exception:
+        base = DEFAULT_OUTPUT_PARENT
+    if base.exists() and not base.is_dir():
+        logger.warning(f"⚠️ Configured output path is not a directory: {base}. Using default.")
+        base = DEFAULT_OUTPUT_PARENT
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _get_output_base_dir() -> Optional[Path]:
+    """Back-compat helper: returns the output parent directory."""
+    try:
+        return _get_output_parent_dir()
+    except Exception:
+        return None
+
+
+def _get_run_output_dir(script_title: str, create: bool = True) -> Path:
+    """Resolve run directory for this execution.
+
+    Rules:
+    - If configured output_dir is the bare Final root, derive Final/<safe_title>.
+    - If configured output_dir is any subdirectory/custom path, use it exactly.
+    """
+    configured_dir = _get_output_parent_dir()
+    default_root = DEFAULT_OUTPUT_PARENT.resolve()
+
+    try:
+        configured_is_default_root = configured_dir.resolve() == default_root
+    except Exception:
+        configured_is_default_root = False
+
+    if configured_is_default_root:
+        run_dir = configured_dir / _safe_title_for_paths(script_title)
+    else:
+        run_dir = configured_dir
+
+    if create:
+        run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def _copy_to_output_subfolder(src, subfolder: str, script_title: Optional[str] = None) -> Optional[Path]:
+    """Copy a source file into {output_base}/{subfolder}/ if a base dir is configured.
+
+    Returns the destination path on success; None if no base dir, src missing, or copy fails.
+    Best-effort: errors are logged but never raised so generation flows aren't disrupted.
+    """
+    try:
+        base = _get_run_output_dir(script_title, create=True) if script_title else _get_output_parent_dir()
+        if not base:
+            return None
+        if not src:
+            return None
+        src_path = Path(src).expanduser()
+        if not src_path.exists() or not src_path.is_file():
+            return None
+        dst_dir = base / subfolder
+        # If the file already lives inside the destination folder, nothing to do.
+        try:
+            if src_path.resolve().parent == dst_dir.resolve():
+                return src_path
+        except Exception:
+            pass
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / src_path.name
+        # Skip identical re-copies
+        if dst.exists() and dst.stat().st_size == src_path.stat().st_size:
+            return dst
+        import shutil as _shutil
+        _shutil.copy2(src_path, dst)
+        return dst
+    except Exception as e:
+        logger.warning(f"⚠️ Could not auto-copy '{src}' → {subfolder}/: {e}")
+        return None
+
+
+def _save_curl_commands_live(curl_commands, script_title: str) -> Optional[Path]:
+    """Write curl commands to {output_base}/curls/<safe_title>_curls.sh as soon as they are generated.
+
+    Returns the destination path on success, or None if no base dir / nothing to write / failure.
+    """
+    try:
+        if not curl_commands:
+            return None
+        base = _get_run_output_dir(script_title, create=True)
+        safe_title = re.sub(r'[^A-Za-z0-9._-]+', '_',
+                            (script_title or 'script').strip()).strip('._') or 'script'
+        curl_dir = base / "curls"
+        curl_dir.mkdir(parents=True, exist_ok=True)
+        if isinstance(curl_commands, str):
+            dst = curl_dir / f"{safe_title}_curls.sh"
+            dst.write_text(curl_commands, encoding="utf-8")
+        else:
+            import json as _json
+            dst = curl_dir / f"{safe_title}_curls.json"
+            dst.write_text(_json.dumps(curl_commands, indent=2), encoding="utf-8")
+        return dst
+    except Exception as e:
+        logger.warning(f"⚠️ Live curl save failed: {e}")
+        return None
+
+
+def _sync_generated_media_to_project(project_path: Path) -> dict:
+    """Copy generated media into DaVinci project folders.
+
+    - Grok videos: {project}/broll -> {project}/bRoll
+    - Generated images: fallback copy from ~/Dev/brollimages -> {project}/images
+      (only used when project/images does not already contain generated files)
+    """
+    import shutil as _shutil
+
+    project_path = Path(project_path)
+    broll_src = project_path / "broll"
+    broll_dst = project_path / "bRoll"
+    images_dst = project_path / "images"
+
+    broll_dst.mkdir(parents=True, exist_ok=True)
+    images_dst.mkdir(parents=True, exist_ok=True)
+
+    videos_copied = 0
+    images_copied = 0
+
+    # Sync Grok videos into DaVinci bRoll folder.
+    if broll_src.exists() and broll_src.is_dir():
+        for src in broll_src.rglob('*'):
+            if not src.is_file():
+                continue
+            if src.suffix.lower() not in {'.mp4', '.mov', '.m4v'}:
+                continue
+            dst = broll_dst / src.name
+            try:
+                if dst.exists() and dst.stat().st_size == src.stat().st_size:
+                    continue
+                _shutil.copy2(src, dst)
+                videos_copied += 1
+            except Exception as copy_err:
+                logger.warning(f"⚠️ Could not copy Grok video {src.name}: {copy_err}")
+
+    # If images are already generated into project/images, leave them as-is.
+    local_generated_images = []
+    for pattern in ('*.png', '*.jpg', '*.jpeg', '*.webp'):
+        local_generated_images.extend(images_dst.glob(pattern))
+
+    # Back-compat fallback: copy from legacy global brollimages folder.
+    if len(local_generated_images) == 0:
+        legacy_images_src = Path.home() / "Dev" / "brollimages"
+        if legacy_images_src.exists() and legacy_images_src.is_dir():
+            for src in legacy_images_src.iterdir():
+                if not src.is_file() or src.suffix.lower() not in {'.png', '.jpg', '.jpeg', '.webp'}:
+                    continue
+                dst = images_dst / src.name
+                try:
+                    if dst.exists() and dst.stat().st_size == src.stat().st_size:
+                        continue
+                    _shutil.copy2(src, dst)
+                    images_copied += 1
+                except Exception as copy_err:
+                    logger.warning(f"⚠️ Could not copy legacy image {src.name}: {copy_err}")
+
+    return {
+        "videos_copied": videos_copied,
+        "images_copied": images_copied,
+        "broll_source": str(broll_src),
+        "broll_target": str(broll_dst),
+        "images_target": str(images_dst),
+    }
+
+
 # Paths already added above - no need to duplicate
 
 # Import text processing functions
@@ -54,6 +279,369 @@ app = Flask(__name__)
 progress_streams = {}
 results = {}
 running_tasks = {}
+# Per-session cancel events for long-running, cancellable steps.
+import threading as _threading
+import queue as _queue
+broll_image_cancel_events: "dict[str, _threading.Event]" = {}
+thumbnail_cancel_events: "dict[str, _threading.Event]" = {}
+grok_video_cancel_events: "dict[str, _threading.Event]" = {}
+grok_video_streams: "dict[str, _queue.Queue]" = {}
+grok_video_results: "dict[str, dict]" = {}
+
+
+@app.route('/api/proxy')
+def proxy_external_page():
+    """
+    Lightweight HTML proxy used by the Shutterstock split-pane preview.
+
+    Some sites (e.g. shutterstock.com) refuse to render in iframes via X-Frame-Options
+    or Content-Security-Policy. We fetch the page server-side and strip those headers
+    so the result can be embedded in our preview pane. We also inject a <base> tag so
+    relative URLs (CSS/JS/images) continue to resolve against the original origin.
+
+    Only http/https URLs from a small allow-list are proxied to avoid being abused as
+    an open redirector or generic SSRF surface.
+    """
+    from urllib.parse import urlparse, urljoin
+
+    target = (request.args.get('url') or '').strip()
+    if not target:
+        return Response("Missing url parameter", status=400)
+
+    parsed = urlparse(target)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return Response("Invalid url", status=400)
+
+    allowed_hosts = {
+        "www.shutterstock.com",
+        "shutterstock.com",
+    }
+    if parsed.netloc not in allowed_hosts:
+        return Response("Host not allowed for proxy", status=403)
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    try:
+        upstream = requests.get(target, headers=headers, timeout=15, allow_redirects=True)
+    except Exception as fetch_err:
+        return Response(f"Proxy fetch failed: {fetch_err}", status=502)
+
+    content_type = upstream.headers.get("Content-Type", "text/html; charset=utf-8")
+    body = upstream.content
+
+    # Only rewrite HTML responses; pass through other content types untouched.
+    if "text/html" in content_type.lower():
+        try:
+            text = body.decode(upstream.encoding or "utf-8", errors="replace")
+            base_href = f"{parsed.scheme}://{parsed.netloc}/"
+            base_tag = f'<base href="{base_href}">'
+            # Insert <base> right after <head> if present, otherwise prepend.
+            if re.search(r"<head[^>]*>", text, re.IGNORECASE):
+                text = re.sub(r"(<head[^>]*>)", r"\1" + base_tag, text, count=1, flags=re.IGNORECASE)
+            else:
+                text = base_tag + text
+            # Strip any inline CSP meta tags that would block embedded scripts/styles.
+            text = re.sub(
+                r"<meta[^>]+http-equiv=['\"]Content-Security-Policy['\"][^>]*>",
+                "",
+                text,
+                flags=re.IGNORECASE,
+            )
+            body = text.encode("utf-8")
+            content_type = "text/html; charset=utf-8"
+        except Exception:
+            pass
+
+    resp = Response(body, status=upstream.status_code, content_type=content_type)
+    # Explicitly drop framing-related headers so the iframe can render the response.
+    for hdr in ("X-Frame-Options", "Content-Security-Policy", "Content-Security-Policy-Report-Only"):
+        if hdr in resp.headers:
+            del resp.headers[hdr]
+    return resp
+
+
+def _extract_broll_table_from_script(script_text: str) -> str:
+    """
+    Find a B-roll markdown table already embedded in a script.
+
+    The B-roll agent emits tables shaped like:
+        | Timecode | Search Term | Description | Scene Context |
+        |----------|-------------|-------------|---------------|
+        | 00:00:05 | ...         | ...         | ...           |
+
+    Some scripts only have the 3-column variant (Search Term | Description | Scene Context).
+    Returns the contiguous block of pipe-prefixed lines that contains the header, or "" if
+    no plausible B-roll table is present.
+    """
+    if not script_text:
+        return ""
+
+    lines = script_text.splitlines()
+    n = len(lines)
+    header_idx = -1
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if not s.startswith("|"):
+            continue
+        low = s.lower()
+        # Header heuristic: pipe row that names recognizable B-roll columns.
+        if ("search term" in low) or ("timecode" in low and "description" in low):
+            header_idx = i
+            break
+
+    if header_idx < 0:
+        return ""
+
+    # Walk forward collecting contiguous table rows (allow blank lines between rows? no — agents emit them solid).
+    end_idx = header_idx
+    for j in range(header_idx, n):
+        if lines[j].strip().startswith("|"):
+            end_idx = j
+        else:
+            break
+
+    block = "\n".join(lines[header_idx:end_idx + 1]).strip()
+    # Require at least one data row beyond header + separator.
+    data_rows = [
+        ln for ln in block.splitlines()
+        if ln.strip().startswith("|") and not ln.strip().startswith("|---")
+        and "search term" not in ln.lower() and "timecode" not in ln.lower()
+    ]
+    if not data_rows:
+        return ""
+    return block
+
+
+@app.after_request
+def add_no_cache_headers(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+EMOTION_BY_VARIATION = {
+    1: "ANGRY/FRUSTRATED",
+    2: "SHOCKED/SURPRISED",
+    3: "SCARED/WORRIED",
+    4: "EXCITED/ENERGETIC",
+    5: "SKEPTICAL/DOUBTFUL",
+    6: "DETERMINED/INTENSE",
+}
+
+
+def _safe_title_for_paths(script_title: str) -> str:
+    """Normalize script title to filesystem-safe folder name used by generators."""
+    normalized = (script_title or '').strip()
+    normalized = re.sub(r'^\s*#\s*', '', normalized)
+    normalized = re.sub(r'^\s*Direct\s+Video\s*-\s*', '', normalized, flags=re.IGNORECASE)
+    safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '', normalized)
+    safe_title = re.sub(r'\s+', '_', safe_title).strip('_.')
+    return safe_title or "untitled_script"
+
+
+def _extract_script_title_for_output(script_text: str, fallback: str = "Untitled Script") -> str:
+    """Extract a stable script title from generated markdown content."""
+    text = script_text or ""
+
+    # HIGHEST priority: explicit "Title: ..." line (plain or **Title:** Foo).
+    # Wins over per-chapter Heading: lines and any H1/Chapter-1 fallback.
+    title_match = re.search(
+        r'^[ \t]*\**[ \t]*Title[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*\**[ \t]*$',
+        text,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if title_match:
+        title = title_match.group(1).strip().strip('*').strip()
+        if title:
+            return title
+
+    direct_video_match = re.search(
+        r'^\s*#\s*Direct\s+Video\s*-\s*(.+)$',
+        text,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if direct_video_match:
+        return direct_video_match.group(1).strip() or fallback
+
+    heading_match = re.search(r'^\s*Heading:\s*(.+)$', text, re.MULTILINE | re.IGNORECASE)
+    if heading_match:
+        return heading_match.group(1).strip() or fallback
+
+    h1_match = re.search(r'^#\s+(.+)$', text, re.MULTILINE)
+    if h1_match:
+        title = h1_match.group(1).strip()
+        title = re.sub(r'^\s*Direct\s+Video\s*-\s*', '', title, flags=re.IGNORECASE)
+        return title or fallback
+
+    for raw_line in text.splitlines()[:20]:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith(("#", "*", "-", "[")):
+            continue
+        if all(c in "_=-~" for c in line):
+            continue
+        if len(line) > 150:
+            continue
+        return line
+
+    return fallback
+
+
+async def _save_script_md_and_docx(script_title: str, script_content: str) -> tuple[Optional[str], Optional[str]]:
+    """Save script outputs as .md and .docx in {run_folder}/Script/."""
+    run_dir = _get_run_output_dir(script_title, create=True)
+    script_dir = run_dir / "Script"
+    script_dir.mkdir(parents=True, exist_ok=True)
+    safe_title = _safe_title_for_paths(script_title)
+
+    md_path = script_dir / f"{safe_title}.md"
+    md_path.write_text(script_content or "", encoding="utf-8")
+
+    docx_path = script_dir / f"{safe_title}.docx"
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent / "console_ui"))
+        from word_processing import convert_markdown_to_word
+
+        await convert_markdown_to_word(
+            markdown_content=script_content or "",
+            output_file_path=str(docx_path),
+            template_path=None,
+            title=script_title,
+        )
+        return str(md_path), str(docx_path)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not save DOCX output: {e}")
+        return str(md_path), None
+
+
+def _guess_emotion_from_filename(filename: str) -> str:
+    """Infer variation emotion label from filename pattern like *_v2_*.png."""
+    match = re.search(r'_v(\d+)_', filename)
+    if not match:
+        return "EXISTING THUMBNAIL"
+    return EMOTION_BY_VARIATION.get(int(match.group(1)), "EXISTING THUMBNAIL")
+
+
+def _collect_all_thumbnail_entries(script_title: str, thumbnail_results: dict | None = None) -> list[dict]:
+    """Return all thumbnails present in the script's thumbnails directory."""
+    thumbnail_results = thumbnail_results or {}
+    generated_variations = thumbnail_results.get("variations") or []
+    output_dir_hint = thumbnail_results.get("output_dir")
+
+    thumbnail_dir = None
+    if output_dir_hint:
+        thumbnail_dir = Path(output_dir_hint)
+    else:
+        thumbnail_dir = _get_run_output_dir(script_title, create=False) / "thumbnails"
+
+    generated_by_filename = {}
+    for variation in generated_variations:
+        filename = variation.get("filename")
+        if not filename and variation.get("filepath"):
+            filename = Path(variation.get("filepath")).name
+        if filename:
+            generated_by_filename[filename] = variation
+
+    if not thumbnail_dir.exists() or not thumbnail_dir.is_dir():
+        return []
+
+    image_paths = sorted(
+        [
+            p for p in thumbnail_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}
+        ],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    thumbnails = []
+    for image_path in image_paths:
+        variation = generated_by_filename.get(image_path.name, {})
+        thumbnails.append({
+            "emotion": variation.get("emotion") or variation.get("mood") or _guess_emotion_from_filename(image_path.name),
+            "text": variation.get("text") or variation.get("thumbnail_text") or "Existing thumbnail",
+            "filename": image_path.name,
+        })
+
+    return thumbnails
+
+
+def _extract_thumbnail_hook_text_options(hook_result: dict | None = None, script_text: str = "") -> list[str]:
+    """Extract up to three thumbnail hook text options from hook agent result or script text blocks."""
+    hook_result = hook_result or {}
+
+    options: list[str] = []
+
+    direct_options = hook_result.get("thumbnail_hook_text_options") or []
+    if isinstance(direct_options, list):
+        for option in direct_options:
+            text = (option or "").strip().strip('"').strip()
+            if text and text not in options:
+                options.append(text)
+
+    direct_single = (hook_result.get("thumbnail_hook_text") or "").strip().strip('"').strip()
+    if direct_single and direct_single not in options:
+        options.append(direct_single)
+
+    if options:
+        return options[:3]
+
+    def _add_option(text: str):
+        cleaned = (text or "").strip().strip('"').strip()
+        if cleaned and cleaned not in options:
+            options.append(cleaned)
+
+    raw_candidates = [
+        hook_result.get("full_response", ""),
+        hook_result.get("raw_response", ""),
+        script_text,
+    ]
+
+    for raw in raw_candidates:
+        if not raw:
+            continue
+
+        numbered = re.findall(
+            r'THUMBNAIL_HOOK_TEXT_(\d+)\s*:\s*"?([^"\n]+)"?',
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if numbered:
+            for _, text in sorted(numbered, key=lambda item: int(item[0])):
+                _add_option(text)
+            if options:
+                return options[:3]
+
+        match = re.search(
+            r'THUMBNAIL_HOOK_TEXT\s*:\s*"?([^"\n]+)"?',
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            _add_option(match.group(1))
+            if options:
+                return options[:3]
+
+    return options[:3]
+
+
+def _extract_thumbnail_hook_text(hook_result: dict | None = None, script_text: str = "") -> str:
+    """Extract the first available thumbnail hook text option."""
+    options = _extract_thumbnail_hook_text_options(
+        hook_result=hook_result,
+        script_text=script_text,
+    )
+    return options[0] if options else ""
 
 
 class ConsoleCapture:
@@ -309,6 +897,16 @@ class ConsoleCapture:
         elif "All" in message and "chapters revised individually" in message:
             return 80
 
+        # Step 3 failure/skip paths (previously invisible to the UI)
+        elif "Script Review failed or timed out" in message:
+            return 58
+        elif "FALLBACK: Skipping review" in message:
+            return 58
+        elif "revision failed, using original" in message:
+            return 70
+        elif "Script Review skipped" in message:
+            return 80
+
         # Review feedback summary
         elif "📋 REVIEW FEEDBACK SUMMARY" in message:
             return 80
@@ -443,7 +1041,9 @@ class ProgressStreamer:
 
 async def process_script_creation(session_id, topic, audience, tone,
                                   video_length, production_type, goals,
-                                  quick_test=False, checkboxes=None):
+                                  quick_test=False, checkboxes=None,
+                                  heygen_template_id="", heygen_api_key="",
+                                  heygen_voice_id="", grok_api_key=""):
     """Clean script creation with only console capture"""
     logger.info(f"🎬 SCRIPT CREATION STARTED: session={session_id}")
     if quick_test:
@@ -459,6 +1059,8 @@ async def process_script_creation(session_id, topic, audience, tone,
             return
 
         streamer = progress_streams[session_id]
+        resolved_script_title = topic
+        run_output_dir = _get_run_output_dir(resolved_script_title, create=True)
 
         # Initial progress
         streamer.send_update("🚀 Initializing script creation system...", 5)
@@ -596,6 +1198,13 @@ async def process_script_creation(session_id, topic, audience, tone,
             # Use enhanced script as final content (EXACT COPY)
             final_script_content = enhanced_script_content
 
+            # Use the user's requested topic for folder/file naming.
+            # If topic is empty, fall back to a title extracted from the generated content.
+            extracted_script_title = _extract_script_title_for_output(final_script_content, fallback=topic)
+            resolved_script_title = (topic or extracted_script_title or "Untitled Script").strip()
+            run_output_dir = _get_run_output_dir(resolved_script_title, create=True)
+            print(f"📁 Using run folder: {run_output_dir}")
+
             # Extract tool links for YouTube description (EXACT COPY - NO TIMEOUTS!)
             tool_links = extract_tool_links_and_info(final_script_content)
             tool_count = len(tool_links.splitlines())
@@ -622,6 +1231,8 @@ async def process_script_creation(session_id, topic, audience, tone,
             curl_commands = None  # Initialize curl commands variable
             edl_content = None  # Initialize EDL content variable
             edl_filename = None  # Initialize EDL filename variable
+            broll_table = None
+            broll_rows = []
 
             # NEW: Generate B-roll Table using AI Agent (skip unless checkbox checked)
             print(
@@ -653,6 +1264,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                     if broll_result.get("success", False):
                         broll_table = broll_result.get("table", "")
                         parsed_data = broll_result.get("parsed_data", [])
+                        broll_rows = parsed_data
 
                         print(
                             f"✅ B-roll table generated ({len(broll_table)} characters, {len(parsed_data)} entries)")
@@ -679,10 +1291,13 @@ async def process_script_creation(session_id, topic, audience, tone,
                                 # Create filename with timestamp
                                 timestamp = time.strftime("%Y%m%d_%H%M%S")
                                 edl_filename = f"broll_markers_{timestamp}.edl"
+                                edl_dir = run_output_dir / "MDL"
+                                edl_dir.mkdir(parents=True, exist_ok=True)
+                                edl_path = edl_dir / edl_filename
 
                                 edl_result = broll_agent.create_edl_markers(
                                     broll_data=parsed_data,
-                                    output_file=edl_filename,
+                                    output_file=str(edl_path),
                                     frame_rate='24'
                                 )
 
@@ -694,7 +1309,7 @@ async def process_script_creation(session_id, topic, audience, tone,
 
                                     # Read EDL content for frontend display
                                     try:
-                                        with open(edl_filename, 'r', encoding='utf-8') as f:
+                                        with open(edl_path, 'r', encoding='utf-8') as f:
                                             edl_content = f.read()
                                         print(
                                             f"✅ EDL content read ({len(edl_content)} bytes)")
@@ -746,14 +1361,31 @@ async def process_script_creation(session_id, topic, audience, tone,
                     broll_gen = BRollImageGenerator()
                     print("✅ B-roll image generator initialized")
 
+                    def _create_broll_progress(message, current, total, image_info=None):
+                        try:
+                            streamer.send_update(message, 99)
+                        except Exception:
+                            pass
+                        try:
+                            if image_info and image_info.get("success"):
+                                src = image_info.get("filename") or image_info.get("filepath")
+                                dst = _copy_to_output_subfolder(src, "images", script_title=resolved_script_title)
+                                if dst:
+                                    streamer.send_update(f"💾 Saved → {dst}", 99)
+                        except Exception as copy_err:
+                            logger.warning(f"⚠️ live copy of B-roll image failed: {copy_err}")
+
                     # Generate images from ALL entries in the B-roll table
                     # max_images now refers to max ENTRIES (each gets 3 variations)
                     # Set to None to generate ALL entries with 3 variations each
+                    _broll_out_dir = run_output_dir / "images"
                     image_results = broll_gen.generate_all_broll_images(
                         broll_table=broll_table,
                         script_title=topic,
                         # Generate all entries (matching script processing workflow)
-                        max_images=None
+                        max_images=None,
+                        progress_callback=_create_broll_progress,
+                        output_dir=_broll_out_dir,
                     )
 
                     if image_results.get("success"):
@@ -773,6 +1405,49 @@ async def process_script_creation(session_id, topic, audience, tone,
                     print(
                         f"⚠️ B-roll image generation error: {broll_img_error}")
 
+            # NEW: Defer Grok AI generation until user selects rows from B-roll table
+            grok_videos = []
+            if not quick_test and checkboxes.get("grok_videos", False):
+                if not broll_table:
+                    # Prefer reusing a B-roll table already embedded in the script before regenerating one.
+                    try:
+                        extracted_table = _extract_broll_table_from_script(final_script_content)
+                    except Exception:
+                        extracted_table = ""
+                    if extracted_table:
+                        broll_table = extracted_table
+                        print(f"📋 Grok Videos: reusing existing B-roll table from script ({len(broll_table)} chars)")
+                        streamer.send_update(
+                            "📋 Grok Videos: using existing B-roll table from script", 98
+                        )
+                if not broll_table:
+                    print("🤖 Grok Videos: broll_table not available, auto-generating...")
+                    streamer.send_update("🤖 Grok Videos: generating B-roll table first...", 98)
+                    try:
+                        from linedrive_azure.agents import ScriptBRollAgentClient
+                        broll_agent = ScriptBRollAgentClient()
+                        broll_result = broll_agent.generate_broll_table_with_timecodes(
+                            script_content=final_script_content,
+                            script_title=topic,
+                            words_per_minute=150,
+                            timeout=300
+                        )
+                        if broll_result.get("success", False):
+                            broll_table = broll_result.get("table", "")
+                            broll_rows = broll_result.get("parsed_data", [])
+                            print(f"✅ Auto-generated broll_table ({len(broll_table)} chars) for Grok Videos")
+                        else:
+                            print("⚠️ Auto broll_table generation failed for Grok Videos")
+                    except Exception as auto_broll_err:
+                        print(f"❌ Auto broll_table error: {auto_broll_err}")
+
+                if broll_table:
+                    total_rows = len(broll_rows) if broll_rows else 0
+                    streamer.send_update(
+                        f"⏸️ Select B-roll rows for Grok generation ({total_rows} available)",
+                        99
+                    )
+
             # NEW: Generate HeyGen Ready Section (only if checkbox checked)
             if checkboxes.get("heygen", False):
                 try:
@@ -781,6 +1456,11 @@ async def process_script_creation(session_id, topic, audience, tone,
 
                     heygen_script = extract_heygen_host_script(
                         final_script_content)
+
+                    # Fallback: if no Host: markers found, use the script content directly
+                    if not heygen_script:
+                        print("⚠️ No Host: markers found - using full script for HeyGen section")
+                        heygen_script = final_script_content
 
                     if heygen_script:
                         heygen_section = f"\n\n{'=' * 80}\n"
@@ -802,13 +1482,19 @@ async def process_script_creation(session_id, topic, audience, tone,
                                 print("\n🔨 Generating HeyGen curl commands...")
                                 curl_commands = generate_heygen_curl_commands(
                                     final_script_with_tools,
-                                    topic  # script_title
+                                    topic,  # script_title
+                                    heygen_api_key,
+                                    heygen_template_id,
+                                    heygen_voice_id
                                 )
 
                                 if curl_commands:
                                     # Store curl commands separately (don't append to script)
                                     print(
-                                        f"✅ Generated {curl_commands.count('curl --location')} curl commands")
+                                        f"✅ Generated {curl_commands.count('curl --request POST')} curl commands")
+                                    _live_curl_dst = _save_curl_commands_live(curl_commands, resolved_script_title)
+                                    if _live_curl_dst:
+                                        print(f"💾 Saved curl commands → {_live_curl_dst}")
                                 else:
                                     print("⚠️ No curl commands generated")
                                     curl_commands = None
@@ -1008,17 +1694,34 @@ async def process_script_creation(session_id, topic, audience, tone,
             thumbnail_results = None
             if checkboxes.get("thumbnails", False):
                 try:
+                    thumbnail_hook_text_options = _extract_thumbnail_hook_text_options(
+                        hook_result=result,
+                        script_text=final_script_with_tools
+                    )
+                    thumbnail_hook_text = thumbnail_hook_text_options[0] if thumbnail_hook_text_options else ""
                     print("\n" + "="*70)
                     print("🖼️  THUMBNAIL GENERATION STARTING")
                     print("="*70)
-                    print(f"📝 Topic: {topic}")
+                    print(f"📝 Topic: {resolved_script_title}")
                     print(
                         f"📄 Script length: {len(final_script_content)} chars")
                     print(
                         f"🎥 YouTube details: {'Available' if youtube_upload_details else 'None'}")
+                    if thumbnail_hook_text_options:
+                        print(f"🏷️ Thumbnail hook text options: {thumbnail_hook_text_options}")
+                        streamer.send_update(
+                            f"🏷️ Thumbnail hook options: {', '.join(thumbnail_hook_text_options)}", 98
+                        )
+                    else:
+                        print("⚠️ Thumbnail hook text not found; using script title fallback")
+                        streamer.send_update(
+                            "⚠️ Thumbnail hook text not found; using script title", 98
+                        )
 
+                    expected_thumbnails = 6 * \
+                        len(thumbnail_hook_text_options) if thumbnail_hook_text_options else 6
                     streamer.send_update(
-                        "🖼️ Generating 6 thumbnail variations...", 98)
+                        f"🖼️ Generating {expected_thumbnails} thumbnail variations...", 98)
 
                     from tools.media.emotional_thumbnail_generator import (
                         EmotionalThumbnailGenerator,
@@ -1030,8 +1733,10 @@ async def process_script_creation(session_id, topic, audience, tone,
                     print(
                         f"   Environment API key: {api_key[:20]}... (length: {len(api_key)})")
 
+                    # Route thumbnails into configured output_dir/thumbnails when available.
+                    _thumb_out_dir = run_output_dir / "thumbnails"
                     # No api_key param - use environment
-                    thumbnail_gen = EmotionalThumbnailGenerator()
+                    thumbnail_gen = EmotionalThumbnailGenerator(output_dir=_thumb_out_dir)
                     print(f"✅ Generator initialized successfully")
                     print(f"   Template: {thumbnail_gen.template_path}")
                     print(f"   Output: {thumbnail_gen.output_dir}")
@@ -1041,11 +1746,15 @@ async def process_script_creation(session_id, topic, audience, tone,
                         f"   API Key matches: {thumbnail_gen.api_key == api_key}")
 
                     print(f"\n🎬 Calling generate_all_thumbnails()...")
+                    thumb_cancel_evt = thumbnail_cancel_events.setdefault(session_id, _threading.Event())
                     thumbnail_results = thumbnail_gen.generate_all_thumbnails(
-                        script_title=topic,
+                        script_title=resolved_script_title,
                         script_content=final_script_content,
                         youtube_upload_details=youtube_upload_details,
+                        headline_text=thumbnail_hook_text or None,
+                        headline_options=thumbnail_hook_text_options or None,
                         progress_callback=lambda msg: streamer.send_update(msg, 98),
+                        cancel_check=thumb_cancel_evt.is_set,
                     )
 
                     print(f"\n🔍 THUMBNAIL GENERATION RESULTS:")
@@ -1074,6 +1783,11 @@ async def process_script_creation(session_id, topic, audience, tone,
                             streamer.send_update(
                                 f"✅ Generated {len(variations)} thumbnails", 99
                             )
+                            if thumbnail_results.get("cancelled"):
+                                streamer.send_update(
+                                    f"🛑 Thumbnail generation stopped — keeping {len(variations)} thumbnails so far",
+                                    99,
+                                )
                         else:
                             print("   ⚠️ Thumbnail directory created, but no thumbnails were generated")
                             if output_dir:
@@ -1105,14 +1819,25 @@ async def process_script_creation(session_id, topic, audience, tone,
                     print("\n📋 Full traceback:")
                     traceback.print_exc()
                     print("="*70 + "\n")
+                finally:
+                    thumbnail_cancel_events.pop(session_id, None)
+
+            saved_markdown_path, saved_docx_path = await _save_script_md_and_docx(
+                resolved_script_title,
+                final_script_with_tools,
+            )
 
             streamer.result = {
                 "success": True,
                 "enhanced_script": final_script_with_tools,
+                "script_title": resolved_script_title,
                 "demo_packages": demo_packages,
                 "youtube_details": youtube_upload_details,
                 "thumbnail_results": thumbnail_results,
                 "broll_images": broll_images,
+                "grok_videos": grok_videos,
+                "broll_table": broll_table,
+                "broll_rows": broll_rows,
                 "word_count": len(final_script_with_tools.split()),
                 "reading_time": f"{len(final_script_with_tools.split()) // 150} min",
                 "audience": audience,
@@ -1125,6 +1850,8 @@ async def process_script_creation(session_id, topic, audience, tone,
                 "edl_content": edl_content,
                 "edl_filename": edl_filename,
                 "curl_commands": curl_commands,
+                "markdown_path": saved_markdown_path,
+                "docx_path": saved_docx_path,
             }
 
             # Debug: Log what's in the result
@@ -1166,7 +1893,7 @@ async def process_script_creation(session_id, topic, audience, tone,
 async def process_existing_script(
     session_id, script_content, audience, tone,
     video_length, checkboxes, heygen_template_id="",
-    heygen_api_key=""
+    heygen_api_key="", heygen_voice_id="", grok_api_key=""
 ):
     """Process existing script with progress updates"""
     import re
@@ -1194,7 +1921,8 @@ async def process_existing_script(
             checkboxes.get("curl", False),
             checkboxes.get("demo", False),
             checkboxes.get("thumbnails", False),
-            checkboxes.get("flow_analysis", False)
+            checkboxes.get("flow_analysis", False),
+            checkboxes.get("grok_videos", False)
         ])
 
         if total_steps == 0:
@@ -1212,23 +1940,62 @@ async def process_existing_script(
         script_title = "Untitled Script"
         logger.info("📰 Extracting title from script content...")
 
-        title_match = re.search(r'^#\s+(.+)$', script_content, re.MULTILINE)
-        if title_match:
-            script_title = title_match.group(1).strip()
-            logger.info(f"📰 ✅ Found title: '{script_title}'")
+        # 1) Prefer an explicit "Heading:" line (first one wins)
+        heading_match = re.search(
+            r'^\s*Heading:\s*(.+)$', script_content, re.MULTILINE | re.IGNORECASE)
+        if heading_match:
+            script_title = heading_match.group(1).strip()
+            logger.info(f"📰 ✅ Found 'Heading:' title: '{script_title}'")
         else:
-            lines = script_content.split('\n')
-            for line in lines[:10]:
-                line = line.strip()
-                if not line or line.startswith(('#', '*', '-', '[')):
+            # 2) Fall back to first markdown H1, but skip known analysis/report headings
+            _SKIP_TITLE_PATTERNS = (
+                'flow analysis', 'flow analysis report', 'analysis report',
+                'hook summary', 'b-roll', 'broll', 'thumbnail', 'demo package',
+                'youtube details', 'heygen', 'curl commands',
+            )
+            for m in re.finditer(r'^#\s+(.+)$', script_content, re.MULTILINE):
+                candidate = m.group(1).strip()
+                normalized = re.sub(r'[^a-z0-9 ]+', ' ',
+                                    candidate.lower()).strip()
+                if any(p in normalized for p in _SKIP_TITLE_PATTERNS):
                     continue
-                if all(c in '_=-~' for c in line):
-                    continue
-                if len(line) > 150:
-                    continue
-                script_title = line
-                logger.info(f"📰 ✅ Using line as title: '{script_title}'")
+                script_title = candidate
+                logger.info(f"📰 ✅ Found H1 title: '{script_title}'")
                 break
+            else:
+                lines = script_content.split('\n')
+                for line in lines[:10]:
+                    line = line.strip()
+                    if not line or line.startswith(('#', '*', '-', '[')):
+                        continue
+                    if all(c in '_=-~' for c in line):
+                        continue
+                    if len(line) > 150:
+                        continue
+                    script_title = line
+                    logger.info(f"📰 ✅ Using line as title: '{script_title}'")
+                    break
+
+                script_title = re.sub(r'^\s*#\s*', '', (script_title or '').strip())
+                script_title = re.sub(r'^\s*Direct\s+Video\s*-\s*', '', script_title, flags=re.IGNORECASE)
+                script_title = script_title or "Untitled Script"
+                run_output_dir = _get_run_output_dir(script_title, create=True)
+                logger.info(f"📁 Using run folder: {run_output_dir}")
+
+        # 0) FINAL OVERRIDE: an explicit "Title: ..." line in the script always
+        # wins over Heading: / H1 / first-line fallbacks. This keeps the
+        # DaVinci project name and run output folder consistent with the
+        # human-authored Title line (e.g. "Title: Homeschool Heroes with AI").
+        _explicit_title_match = re.search(
+            r'^[ \t]*\**[ \t]*Title[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*\**[ \t]*$',
+            script_content,
+            re.MULTILINE | re.IGNORECASE,
+        )
+        if _explicit_title_match:
+            _explicit_title = _explicit_title_match.group(1).strip().strip('*').strip()
+            if _explicit_title:
+                script_title = _explicit_title
+                logger.info(f"📰 ⭐ Overriding with explicit 'Title:' line: '{script_title}'")
 
         # Clean the script
         streamer.send_update("🧹 Cleaning script formatting...", 10)
@@ -1278,6 +2045,8 @@ async def process_existing_script(
         heygen_script = None
         curl_commands = None
         hook_result = {}  # Initialize to empty dict to prevent undefined variable errors
+        thumbnail_hook_text = ""
+        thumbnail_hook_text_options: list[str] = []
 
         # Generate Hook & Summary if requested
         if checkboxes.get("hook_summary", False):
@@ -1299,6 +2068,30 @@ async def process_existing_script(
                     hook_text = hook_result.get("hook", "")
                     summary_text = hook_result.get("summary", "")
                     flow_analysis = hook_result.get("flow_analysis", "")
+                    thumbnail_hook_text_options = _extract_thumbnail_hook_text_options(
+                        hook_result=hook_result
+                    )
+                    thumbnail_hook_text = thumbnail_hook_text_options[0] if thumbnail_hook_text_options else ""
+                    logger.info(
+                        f"🔍 DEBUG: process_existing_script hook_result keys: {list(hook_result.keys())}")
+                    if thumbnail_hook_text_options:
+                        logger.info(
+                            f"🏷️ Thumbnail hook text options detected: {thumbnail_hook_text_options}")
+                        print(f"🏷️ Thumbnail hook text options detected: {thumbnail_hook_text_options}")
+                        streamer.send_update(
+                            f"🏷️ Thumbnail hook options: {', '.join(thumbnail_hook_text_options)}", 15
+                        )
+                    else:
+                        logger.warning(
+                            "⚠️ Thumbnail hook text missing in Hook-and-Summary response")
+                        raw_response = hook_result.get("full_response", "") or hook_result.get("raw_response", "")
+                        print("⚠️ Thumbnail hook text missing in Hook-and-Summary response")
+                        print(f"🔍 DEBUG: THUMBNAIL_HOOK_TEXT marker present: {'THUMBNAIL_HOOK_TEXT' in raw_response}")
+                        print(f"🔍 DEBUG: THUMBNAIL HOOK section present: {'THUMBNAIL HOOK' in raw_response.upper()}")
+                        streamer.send_update(
+                            "⚠️ Thumbnail hook text missing in Hook-and-Summary response",
+                            15,
+                        )
                     completed_steps += 1
                     progress = 15 + (completed_steps * progress_per_step)
                     streamer.send_update(
@@ -1416,6 +2209,7 @@ async def process_existing_script(
 
         # Generate B-roll Table if requested
         broll_table = None
+        broll_rows = []
         if checkboxes.get("broll", False):
             current_progress = 15 + (completed_steps * progress_per_step)
             streamer.send_update("📊 Generating B-roll Search Terms Table...",
@@ -1435,6 +2229,7 @@ async def process_existing_script(
                 if broll_result.get("success", False):
                     broll_table = broll_result.get("table", "")
                     parsed_data = broll_result.get("parsed_data", [])
+                    broll_rows = parsed_data
 
                     broll_section = f"\n\n{'=' * 80}\n"
                     broll_section += "# 📊 B-ROLL SEARCH TERMS TABLE\n"
@@ -1447,17 +2242,20 @@ async def process_existing_script(
                             import time
                             timestamp = time.strftime("%Y%m%d_%H%M%S")
                             edl_filename = f"broll_markers_{timestamp}.edl"
+                            edl_dir = run_output_dir / "MDL"
+                            edl_dir.mkdir(parents=True, exist_ok=True)
+                            edl_path = edl_dir / edl_filename
 
                             edl_result = broll_agent.create_edl_markers(
                                 broll_data=parsed_data,
-                                output_file=edl_filename,
+                                output_file=str(edl_path),
                                 frame_rate='24'
                             )
 
                             if edl_result.get("success"):
                                 # Read EDL content for frontend display
                                 try:
-                                    with open(edl_filename, 'r', encoding='utf-8') as f:
+                                    with open(edl_path, 'r', encoding='utf-8') as f:
                                         edl_content = f.read()
                                     logger.info(
                                         f"✅ EDL content read ({len(edl_content)} bytes)")
@@ -1491,6 +2289,30 @@ async def process_existing_script(
 
         # Generate B-roll Images using Gemini (ONLY if broll_images checkbox checked AND broll_table was successfully generated)
         broll_images = None
+        # If the user only checked "B-roll Images" (without "B-roll Table"), try to reuse a B-roll
+        # table that's already embedded in the loaded script so they don't have to re-run the agent.
+        if checkboxes.get("broll_images", False) and not broll_table:
+            try:
+                extracted_table = _extract_broll_table_from_script(cleaned_script)
+                if extracted_table:
+                    broll_table = extracted_table
+                    current_progress = 15 + (completed_steps * progress_per_step)
+                    streamer.send_update(
+                        "📋 Found existing B-roll table in script — using it for image generation",
+                        int(current_progress)
+                    )
+                    logger.info(
+                        f"📋 Reusing existing B-roll table from script ({len(broll_table)} chars)"
+                    )
+                else:
+                    current_progress = 15 + (completed_steps * progress_per_step)
+                    streamer.send_update(
+                        "⚠️ B-roll Images selected but no B-roll table found in script — also enable 'B-roll Table' to generate one.",
+                        int(current_progress)
+                    )
+            except Exception as ex_err:
+                logger.warning(f"⚠️ Could not extract B-roll table from script: {ex_err}")
+
         if checkboxes.get("broll_images", False) and broll_table:
             current_progress = 15 + (completed_steps * progress_per_step)
             streamer.send_update("🎨 Generating B-roll images with AI...",
@@ -1500,27 +2322,63 @@ async def process_existing_script(
 
                 broll_gen = BRollImageGenerator()
 
+                # Per-session cancel hook so the user can stop mid-generation and keep partial results.
+                cancel_evt = broll_image_cancel_events.setdefault(session_id, _threading.Event())
+
+                # Notify the UI of every variation in real time so the user sees progress per image.
+                step_progress_base = current_progress
+                step_progress_span = max(1.0, progress_per_step * 0.95)
+
+                def _broll_progress(message: str, current: int, total: int, image_info=None):
+                    try:
+                        ratio = (current / total) if total else 0
+                        pct = int(step_progress_base + (step_progress_span * min(1.0, max(0.0, ratio))))
+                        streamer.send_update(message, pct)
+                    except Exception as cb_err:  # never let UI plumbing break image gen
+                        logger.warning(f"⚠️ B-roll progress callback error: {cb_err}")
+                    # Live-copy each saved image into the user's configured output dir.
+                    try:
+                        if image_info and image_info.get("success"):
+                            src = image_info.get("filename") or image_info.get("filepath")
+                            dst = _copy_to_output_subfolder(src, "images", script_title=script_title)
+                            if dst:
+                                streamer.send_update(f"💾 Saved → {dst}", pct)
+                    except Exception as copy_err:
+                        logger.warning(f"⚠️ live copy of B-roll image failed: {copy_err}")
+
                 # Generate images from the B-roll table
                 # max_images now refers to max ENTRIES (each gets 3 variations)
                 # Set to None to generate ALL entries, or set a limit if needed
+                _broll_out_dir = run_output_dir / "images"
                 image_results = broll_gen.generate_all_broll_images(
                     broll_table=broll_table,
                     script_title=script_title,
-                    max_images=None  # Generate all entries with 3 variations each
+                    max_images=None,  # Generate all entries with 3 variations each
+                    progress_callback=_broll_progress,
+                    cancel_check=cancel_evt.is_set,
+                    output_dir=_broll_out_dir,
                 )
 
-                if image_results.get("success", False):
+                if image_results.get("success", False) or image_results.get("cancelled"):
                     broll_images = image_results.get("images", [])
                     entries_count = image_results.get("total_entries", 0)
                     variations = image_results.get("variations_per_entry", 3)
-                    logger.info(
-                        f"✅ Generated {len(broll_images)} B-roll images ({entries_count} entries × {variations} variations)")
                     completed_steps += 1
                     progress = 15 + (completed_steps * progress_per_step)
-                    streamer.send_update(
-                        f"✅ Generated {len(broll_images)} B-roll images ({entries_count} entries × {variations} variations)",
-                        int(progress)
-                    )
+                    if image_results.get("cancelled"):
+                        logger.info(
+                            f"🛑 B-roll image generation cancelled by user — keeping {len(broll_images)} images")
+                        streamer.send_update(
+                            f"🛑 B-roll image generation stopped — keeping {len(broll_images)} images so far",
+                            int(progress)
+                        )
+                    else:
+                        logger.info(
+                            f"✅ Generated {len(broll_images)} B-roll images ({entries_count} entries × {variations} variations)")
+                        streamer.send_update(
+                            f"✅ Generated {len(broll_images)} B-roll images ({entries_count} entries × {variations} variations)",
+                            int(progress)
+                        )
                 else:
                     logger.warning(
                         f"⚠️ B-roll images generation failed: {image_results.get('error')}")
@@ -1528,6 +2386,55 @@ async def process_existing_script(
                 logger.error(f"❌ B-roll images error: {e}")
                 import traceback
                 traceback.print_exc()
+            finally:
+                # Always discard the cancel event so a later run starts fresh.
+                broll_image_cancel_events.pop(session_id, None)
+
+        # Defer Grok AI generation until user selects rows from B-roll table
+        # Auto-generate broll_table if needed and not already done
+        grok_videos = []
+        if checkboxes.get("grok_videos", False):
+            if not broll_table:
+                # Prefer reusing a B-roll table already embedded in the script before regenerating one.
+                try:
+                    extracted_table = _extract_broll_table_from_script(cleaned_script)
+                except Exception:
+                    extracted_table = ""
+                if extracted_table:
+                    broll_table = extracted_table
+                    logger.info(
+                        f"📋 Grok Videos: reusing existing B-roll table from script ({len(broll_table)} chars)"
+                    )
+                    streamer.send_update(
+                        "📋 Grok Videos: using existing B-roll table from script",
+                        int(15 + (completed_steps * progress_per_step))
+                    )
+            if not broll_table:
+                logger.info("🤖 Grok Videos: broll_table not available, auto-generating...")
+                streamer.send_update("🤖 Grok Videos: generating B-roll table first...", int(15 + (completed_steps * progress_per_step)))
+                try:
+                    from linedrive_azure.agents import ScriptBRollAgentClient
+                    broll_agent = ScriptBRollAgentClient()
+                    broll_result = broll_agent.generate_broll_table_with_timecodes(
+                        script_content=cleaned_script,
+                        script_title=script_title,
+                        words_per_minute=150,
+                        timeout=300
+                    )
+                    if broll_result.get("success", False):
+                        broll_table = broll_result.get("table", "")
+                        broll_rows = broll_result.get("parsed_data", [])
+                        logger.info(f"✅ Auto-generated broll_table ({len(broll_table)} chars) for Grok Videos")
+                    else:
+                        logger.warning("⚠️ Auto broll_table generation failed for Grok Videos")
+                except Exception as auto_broll_err:
+                    logger.error(f"❌ Auto broll_table error: {auto_broll_err}")
+        if checkboxes.get("grok_videos", False) and broll_table:
+            total_rows = len(broll_rows) if broll_rows else 0
+            streamer.send_update(
+                f"⏸️ Select B-roll rows for Grok generation ({total_rows} available)",
+                int(15 + (completed_steps * progress_per_step))
+            )
 
         # Generate HeyGen Ready Script if requested
         if checkboxes.get("heygen", False):
@@ -1538,6 +2445,10 @@ async def process_existing_script(
                 from console_ui.text_processing import extract_heygen_host_script
 
                 heygen_script = extract_heygen_host_script(final_output)
+                # Fallback: if no Host: markers found, use cleaned script directly
+                if not heygen_script:
+                    logger.info("⚠️ No Host: markers found - using full script for HeyGen section")
+                    heygen_script = cleaned_script
                 if heygen_script:
                     heygen_section = f"\n\n{'=' * 80}\n"
                     heygen_section += "# 🎬 HEYGEN READY SCRIPT\n"
@@ -1567,22 +2478,35 @@ async def process_existing_script(
                 if not heygen_script:
                     heygen_script = extract_heygen_host_script(final_output)
 
+                # Fallback: if no Host: markers found, use the cleaned script directly
+                if not heygen_script:
+                    logger.info("⚠️ No Host: markers found - using full script for curl generation")
+                    heygen_script = cleaned_script
+
                 if heygen_script:
                     heygen_with_header = (
                         f"# 🎬 HEYGEN READY SCRIPT\n{'=' * 80}\n\n{heygen_script}"
                     )
                     curl_commands = generate_heygen_curl_commands(
-                        heygen_with_header, script_title
+                        heygen_with_header, script_title,
+                        heygen_api_key, heygen_template_id,
+                        heygen_voice_id
                     )
                     if curl_commands:
                         # Store curl commands separately (don't append to script)
-                        num_commands = curl_commands.count('curl --location')
+                        num_commands = curl_commands.count('curl --request POST')
                         completed_steps += 1
                         progress = 15 + (completed_steps * progress_per_step)
                         streamer.send_update(
                             f"✅ Generated {num_commands} curl commands",
                             int(progress)
                         )
+                        _live_curl_dst = _save_curl_commands_live(curl_commands, script_title)
+                        if _live_curl_dst:
+                            streamer.send_update(
+                                f"💾 Saved curl commands → {_live_curl_dst}",
+                                int(progress)
+                            )
                     else:
                         curl_commands = None
             except Exception as e:
@@ -1621,35 +2545,101 @@ async def process_existing_script(
                 logger.error(f"❌ Demo package error: {e}")
 
         # Generate Thumbnails if requested
+        thumbnail_results = None
         if checkboxes.get("thumbnails", False):
             current_progress = 15 + (completed_steps * progress_per_step)
-            streamer.send_update("🖼️ Generating emotional thumbnails...",
-                                 int(current_progress))
+            expected_thumbnails = 6 * \
+                len(thumbnail_hook_text_options) if thumbnail_hook_text_options else 6
+            streamer.send_update(
+                f"🖼️ Generating {expected_thumbnails} thumbnail variations...",
+                int(current_progress),
+            )
             try:
-                from linedrive_azure.agents import EmotionalThumbnailAgentClient
-
-                thumb_agent = EmotionalThumbnailAgentClient()
-                thumb_result = thumb_agent.generate_thumbnail_variations(
-                    script_title=script_title,
-                    script_content=cleaned_script,
-                    target_audience=audience,
-                    timeout=120
+                from tools.media.emotional_thumbnail_generator import (
+                    EmotionalThumbnailGenerator,
                 )
 
-                if thumb_result.get("success", False):
-                    thumbnails = thumb_result.get("thumbnails", "")
+                _thumb_out_dir = run_output_dir / "thumbnails"
+                thumbnail_gen = EmotionalThumbnailGenerator(output_dir=_thumb_out_dir)
+                if thumbnail_hook_text_options:
+                    logger.info(
+                        f"🏷️ Script processing will use thumbnail hook text options instead of script title: {thumbnail_hook_text_options}")
+                else:
+                    logger.warning(
+                        "⚠️ Script processing did not find thumbnail hook text; using script title fallback")
+                thumb_cancel_evt = thumbnail_cancel_events.setdefault(session_id, _threading.Event())
+                thumbnail_results = thumbnail_gen.generate_all_thumbnails(
+                    script_title=script_title,
+                    script_content=cleaned_script,
+                    headline_text=thumbnail_hook_text or None,
+                    headline_options=thumbnail_hook_text_options or None,
+                    progress_callback=lambda msg: streamer.send_update(
+                        msg, int(current_progress)
+                    ),
+                    cancel_check=thumb_cancel_evt.is_set,
+                )
+                logger.info(
+                    f"🔍 DEBUG: script processing headline options passed to thumbnail generator = {repr(thumbnail_hook_text_options or None)}")
+
+                variations = (thumbnail_results or {}).get("variations") or []
+                output_dir = (thumbnail_results or {}).get("output_dir")
+
+                if variations:
+                    if output_dir:
+                        logger.info(
+                            f"📁 Thumbnails saved to: {output_dir}")
+                        streamer.send_update(
+                            f"📁 Thumbnails saved to: {output_dir}",
+                            int(current_progress)
+                        )
                     thumb_section = f"\n\n{'=' * 80}\n"
                     thumb_section += "# 🖼️ EMOTIONAL THUMBNAIL VARIATIONS\n"
-                    thumb_section += f"{'=' * 80}\n\n{thumbnails}"
+                    thumb_section += f"{'=' * 80}\n\n"
+                    for i, var in enumerate(variations, 1):
+                        thumb_section += f"## Variation #{i}: {var.get('emotion')}\n"
+                        thumb_section += f"- **Text:** {var.get('text')}\n"
+                        thumb_section += f"- **Expression:** {var.get('expression')}\n"
+                        thumb_section += f"- **File:** {var.get('filename')}\n\n"
                     final_output += thumb_section
                     completed_steps += 1
                     progress = 15 + (completed_steps * progress_per_step)
                     streamer.send_update(
-                        "✅ Emotional thumbnails generated",
+                        f"✅ Generated {len(variations)} thumbnails",
                         int(progress)
                     )
+                    if (thumbnail_results or {}).get("cancelled"):
+                        streamer.send_update(
+                            f"🛑 Thumbnail generation stopped — keeping {len(variations)} thumbnails so far",
+                            int(progress)
+                        )
+                    api_error = (thumbnail_results or {}).get("error")
+                    if api_error:
+                        logger.warning(f"⚠️ Thumbnail API returned errors during generation: {api_error}")
+                        streamer.send_update(
+                            f"⚠️ Thumbnail API error during generation: {api_error}",
+                            int(current_progress)
+                        )
+                elif output_dir:
+                    logger.warning(
+                        f"⚠️ Thumbnail directory created but no files generated: {output_dir}")
+                    streamer.send_update(
+                        f"⚠️ No thumbnails generated (directory only): {output_dir}",
+                        int(current_progress)
+                    )
+                    attempted = (thumbnail_results or {}).get("total_attempted", 0)
+                    streamer.send_update(
+                        f"❌ Thumbnail generation failed (0/{attempted})",
+                        int(current_progress)
+                    )
+                    if (thumbnail_results or {}).get("error"):
+                        streamer.send_update(
+                            f"❌ Thumbnail API error: {(thumbnail_results or {}).get('error')}",
+                            int(current_progress)
+                        )
             except Exception as e:
                 logger.error(f"❌ Thumbnail generation error: {e}")
+            finally:
+                thumbnail_cancel_events.pop(session_id, None)
 
         # Generate Flow & Repetition Analysis if requested
         # IMPORTANT: This should run AFTER all other content is assembled
@@ -1720,10 +2710,16 @@ async def process_existing_script(
             "enhanced_script": final_output,  # SSE handler expects "enhanced_script" key
             "script": final_output,  # Also include "script" for compatibility
             "script_title": script_title,
+            "thumbnail_results": thumbnail_results,
+            "thumbnail_hook_text": thumbnail_hook_text,
+            "thumbnail_hook_text_options": thumbnail_hook_text_options,
             "edl_content": edl_content,
             "edl_filename": edl_filename,
             "curl_commands": curl_commands,
             "broll_images": broll_images,
+            "grok_videos": grok_videos,
+            "broll_table": broll_table,
+            "broll_rows": broll_rows,
         }
         logger.info("✅ Script processing completed successfully")
 
@@ -1880,7 +2876,47 @@ def test_progress_stream(session_id):
 @app.route("/")
 def index():
     """Serve the main ScriptCraft web interface"""
-    return render_template("index.html", version=VERSION)
+    # Resolve API keys with precedence: saved settings file > environment variable > empty.
+    # Environment variables can be set in ~/.zshrc (or any shell rc) for one-time setup:
+    #   export XAI_API_KEY="xai-..."
+    #   export HEYGEN_API_KEY="sk_V2_..."
+    #   export HEYGEN_VOICE_ID="..."
+    #   export GOOGLE_API_KEY="..."
+    settings = {}
+    try:
+        settings = _load_scriptcraft_settings()
+    except Exception as e:
+        logger.warning(f"⚠️ Could not preload settings for template: {e}")
+
+    def _resolve(setting_key: str, env_var: str) -> str:
+        return (
+            (settings.get(setting_key) or "").strip()
+            or os.getenv(env_var, "").strip()
+        )
+
+    return render_template(
+        "index.html",
+        version=VERSION,
+        agent_mode=(os.environ.get("FOUNDRY_API_MODE") or "v2").lower(),
+        saved_grok_api_key=_resolve("grok_api_key", "XAI_API_KEY"),
+        saved_heygen_api_key=_resolve("heygen_api_key", "HEYGEN_API_KEY"),
+        saved_heygen_voice_id=_resolve("heygen_voice_id", "HEYGEN_VOICE_ID"),
+        saved_google_api_key=_resolve("google_api_key", "GOOGLE_API_KEY"),
+    )
+
+
+@app.route("/api/agent-mode", methods=["GET", "POST"])
+def agent_mode_api():
+    """Get or set the active Foundry agent API mode (v1=classic Assistants, v2=new Foundry)."""
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        requested = (data.get("mode") or "").strip().lower()
+        if requested not in ("v1", "v2"):
+            return jsonify({"success": False, "error": "mode must be 'v1' or 'v2'"}), 400
+        os.environ["FOUNDRY_API_MODE"] = requested
+        logger.info(f"\U0001F500 Agent API mode switched to: {requested}")
+    current = (os.environ.get("FOUNDRY_API_MODE") or "v2").lower()
+    return jsonify({"success": True, "mode": current})
 
 
 @app.route("/test")
@@ -1909,16 +2945,20 @@ def test_capture_page():
                 document.getElementById('progress').innerHTML = 'Test started...';
                 watchProgress(data.session_id);
             });
+                resp = make_response(render_template(
+                    "index.html",
+                    version=VERSION,
+                    agent_mode=(os.environ.get("FOUNDRY_API_MODE") or "v2").lower(),
+                    saved_grok_api_key=_resolve("grok_api_key", "XAI_API_KEY"),
+                    saved_heygen_api_key=_resolve("heygen_api_key", "HEYGEN_API_KEY"),
+                    saved_heygen_voice_id=_resolve("heygen_voice_id", "HEYGEN_VOICE_ID"),
+                    saved_google_api_key=_resolve("google_api_key", "GOOGLE_API_KEY"),
+                ))
+                resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+                resp.headers['Pragma'] = 'no-cache'
+                resp.headers['Expires'] = '0'
+                return resp
         }
-        
-        function watchProgress(sessionId) {
-            const eventSource = new EventSource('/progress/' + sessionId);
-            eventSource.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                document.getElementById('progress').innerHTML = 
-                    `Progress: ${data.progress}% - ${data.message}`;
-                if (data.done) {
-                    eventSource.close();
                     document.getElementById('result').innerHTML = 'Test completed!';
                 }
             };
@@ -2159,6 +3199,13 @@ def create():
 
     # NEW: Get checkbox selections
     checkboxes = data.get("checkboxes", {})
+
+    # Get HeyGen parameters
+    heygen_template_id = data.get("heygen_template_id", "")
+    heygen_api_key = data.get("heygen_api_key", "")
+    heygen_voice_id = data.get("heygen_voice_id", "")
+    grok_api_key = data.get("grok_api_key", "")
+
     # If "All" is checked, enable everything
     if checkboxes.get("all", False):
         checkboxes = {
@@ -2202,7 +3249,9 @@ def create():
                 actual_length = "1 minute (150-200 words)" if quick_test else video_length
                 asyncio.run(process_script_creation(
                     session_id, topic, audience, tone, actual_length,
-                    production_type, goals, quick_test, checkboxes
+                    production_type, goals, quick_test, checkboxes,
+                    heygen_template_id, heygen_api_key,
+                    heygen_voice_id, grok_api_key
                 ))
         except Exception as e:
             logger.error(f"❌ Script creation error: {e}")
@@ -2263,44 +3312,19 @@ def progress_stream(session_id):
                             print(
                                 f"Thumbnail results is None: {thumbnail_results is None}")
 
-                            thumbnails = []
+                            thumbnails = _collect_all_thumbnail_entries(
+                                streamer.result.get("script_title", "Untitled Script"),
+                                thumbnail_results,
+                            )
+
                             if thumbnail_results and thumbnail_results.get("variations"):
                                 print(f"✅ Found variations in thumbnail_results")
-                                variations = thumbnail_results["variations"]
-                                print(f"   Count: {len(variations)}")
+                                print(f"   Generated this run: {len(thumbnail_results.get('variations') or [])}")
+                            elif thumbnail_results:
+                                print(f"⚠️ No variations found in thumbnail_results")
+                                print(f"   Available keys: {list(thumbnail_results.keys())}")
 
-                                for idx, variation in enumerate(variations, 1):
-                                    print(f"\n   Processing variation #{idx}:")
-                                    print(
-                                        f"      Keys: {list(variation.keys())}")
-                                    print(
-                                        f"      Emotion: {variation.get('emotion')}")
-                                    print(
-                                        f"      Text: {variation.get('text')}")
-                                    print(
-                                        f"      Filename: {variation.get('filename')}")
-
-                                    filename = variation.get("filename")
-                                    if not filename and variation.get("filepath"):
-                                        filename = Path(
-                                            variation.get("filepath")).name
-
-                                    if filename:
-                                        thumbnails.append({
-                                            "emotion": variation.get("emotion") or variation.get("mood") or f"VARIATION_{idx}",
-                                            "text": variation.get("text") or variation.get("thumbnail_text") or "Thumbnail variation",
-                                            # Generator returns filename directly (fallback to filepath basename)
-                                            "filename": filename
-                                        })
-
-                                print(
-                                    f"\n✅ Prepared {len(thumbnails)} thumbnail objects for frontend")
-                            else:
-                                print(
-                                    f"⚠️ No variations found in thumbnail_results")
-                                if thumbnail_results:
-                                    print(
-                                        f"   Available keys: {list(thumbnail_results.keys())}")
+                            print(f"\n✅ Prepared {len(thumbnails)} thumbnail objects for frontend (directory-wide)")
 
                             print("="*70 + "\n")
 
@@ -2336,7 +3360,12 @@ def progress_stream(session_id):
                                 "edl_content": streamer.result.get("edl_content"),
                                 "edl_filename": streamer.result.get("edl_filename"),
                                 "curl_commands": streamer.result.get("curl_commands"),
-                                "broll_images": streamer.result.get("broll_images")
+                                "markdown_path": streamer.result.get("markdown_path"),
+                                "docx_path": streamer.result.get("docx_path"),
+                                "broll_images": streamer.result.get("broll_images"),
+                                "grok_videos": streamer.result.get("grok_videos"),
+                                "broll_table": streamer.result.get("broll_table"),
+                                "broll_rows": streamer.result.get("broll_rows")
                             }
 
                             print("\n" + "="*70)
@@ -2467,6 +3496,8 @@ def process_script():
         checkboxes = data.get("checkboxes", {})
         heygen_template_id = data.get("heygen_template_id", "")
         heygen_api_key = data.get("heygen_api_key", "")
+        heygen_voice_id = data.get("heygen_voice_id", "")
+        grok_api_key = data.get("grok_api_key", "")
 
         if not script_content.strip():
             logger.warning("❌ Empty script received")
@@ -2490,7 +3521,7 @@ def process_script():
                 asyncio.run(process_existing_script(
                     session_id, script_content, audience, tone,
                     video_length, checkboxes, heygen_template_id,
-                    heygen_api_key
+                    heygen_api_key, heygen_voice_id, grok_api_key
                 ))
             except Exception as e:
                 logger.error(f"❌ Script processing error: {e}")
@@ -2691,6 +3722,996 @@ def export_heygen_curl():
         error_msg = f"HeyGen curl export failed: {str(e)}"
         logger.error(f"❌ {error_msg}")
         return jsonify({"error": error_msg}), 500
+
+
+@app.route("/api/heygen/templates", methods=["POST"])
+def heygen_list_templates():
+    """Proxy endpoint to fetch HeyGen templates (avoids CORS)"""
+    try:
+        data = request.get_json()
+        api_key = data.get("api_key", "") if data else ""
+        if not api_key:
+            return jsonify({"error": "No API key provided"}), 400
+
+        resp = requests.get(
+            "https://api.heygen.com/v2/templates",
+            headers={"accept": "application/json", "x-api-key": api_key},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return jsonify(resp.json())
+
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 500
+        logger.error(f"HeyGen API error: {status} - {e}")
+        return jsonify({"error": f"HeyGen API returned {status}"}), status
+    except Exception as e:
+        logger.error(f"HeyGen template fetch failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/heygen/template/<template_id>", methods=["POST"])
+def heygen_template_details(template_id):
+    """Proxy endpoint to fetch details for a single HeyGen template.
+    Merges data from the list endpoint (name, thumbnail) and the
+    detail endpoint (variables)."""
+    try:
+        data = request.get_json()
+        api_key = data.get("api_key", "") if data else ""
+        if not api_key:
+            return jsonify({"error": "No API key provided"}), 400
+
+        headers = {"accept": "application/json", "x-api-key": api_key}
+
+        # Detail endpoint gives variables
+        detail_resp = requests.get(
+            f"https://api.heygen.com/v2/template/{template_id}",
+            headers=headers, timeout=15,
+        )
+        detail_resp.raise_for_status()
+        detail_data = detail_resp.json().get("data", {})
+
+        # List endpoint gives name and thumbnail
+        list_resp = requests.get(
+            "https://api.heygen.com/v2/templates",
+            headers=headers, timeout=15,
+        )
+        list_resp.raise_for_status()
+        templates = list_resp.json().get("data", {}).get("templates", [])
+        summary = next((t for t in templates if t.get("template_id") == template_id), {})
+
+        merged = {**summary, **detail_data, "template_id": template_id}
+        return jsonify({"error": None, "data": merged})
+
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 500
+        logger.error(f"HeyGen template detail error: {status} - {e}")
+        return jsonify({"error": f"HeyGen API returned {status}"}), status
+    except Exception as e:
+        logger.error(f"HeyGen template detail fetch failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/heygen/voices", methods=["POST"])
+def heygen_list_voices():
+    """Proxy endpoint to fetch HeyGen voices (avoids CORS)"""
+    try:
+        data = request.get_json()
+        api_key = data.get("api_key", "") if data else ""
+        if not api_key:
+            return jsonify({"error": "No API key provided"}), 400
+
+        resp = requests.get(
+            "https://api.heygen.com/v2/voices",
+            headers={"accept": "application/json", "x-api-key": api_key},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return jsonify(resp.json())
+
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 500
+        logger.error(f"HeyGen voices API error: {status} - {e}")
+        return jsonify({"error": f"HeyGen API returned {status}"}), status
+    except Exception as e:
+        logger.error(f"HeyGen voices fetch failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/heygen/test-generate", methods=["POST"])
+def heygen_test_generate():
+    """Proxy endpoint to test HeyGen video generation from template."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        api_key = data.get("api_key", "")
+        template_id = data.get("template_id", "")
+        request_body = data.get("request_body", {})
+
+        if not api_key:
+            return jsonify({"error": "No API key provided"}), 400
+        if not template_id:
+            return jsonify({"error": "No template ID provided"}), 400
+
+        url = f"https://api.heygen.com/v2/template/{template_id}/generate"
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "x-api-key": api_key,
+        }
+
+        logger.info(f"🧪 Test generate: POST {url}")
+        logger.info(f"🧪 Request body: {json.dumps(request_body)[:500]}")
+
+        resp = requests.post(url, headers=headers, json=request_body, timeout=30)
+
+        logger.info(f"🧪 Response status: {resp.status_code}")
+        logger.info(f"🧪 Response body: {resp.text[:500]}")
+
+        # Return the full response with status so frontend can show it
+        try:
+            resp_json = resp.json()
+        except Exception:
+            resp_json = {"raw_response": resp.text}
+
+        return jsonify(resp_json), resp.status_code
+
+    except requests.exceptions.Timeout:
+        logger.error("HeyGen test-generate timed out")
+        return jsonify({"error": "Request timed out after 30 seconds"}), 504
+    except Exception as e:
+        logger.error(f"HeyGen test-generate failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/grok/test-video", methods=["POST"])
+def grok_test_video_generate():
+    """Generate a single Grok test video from a prompt and return a local preview path."""
+    try:
+        data = request.get_json() or {}
+        prompt = (data.get("prompt") or "").strip()
+        duration = int(data.get("duration") or 6)
+        aspect_ratio = data.get("aspect_ratio") or "16:9"
+        resolution = data.get("resolution") or "480p"
+
+        if not prompt:
+            return jsonify({"success": False, "error": "Prompt is required"}), 400
+
+        duration = max(1, min(15, duration))
+
+        xai_api_key = (data.get("api_key") or "").strip() or os.getenv("XAI_API_KEY", "").strip()
+        if not xai_api_key or xai_api_key == "your-xai-api-key-here":
+            return jsonify({
+                "success": False,
+                "error": "Grok API key is missing. Enter it in the Web GUI Grok Key field (or set XAI_API_KEY)."
+            }), 400
+
+        import xai_sdk
+        import certifi
+        import datetime as dt
+
+        logger.info("🤖 Grok test video request started")
+        logger.info(f"🤖 Prompt: {prompt[:180]}")
+        logger.info(
+            f"🤖 Settings: duration={duration}, aspect_ratio={aspect_ratio}, resolution={resolution}")
+
+        client = xai_sdk.Client(api_key=xai_api_key)
+        response = client.video.generate(
+            prompt=prompt,
+            model="grok-imagine-video",
+            duration=duration,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+        )
+
+        broll_videos_dir = Path.home() / "Dev" / "brollvideos"
+        broll_videos_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_prompt = "".join(c if c.isalnum() else "_" for c in prompt)[:40].strip("_")
+        if not safe_prompt:
+            safe_prompt = "test_video"
+        filename = f"grok_test_{timestamp}_{safe_prompt}.mp4"
+        local_path = broll_videos_dir / filename
+
+        with requests.get(response.url, stream=True, timeout=180, verify=certifi.where()) as dl_resp:
+            dl_resp.raise_for_status()
+            with open(local_path, "wb") as out_file:
+                for chunk in dl_resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        out_file.write(chunk)
+
+        logger.info(f"✅ Grok test video saved: {local_path}")
+
+        return jsonify({
+            "success": True,
+            "filename": filename,
+            "video_path": f"/broll-videos/{filename}",
+            "source_url": response.url,
+            "duration": getattr(response, "duration", duration),
+            "model": getattr(response, "model", "grok-imagine-video"),
+            "respect_moderation": getattr(response, "respect_moderation", None),
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Grok test video generation failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/cancel-broll-images/<session_id>", methods=["POST"])
+def api_cancel_broll_images(session_id):
+    """Signal the in-flight B-roll image generation loop to stop ASAP and return what was produced so far."""
+    try:
+        evt = broll_image_cancel_events.get(session_id)
+        if evt is None:
+            # Pre-create the event in case the request races image generation startup.
+            evt = _threading.Event()
+            broll_image_cancel_events[session_id] = evt
+        evt.set()
+        logger.info(f"🛑 B-roll image generation cancel requested for session {session_id}")
+        return jsonify({"success": True, "session_id": session_id})
+    except Exception as e:
+        logger.error(f"❌ Failed to cancel B-roll image generation: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/cancel-thumbnails/<session_id>", methods=["POST"])
+def api_cancel_thumbnails(session_id):
+    """Signal in-flight thumbnail generation to stop and keep partial results."""
+    try:
+        evt = thumbnail_cancel_events.get(session_id)
+        if evt is None:
+            # Pre-create in case cancel arrives before generation fully starts.
+            evt = _threading.Event()
+            thumbnail_cancel_events[session_id] = evt
+        evt.set()
+        logger.info(f"🛑 Thumbnail generation cancel requested for session {session_id}")
+        return jsonify({"success": True, "session_id": session_id})
+    except Exception as e:
+        logger.error(f"❌ Failed to cancel thumbnail generation: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/extract-docx", methods=["POST"])
+def api_extract_docx():
+    """Extract plain text from an uploaded .docx file so the front-end can load Word scripts."""
+    try:
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            return jsonify({"success": False, "error": "No file uploaded"}), 400
+
+        name_lower = upload.filename.lower()
+        if not (name_lower.endswith(".docx") or name_lower.endswith(".doc")):
+            return jsonify({"success": False, "error": "Only .docx files are supported"}), 400
+        if name_lower.endswith(".doc") and not name_lower.endswith(".docx"):
+            return jsonify({"success": False, "error": "Legacy .doc not supported. Please save as .docx first."}), 400
+
+        try:
+            from docx import Document  # python-docx
+        except ImportError as e:
+            return jsonify({"success": False, "error": f"python-docx not installed: {e}"}), 500
+
+        import io
+        data = upload.read()
+        doc = Document(io.BytesIO(data))
+
+        lines = []
+        for para in doc.paragraphs:
+            text = (para.text or "").rstrip()
+            style = (para.style.name or "") if para.style else ""
+            if text and style.startswith("Heading"):
+                # Map Heading 1/2/3... to markdown headers so downstream parsing works.
+                try:
+                    level = int(style.split()[-1])
+                except (ValueError, IndexError):
+                    level = 1
+                level = max(1, min(level, 6))
+                lines.append(("#" * level) + " " + text)
+            else:
+                lines.append(text)
+
+        # Append simple table extraction (tab-separated rows).
+        for table in doc.tables:
+            lines.append("")
+            for row in table.rows:
+                cells = [(c.text or "").strip().replace("\n", " ") for c in row.cells]
+                lines.append("\t".join(cells))
+
+        text = "\n".join(lines).strip() + "\n"
+        return jsonify({"success": True, "text": text, "filename": upload.filename, "length": len(text)})
+    except Exception as e:
+        logger.error(f"❌ /api/extract-docx failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/resolve/inspect", methods=["GET"])
+def api_resolve_inspect():
+    """Inspect the currently-loaded DaVinci Resolve timeline.
+
+    Returns every clip on every video & audio track including B-roll,
+    adjustment clips, fusion comp names, and the property bag for each
+    timeline item (transform, composite mode, retime, etc.).
+    """
+    try:
+        from resolve_inspector import inspect_current_timeline
+        result = inspect_current_timeline()
+        status = 200 if result.get("success") else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.error(f"❌ /api/resolve/inspect failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/resolve/probe-fusion", methods=["GET"])
+def api_resolve_probe_fusion():
+    """For a given timeline item unique_id, dump every Fusion comp's tool list.
+
+    Use this to see whether a paid template (e.g. mTuber 4 Tiles Swap) exposes
+    its inputs to the scripting API or is encrypted.
+    """
+    try:
+        unique_id = request.args.get("unique_id", "").strip()
+        if not unique_id:
+            return jsonify({"success": False, "error": "unique_id query param is required"}), 400
+        from resolve_inspector import probe_fusion_comp
+        result = probe_fusion_comp(unique_id)
+        status = 200 if result.get("success") else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.error(f"❌ /api/resolve/probe-fusion failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/resolve/save-comp-preset", methods=["POST"])
+def api_resolve_save_comp_preset():
+    """Save the Fusion composition from one timeline clip as a reusable preset.
+
+    Body JSON: { "unique_id": "...", "preset_name": "default_broll" (optional) }
+
+    The preset file (default: scriptcraft-app-v2/fusion_presets/default_broll.setting)
+    is what Create DaVinci Project will auto-apply to every V3 broll clip.
+    """
+    try:
+        from resolve_inspector import save_comp_preset
+        payload = request.get_json(silent=True) or {}
+        unique_id = (payload.get("unique_id") or "").strip()
+        if not unique_id:
+            return jsonify({"success": False, "error": "unique_id is required"}), 400
+        preset_name = (payload.get("preset_name") or "").strip() or None
+        result = save_comp_preset(unique_id, preset_name=preset_name)
+        return jsonify(result), (200 if result.get("success") else 400)
+    except Exception as e:
+        logger.error(f"❌ /api/resolve/save-comp-preset failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/keys", methods=["GET"])
+def api_keys_get():
+    """Return all saved API keys (Google, HeyGen, Grok). Falls back to env vars."""
+    try:
+        settings = _load_scriptcraft_settings()
+        def _v(key, env):
+            return (settings.get(key) or "").strip() or os.getenv(env, "").strip()
+        return jsonify({
+            "success": True,
+            "keys": {
+                "google_api_key": _v("google_api_key", "GOOGLE_API_KEY"),
+                "heygen_api_key": _v("heygen_api_key", "HEYGEN_API_KEY"),
+                "grok_api_key": _v("grok_api_key", "XAI_API_KEY"),
+            },
+        })
+    except Exception as e:
+        logger.error(f"❌ Failed to load API keys: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/keys", methods=["POST"])
+def api_keys_save():
+    """Persist Google / HeyGen / Grok keys and update process env so backend modules see them."""
+    try:
+        data = request.get_json(silent=True) or {}
+        settings = _load_scriptcraft_settings()
+
+        mapping = {
+            "google_api_key": "GOOGLE_API_KEY",
+            "heygen_api_key": "HEYGEN_API_KEY",
+            "grok_api_key": "XAI_API_KEY",
+        }
+        updated = []
+        for setting_key, env_var in mapping.items():
+            if setting_key in data:
+                val = (data.get(setting_key) or "").strip()
+                if val:
+                    settings[setting_key] = val
+                    os.environ[env_var] = val
+                else:
+                    settings.pop(setting_key, None)
+                    os.environ.pop(env_var, None)
+                updated.append(setting_key)
+
+        if not updated:
+            return jsonify({"success": False, "error": "No keys provided"}), 400
+
+        if not _save_scriptcraft_settings(settings):
+            return jsonify({"success": False, "error": "Could not save settings"}), 500
+
+        logger.info(f"🔑 API keys updated: {updated}")
+        return jsonify({"success": True, "updated": updated})
+    except Exception as e:
+        logger.error(f"❌ Failed to save API keys: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/output-dir", methods=["GET"])
+def api_output_dir_get():
+    """Return the currently configured base output directory (or empty string)."""
+    try:
+        settings = _load_scriptcraft_settings()
+        return jsonify({
+            "success": True,
+            "output_dir": (settings.get("output_dir") or "").strip(),
+        })
+    except Exception as e:
+        logger.error(f"❌ Failed to load output_dir: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/output-dir", methods=["POST"])
+def api_output_dir_save():
+    """Persist the base output directory path without creating it immediately."""
+    try:
+        data = request.get_json(silent=True) or {}
+        raw = (data.get("output_dir") or "").strip()
+        settings = _load_scriptcraft_settings()
+
+        if not raw:
+            settings.pop("output_dir", None)
+            _save_scriptcraft_settings(settings)
+            return jsonify({"success": True, "output_dir": "", "cleared": True})
+
+        expanded = Path(raw).expanduser().resolve()
+        if expanded.exists() and not expanded.is_dir():
+            return jsonify({
+                "success": False,
+                "error": "Path exists but is not a directory",
+            }), 400
+
+        settings["output_dir"] = str(expanded)
+        if not _save_scriptcraft_settings(settings):
+            return jsonify({"success": False, "error": "Could not save settings"}), 500
+
+        logger.info(f"📁 Output directory set: {expanded}")
+        return jsonify({"success": True, "output_dir": str(expanded)})
+    except Exception as e:
+        logger.error(f"❌ Failed to save output_dir: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/browse-dirs", methods=["GET"])
+def api_browse_dirs():
+    """List immediate subdirectories of a path for the in-app folder browser.
+
+    Query params:
+      path: starting absolute or ~-prefixed path. Empty/missing -> $HOME.
+      show_hidden: '1' to include dotfile directories.
+    Returns:
+      {success, path, parent, entries: [{name, path}], home, can_create}
+    """
+    try:
+        raw = (request.args.get("path") or "").strip()
+        show_hidden = request.args.get("show_hidden") == "1"
+        home = str(Path.home())
+
+        if not raw:
+            target = Path.home()
+        else:
+            target = Path(raw).expanduser()
+
+        try:
+            target = target.resolve()
+        except Exception:
+            return jsonify({"success": False, "error": f"Invalid path: {raw}"}), 400
+
+        if not target.exists():
+            return jsonify({"success": False, "error": f"Path does not exist: {target}"}), 404
+        if not target.is_dir():
+            return jsonify({"success": False, "error": f"Not a directory: {target}"}), 400
+
+        entries = []
+        try:
+            for child in sorted(target.iterdir(), key=lambda p: p.name.lower()):
+                try:
+                    if not child.is_dir():
+                        continue
+                    if not show_hidden and child.name.startswith("."):
+                        continue
+                    entries.append({"name": child.name, "path": str(child)})
+                except (PermissionError, OSError):
+                    continue
+        except PermissionError:
+            return jsonify({"success": False, "error": f"Permission denied: {target}"}), 403
+
+        parent = str(target.parent) if target.parent != target else None
+        return jsonify({
+            "success": True,
+            "path": str(target),
+            "parent": parent,
+            "home": home,
+            "entries": entries,
+        })
+    except Exception as e:
+        logger.error(f"❌ /api/browse-dirs failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/create-dir", methods=["POST"])
+def api_create_dir():
+    """Create a new subdirectory inside the given parent path. Used by the folder browser."""
+    try:
+        data = request.get_json(silent=True) or {}
+        parent_raw = (data.get("parent") or "").strip()
+        name_raw = (data.get("name") or "").strip()
+        if not parent_raw or not name_raw:
+            return jsonify({"success": False, "error": "parent and name are required"}), 400
+        # Reject path separators in folder name
+        if "/" in name_raw or "\\" in name_raw or name_raw in (".", ".."):
+            return jsonify({"success": False, "error": "Invalid folder name"}), 400
+
+        parent = Path(parent_raw).expanduser().resolve()
+        if not parent.is_dir():
+            return jsonify({"success": False, "error": f"Parent is not a directory: {parent}"}), 400
+
+        target = parent / name_raw
+        target.mkdir(parents=False, exist_ok=True)
+        return jsonify({"success": True, "path": str(target)})
+    except Exception as e:
+        logger.error(f"❌ /api/create-dir failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/save-outputs", methods=["POST"])
+def api_save_outputs():
+    """Copy the current run's artifacts into {output_parent}/{safe_script_title}.
+
+    Layout:
+        {run_dir}/script/<title>.md
+        {run_dir}/images/<broll image files>
+        {run_dir}/broll/<grok video files>
+        {run_dir}/MDL/<edl file>
+        {run_dir}/thumbnails/<thumbnail files>
+        {run_dir}/curls/<title>_curls.json
+    """
+    import shutil
+    import re as _re
+
+    try:
+        data = request.get_json(silent=True) or {}
+        title_raw = (data.get("title") or "script").strip() or "script"
+        safe_title = _re.sub(r'[^A-Za-z0-9._-]+', '_', title_raw).strip('_') or "script"
+        base_path = _get_run_output_dir(title_raw, create=True)
+
+        script_text = data.get("script") or ""
+        edl_filename = (data.get("edl_filename") or "").strip()
+        edl_content = data.get("edl_content") or ""
+        curl_commands = data.get("curl_commands")
+        broll_images = data.get("broll_images") or []
+        grok_videos = data.get("grok_videos") or []
+        thumbnails = data.get("thumbnails") or []
+
+        report = {
+            "script": None,
+            "edl": None,
+            "curls": None,
+            "images": [], "images_skipped": [],
+            "videos": [], "videos_skipped": [],
+            "thumbnails": [], "thumbnails_skipped": [],
+        }
+
+        # --- script ---
+        if script_text:
+            script_dir = base_path / "script"
+            script_dir.mkdir(parents=True, exist_ok=True)
+            script_path = script_dir / f"{safe_title}.md"
+            script_path.write_text(script_text, encoding="utf-8")
+            report["script"] = str(script_path)
+
+        # --- EDL (user calls it MDL) ---
+        if edl_content or edl_filename:
+            mdl_dir = base_path / "MDL"
+            mdl_dir.mkdir(parents=True, exist_ok=True)
+            target_name = Path(edl_filename).name if edl_filename else f"{safe_title}.edl"
+            edl_path = mdl_dir / target_name
+            if edl_content:
+                edl_path.write_text(edl_content, encoding="utf-8")
+            else:
+                src = _resolve_media_file(target_name, 'edl')
+                if src:
+                    shutil.copy2(src, edl_path)
+                else:
+                    edl_path = None
+            if edl_path:
+                report["edl"] = str(edl_path)
+
+        # --- curl commands ---
+        if curl_commands:
+            curl_dir = base_path / "curls"
+            curl_dir.mkdir(parents=True, exist_ok=True)
+            if isinstance(curl_commands, str):
+                curl_path = curl_dir / f"{safe_title}_curls.sh"
+                curl_path.write_text(curl_commands, encoding="utf-8")
+            else:
+                curl_path = curl_dir / f"{safe_title}_curls.json"
+                curl_path.write_text(json.dumps(curl_commands, indent=2), encoding="utf-8")
+            report["curls"] = str(curl_path)
+
+        # --- images / videos / thumbnails: pull names out of structured items ---
+        def _names_of(items):
+            out = []
+            for it in (items or []):
+                if isinstance(it, str):
+                    out.append(it)
+                elif isinstance(it, dict):
+                    fn = it.get("filename") or it.get("filepath") or it.get("path")
+                    if fn:
+                        out.append(Path(fn).name)
+            return out
+
+        image_names = _names_of(broll_images)
+        if image_names:
+            img_dir = base_path / "images"
+            img_dir.mkdir(parents=True, exist_ok=True)
+            for fn in image_names:
+                src = _resolve_media_file(fn, 'image')
+                if src:
+                    dst = img_dir / src.name
+                    shutil.copy2(src, dst)
+                    report["images"].append(str(dst))
+                else:
+                    report["images_skipped"].append(fn)
+
+        video_names = _names_of(grok_videos)
+        if video_names:
+            vid_dir = base_path / "broll"
+            vid_dir.mkdir(parents=True, exist_ok=True)
+            for fn in video_names:
+                src = _resolve_media_file(fn, 'video')
+                if src:
+                    dst = vid_dir / src.name
+                    shutil.copy2(src, dst)
+                    report["videos"].append(str(dst))
+                else:
+                    report["videos_skipped"].append(fn)
+
+        thumb_names = _names_of(thumbnails)
+        if thumb_names:
+            thumb_dir = base_path / "thumbnails"
+            thumb_dir.mkdir(parents=True, exist_ok=True)
+            for fn in thumb_names:
+                src = _resolve_media_file(fn, 'thumbnail')
+                if src:
+                    dst = thumb_dir / src.name
+                    shutil.copy2(src, dst)
+                    report["thumbnails"].append(str(dst))
+                else:
+                    report["thumbnails_skipped"].append(fn)
+
+        total_saved = (
+            (1 if report["script"] else 0)
+            + (1 if report["edl"] else 0)
+            + (1 if report["curls"] else 0)
+            + len(report["images"]) + len(report["videos"]) + len(report["thumbnails"])
+        )
+        total_skipped = (
+            len(report["images_skipped"])
+            + len(report["videos_skipped"])
+            + len(report["thumbnails_skipped"])
+        )
+        logger.info(
+            f"💾 save-outputs → run_dir={base_path} | saved={total_saved} skipped={total_skipped}"
+        )
+        return jsonify({
+            "success": True,
+            "base_dir": str(base_path),
+            "report": report,
+            "total_saved": total_saved,
+            "total_skipped": total_skipped,
+        })
+    except Exception as e:
+        logger.error(f"❌ /api/save-outputs failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/grok/key", methods=["GET"])
+def grok_get_saved_key():
+    """Return saved Grok API key from server settings (if any)."""
+    try:
+        settings = _load_scriptcraft_settings()
+        key = (settings.get("grok_api_key") or "").strip()
+        return jsonify({"success": True, "api_key": key})
+    except Exception as e:
+        logger.error(f"❌ Failed to load saved Grok key: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/grok/key", methods=["POST"])
+def grok_save_key():
+    """Persist Grok API key in server settings so it survives browser/session changes."""
+    try:
+        data = request.get_json() or {}
+        api_key = (data.get("api_key") or "").strip()
+        if not api_key:
+            return jsonify({"success": False, "error": "api_key is required"}), 400
+
+        settings = _load_scriptcraft_settings()
+        settings["grok_api_key"] = api_key
+        if not _save_scriptcraft_settings(settings):
+            return jsonify({"success": False, "error": "Could not save settings"}), 500
+
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.error(f"❌ Failed to save Grok key: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _grok_get_output_dir(script_title: Optional[str] = None) -> Path:
+    """Resolve directory for Grok video output under the active run folder."""
+    if script_title:
+        base = _get_run_output_dir(script_title, create=True)
+    else:
+        base = _get_output_parent_dir()
+    target = base / "broll"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _grok_emit(session_id: str, payload: dict) -> None:
+    q = grok_video_streams.get(session_id)
+    if q is not None:
+        try:
+            q.put_nowait(payload)
+        except Exception:
+            pass
+
+
+def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, script_title: str = "") -> None:
+    """Background worker: generate Grok videos one-by-one, streaming progress and honoring cancel."""
+    cancel_evt = grok_video_cancel_events.setdefault(session_id, _threading.Event())
+    out_dir = _grok_get_output_dir(script_title or None)
+    videos: list = []
+    failures: list = []
+    total = len(selected_rows)
+    cancelled = False
+
+    try:
+        import xai_sdk  # type: ignore
+        import certifi  # type: ignore
+        client = xai_sdk.Client(api_key=api_key)
+    except Exception as e:
+        _grok_emit(session_id, {
+            "type": "error",
+            "message": f"❌ Failed to init Grok client: {e}",
+        })
+        _grok_emit(session_id, {
+            "type": "done", "cancelled": False, "videos": [], "failures": [],
+            "generated_count": 0, "failed_count": 0, "total_requested": total,
+            "output_dir": str(out_dir),
+        })
+        grok_video_results[session_id] = {"videos": [], "failures": [], "cancelled": False}
+        return
+
+    _grok_emit(session_id, {
+        "type": "start",
+        "message": f"🎬 Starting Grok video generation: {total} clip(s) → {out_dir}",
+        "total": total,
+        "output_dir": str(out_dir),
+    })
+
+    for i, row in enumerate(selected_rows):
+        if cancel_evt.is_set():
+            cancelled = True
+            break
+
+        prompt = (row.get("description") or row.get("search_term") or "").strip()
+        term = row.get("search_term", f"vid{i}") or f"vid{i}"
+        timecode = row.get("timecode", "")
+
+        if not prompt:
+            failures.append({"index": i, "error": "Missing prompt", "row": row})
+            _grok_emit(session_id, {
+                "type": "video_failed",
+                "index": i, "current": i + 1, "total": total,
+                "search_term": term, "timecode": timecode,
+                "error": "Missing prompt",
+                "message": f"⚠️ [{i+1}/{total}] Skipped '{term}' — missing prompt",
+            })
+            continue
+
+        _grok_emit(session_id, {
+            "type": "video_start",
+            "index": i, "current": i + 1, "total": total,
+            "search_term": term, "timecode": timecode, "description": prompt,
+            "message": f"🎨 [{i+1}/{total}] Generating '{term}'…",
+        })
+
+        try:
+            response = client.video.generate(
+                prompt=prompt,
+                model="grok-imagine-video",
+                duration=6,
+                aspect_ratio="16:9",
+                resolution="480p",
+            )
+
+            if cancel_evt.is_set():
+                cancelled = True
+                break
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_term = "".join(c if c.isalnum() else "_" for c in term)[:30]
+            filename = f"grok_{timestamp}_{i}_{safe_term}.mp4"
+            local_path = out_dir / filename
+
+            with requests.get(response.url, stream=True, timeout=180, verify=certifi.where()) as dl_resp:
+                dl_resp.raise_for_status()
+                with open(local_path, "wb") as out_file:
+                    for chunk in dl_resp.iter_content(chunk_size=8192):
+                        if cancel_evt.is_set():
+                            break
+                        if chunk:
+                            out_file.write(chunk)
+
+            if cancel_evt.is_set():
+                # Partial download — drop the incomplete file.
+                try:
+                    if local_path.exists():
+                        local_path.unlink()
+                except Exception:
+                    pass
+                cancelled = True
+                break
+
+            video_entry = {
+                "timecode": timecode,
+                "search_term": term,
+                "description": prompt,
+                "url": response.url,
+                "filename": str(local_path),
+            }
+            videos.append(video_entry)
+
+            _grok_emit(session_id, {
+                "type": "video_ready",
+                "index": i, "current": i + 1, "total": total,
+                "video": video_entry,
+                "message": f"✅ [{i+1}/{total}] Saved '{term}' → {local_path}",
+            })
+        except Exception as row_err:
+            failures.append({
+                "index": i,
+                "timecode": timecode,
+                "search_term": term,
+                "error": str(row_err),
+            })
+            _grok_emit(session_id, {
+                "type": "video_failed",
+                "index": i, "current": i + 1, "total": total,
+                "search_term": term, "timecode": timecode,
+                "error": str(row_err),
+                "message": f"❌ [{i+1}/{total}] Failed '{term}': {row_err}",
+            })
+
+    grok_video_results[session_id] = {
+        "videos": videos,
+        "failures": failures,
+        "cancelled": cancelled,
+        "output_dir": str(out_dir),
+    }
+
+    final_msg = (
+        f"🛑 Cancelled — kept {len(videos)} of {total} videos"
+        if cancelled
+        else f"✅ Grok videos complete: {len(videos)}/{total} (failed: {len(failures)})"
+    )
+    _grok_emit(session_id, {
+        "type": "done",
+        "cancelled": cancelled,
+        "videos": videos,
+        "failures": failures,
+        "generated_count": len(videos),
+        "failed_count": len(failures),
+        "total_requested": total,
+        "output_dir": str(out_dir),
+        "message": final_msg,
+    })
+
+
+@app.route("/api/grok/generate-selected", methods=["POST"])
+def grok_generate_selected_videos():
+    """Start background Grok video generation for selected B-roll rows. Streams via SSE."""
+    try:
+        data = request.get_json() or {}
+        selected_rows = data.get("selected_rows") or []
+        api_key = (data.get("api_key") or "").strip() or os.getenv("XAI_API_KEY", "").strip()
+        script_title = (data.get("script_title") or "").strip()
+        session_id = (data.get("session_id") or "").strip() or str(uuid.uuid4())
+
+        if not api_key:
+            return jsonify({"success": False, "error": "Grok API key is required"}), 400
+        if not selected_rows:
+            return jsonify({"success": False, "error": "No rows selected"}), 400
+
+        # Reset per-session state
+        grok_video_cancel_events[session_id] = _threading.Event()
+        grok_video_streams[session_id] = _queue.Queue()
+        grok_video_results.pop(session_id, None)
+
+        thread = _threading.Thread(
+            target=_grok_generate_worker,
+            args=(session_id, selected_rows, api_key, script_title),
+            daemon=True,
+        )
+        thread.start()
+
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "total": len(selected_rows),
+            "stream_url": f"/api/grok/progress/{session_id}",
+            "cancel_url": f"/api/grok/cancel/{session_id}",
+        })
+    except Exception as e:
+        logger.error(f"❌ Grok selected generation failed to start: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/grok/progress/<session_id>")
+def grok_progress_stream(session_id):
+    """SSE stream of per-video progress events for a Grok generation session."""
+    q = grok_video_streams.get(session_id)
+    if q is None:
+        return "Session not found", 404
+
+    def generate():
+        try:
+            while True:
+                try:
+                    payload = q.get(timeout=300)
+                except _queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"data: {json.dumps(payload)}\n\n"
+                if payload.get("type") == "done":
+                    break
+        finally:
+            # Leave results in grok_video_results for inspection; clean stream + cancel event.
+            grok_video_streams.pop(session_id, None)
+            grok_video_cancel_events.pop(session_id, None)
+
+    return Response(generate(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
+
+
+@app.route("/api/grok/cancel/<session_id>", methods=["POST"])
+def grok_cancel(session_id):
+    """Signal an in-flight Grok generation to stop after the current step. Already-saved videos are kept."""
+    try:
+        evt = grok_video_cancel_events.get(session_id)
+        if evt is None:
+            evt = _threading.Event()
+            grok_video_cancel_events[session_id] = evt
+        evt.set()
+        logger.info(f"🛑 Grok video generation cancel requested for session {session_id}")
+        return jsonify({"success": True, "session_id": session_id})
+    except Exception as e:
+        logger.error(f"❌ Failed to cancel Grok generation: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/test_word")
@@ -3024,7 +5045,7 @@ def serve_thumbnail(filename):
     """Serve generated thumbnail images"""
     try:
         search_roots = [
-            Path.home() / "Dev" / "Videos" / "Edited" / "Final",
+            _get_output_parent_dir(),
             Path.home() / "Dev" / "Thumbnails",
         ]
 
@@ -3053,7 +5074,7 @@ def serve_broll_image(filename):
     """Serve generated B-roll images"""
     try:
         search_roots = [
-            Path.home() / "Dev" / "Videos" / "Edited" / "Final",
+            _get_output_parent_dir(),
             Path.home() / "Dev" / "brollimages",
         ]
 
@@ -3081,6 +5102,169 @@ def serve_broll_image(filename):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/broll-videos/<filename>")
+def serve_broll_video(filename):
+    """Serve generated Grok B-roll videos from {output_dir}/broll or legacy ~/Dev/brollvideos."""
+    try:
+        safe_name = Path(filename).name
+        candidates = []
+        base = _get_output_base_dir()
+        if base is not None:
+            candidates.append(base / "broll" / safe_name)
+            for run_broll in base.glob("*/broll"):
+                candidates.append(run_broll / safe_name)
+        candidates.append(Path.home() / "Dev" / "brollvideos" / safe_name)
+        for file_path in candidates:
+            if file_path.exists() and file_path.suffix.lower() == '.mp4':
+                return send_file(file_path, mimetype='video/mp4')
+        return jsonify({"error": "B-roll video not found"}), 404
+    except Exception as e:
+        logger.error(f"Error serving B-roll video: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def _resolve_media_file(filename: str, kind: str):
+    """Resolve a media filename to an absolute path. kind: 'image' | 'video' | 'thumbnail' | 'edl'."""
+    # Strip any path components for safety
+    safe_name = Path(filename).name
+    if not safe_name or safe_name in ('.', '..'):
+        return None
+
+    if kind == 'video':
+        candidates = []
+        base = _get_output_base_dir()
+        if base is not None:
+            candidates.append(base / "broll" / safe_name)
+            for run_broll in base.glob("*/broll"):
+                candidates.append(run_broll / safe_name)
+        candidates.append(Path.home() / "Dev" / "brollvideos" / safe_name)
+        for candidate in candidates:
+            if candidate.exists() and candidate.suffix.lower() == '.mp4':
+                return candidate
+        return None
+
+    if kind == 'thumbnail':
+        search_roots = [
+            _get_output_parent_dir(),
+            Path.home() / "Dev" / "Thumbnails",
+        ]
+        allowed_ext = {'.png', '.jpg', '.jpeg'}
+        for root in search_roots:
+            if not root.exists():
+                continue
+            matches = list(root.rglob(safe_name))
+            if matches and matches[0].suffix.lower() in allowed_ext:
+                return matches[0]
+        return None
+
+    if kind == 'edl':
+        base = _get_output_base_dir()
+        if base is not None:
+            direct = base / "MDL" / safe_name
+            if direct.exists() and direct.suffix.lower() == '.edl':
+                return direct
+            for run_mdl in base.glob("*/MDL"):
+                candidate = run_mdl / safe_name
+                if candidate.exists() and candidate.suffix.lower() == '.edl':
+                    return candidate
+
+        # Legacy fallback: previous flow wrote EDLs in cwd.
+        candidate = Path.cwd() / safe_name
+        if candidate.exists() and candidate.suffix.lower() == '.edl':
+            return candidate
+        # Also search the repo root just in case.
+        repo_root = Path(__file__).resolve().parent.parent
+        for root in (repo_root, repo_root.parent):
+            c = root / safe_name
+            if c.exists() and c.suffix.lower() == '.edl':
+                return c
+        return None
+
+    # images: search the same roots used by serve_broll_image
+    search_roots = [
+        _get_output_parent_dir(),
+        Path.home() / "Dev" / "brollimages",
+    ]
+    allowed_ext = {'.png', '.jpg', '.jpeg', '.webp'}
+    for root in search_roots:
+        if not root.exists():
+            continue
+        matches = list(root.rglob(safe_name))
+        if matches:
+            match = matches[0]
+            if match.suffix.lower() in allowed_ext:
+                return match
+    return None
+
+
+@app.route("/api/download-media-zip", methods=["POST"])
+def download_media_zip():
+    """Bundle selected B-roll images and/or Grok videos into a ZIP for download.
+
+    Request JSON:
+      {
+        "title": "Optional script title (used in zip filename)",
+        "images": ["filename1.png", ...],   # optional
+        "videos": ["filename1.mp4", ...]    # optional
+      }
+    """
+    import zipfile
+    import re as _re
+
+    try:
+        data = request.get_json(silent=True) or {}
+        title = (data.get("title") or "media").strip() or "media"
+        images = data.get("images") or []
+        videos = data.get("videos") or []
+
+        if not images and not videos:
+            return jsonify({"success": False, "error": "No files requested"}), 400
+
+        # Sanitize title for filename
+        safe_title = _re.sub(r'[^A-Za-z0-9._-]+', '_', title).strip('_') or "media"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_name = f"{safe_title}_media_{ts}.zip"
+
+        buf = BytesIO()
+        added = 0
+        skipped = []
+        with zipfile.ZipFile(buf, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+            for fn in images:
+                path = _resolve_media_file(fn, 'image')
+                if path is None:
+                    skipped.append(fn)
+                    continue
+                zf.write(path, arcname=f"broll-images/{path.name}")
+                added += 1
+            for fn in videos:
+                path = _resolve_media_file(fn, 'video')
+                if path is None:
+                    skipped.append(fn)
+                    continue
+                zf.write(path, arcname=f"grok-videos/{path.name}")
+                added += 1
+
+        if added == 0:
+            return jsonify({
+                "success": False,
+                "error": "None of the requested files could be found on disk",
+                "skipped": skipped,
+            }), 404
+
+        if skipped:
+            logger.warning(f"⚠️ Media zip skipped {len(skipped)} missing files: {skipped[:5]}{'…' if len(skipped) > 5 else ''}")
+
+        buf.seek(0)
+        logger.info(f"📦 Built media zip '{zip_name}' with {added} files ({len(buf.getvalue())} bytes)")
+        response = make_response(buf.getvalue())
+        response.headers['Content-Type'] = 'application/zip'
+        response.headers['Content-Disposition'] = f'attachment; filename="{zip_name}"'
+        return response
+    except Exception as e:
+        logger.error(f"❌ download_media_zip failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/create_resolve_project", methods=["POST"])
 def create_resolve_project():
     """Create a new DaVinci Resolve project with automated setup"""
@@ -3091,11 +5275,24 @@ def create_resolve_project():
         script_title = data.get("script_title", "AI_Video_Project")
         edl_content = data.get("edl_content")
         edl_filename = data.get("edl_filename")
+        generate_subtitles = bool(data.get("generate_subtitles", True))
 
         logger.info(f"📊 Script Title: {script_title}")
         logger.info(f"📄 EDL Filename: {edl_filename}")
         logger.info(
             f"📄 EDL Content Length: {len(edl_content) if edl_content else 0}")
+
+        # Ensure generated Grok videos/images are in expected DaVinci project folders.
+        try:
+            sync_info = _sync_generated_media_to_project(
+                _get_run_output_dir(script_title, create=True)
+            )
+            logger.info(
+                f"🎞️ Pre-Resolve media sync: {sync_info['videos_copied']} video(s), "
+                f"{sync_info['images_copied']} image(s) copied"
+            )
+        except Exception as sync_err:
+            logger.warning(f"⚠️ Media sync before create_resolve_project failed: {sync_err}")
 
         # Save EDL content to temp file if provided
         edl_file_path = None
@@ -3111,11 +5308,20 @@ def create_resolve_project():
                 logger.error(f"❌ Failed to write EDL temp file: {write_error}")
                 edl_file_path = None
 
+        project_root = _get_run_output_dir(script_title, create=True)
+        broll_media_path = str(project_root / "bRoll")
+        images_media_path = str(project_root / "images")
+
         # Import the DaVinci Resolve API module
         from davinci_resolve_api import create_resolve_project as create_project
 
         # Create the project with EDL file path
-        result = create_project(script_title, edl_file_path)
+        result = create_project(
+            script_title,
+            edl_file_path,
+            broll_folder=broll_media_path,
+            images_folder=images_media_path,
+        )
 
         # Clean up temp file
         if edl_file_path and os.path.exists(edl_file_path):
@@ -3154,6 +5360,35 @@ def check_aroll_videos():
     """Check if aRoll folder has any videos"""
     logger.info("=== CHECKING AROLL VIDEOS ===")
 
+    def _is_video_file(filename: str) -> bool:
+        return filename.lower().endswith((".mp4", ".mov", ".m4v"))
+
+    def _get_default_aroll_source():
+        """Return (folder_path, sorted_video_files) for default A-roll test clips.
+
+        Search order:
+        1. SCRIPTCRAFT_DEFAULT_AROLL_DIR env var (if set)
+        2. ~/Dev/Davinci/Template/aRoll
+        3. ~/Dev/Davinci/Template/Raw
+        """
+        candidate_dirs = []
+
+        env_dir = (os.environ.get("SCRIPTCRAFT_DEFAULT_AROLL_DIR") or "").strip()
+        if env_dir:
+            candidate_dirs.append(os.path.expanduser(env_dir))
+
+        candidate_dirs.append(os.path.expanduser("~/Dev/Davinci/Template/aRoll"))
+        candidate_dirs.append(os.path.expanduser("~/Dev/Davinci/Template/Raw"))
+
+        for folder in candidate_dirs:
+            if not os.path.isdir(folder):
+                continue
+            files = sorted([f for f in os.listdir(folder) if _is_video_file(f)])
+            if files:
+                return folder, files
+
+        return None, []
+
     try:
         data = request.json
         script_title = data.get("script_title", "")
@@ -3164,22 +5399,17 @@ def check_aroll_videos():
                 "error": "No script title provided"
             }), 400
 
-        # Sanitize title for folder name
-        import re
-        safe_title = re.sub(r'[<>:"/\\|?*]', '_', script_title)
-        safe_title = safe_title.replace(' ', '_')
-
-        # Build path to aroll folder
-        base_path = os.path.expanduser("~/Dev/Videos/Edited/Final")
-        aroll_path = os.path.join(base_path, safe_title, "aroll")
+        project_path = _get_run_output_dir(script_title, create=False)
+        aroll_path = str(project_path / "aRoll")
 
         logger.info(f"📁 Script title: '{script_title}'")
-        logger.info(f"📁 Safe title: '{safe_title}'")
+        logger.info(f"📁 Run folder: '{project_path}'")
         logger.info(f"📁 Checking aroll path: {aroll_path}")
         logger.info(f"📁 Path exists: {os.path.exists(aroll_path)}")
 
         if not os.path.exists(aroll_path):
-            # List what's actually in the base path to help debug
+            # List what's actually in the output parent path to help debug
+            base_path = _get_output_parent_dir()
             if os.path.exists(base_path):
                 logger.info(f"📁 Base path exists, folders found:")
                 for folder in os.listdir(base_path):
@@ -3188,23 +5418,35 @@ def check_aroll_videos():
                 logger.info(f"📁 Base path does not exist: {base_path}")
 
             logger.info(f"📁 aRoll folder does not exist yet")
+
+            default_source, default_videos = _get_default_aroll_source()
             return jsonify({
                 "success": True,
                 "video_count": 0,
-                "videos": []
+                "videos": [],
+                "default_available": len(default_videos) > 0,
+                "default_video_count": len(default_videos),
+                "default_source": default_source,
+                "default_videos": default_videos,
             })
 
-        # Count .mp4 files in aRoll folder
-        video_files = [f for f in os.listdir(aroll_path) if f.endswith('.mp4')]
+        # Count local project video files in aRoll folder
+        video_files = [f for f in os.listdir(aroll_path) if _is_video_file(f)]
 
         logger.info(f"✅ Found {len(video_files)} video(s) in aRoll folder:")
         for vf in video_files:
             logger.info(f"   - {vf}")
 
+        default_source, default_videos = _get_default_aroll_source()
+
         return jsonify({
             "success": True,
             "video_count": len(video_files),
-            "videos": video_files
+            "videos": video_files,
+            "default_available": len(default_videos) > 0,
+            "default_video_count": len(default_videos),
+            "default_source": default_source,
+            "default_videos": default_videos,
         })
 
     except Exception as e:
@@ -3226,34 +5468,82 @@ def create_resolve_with_videos():
         script_title = data.get("script_title", "AI_Video_Project")
         edl_content = data.get("edl_content")
         edl_filename = data.get("edl_filename")
+        generate_subtitles = bool(data.get("generate_subtitles", True))
 
         logger.info(f"📊 Script Title: {script_title}")
 
-        # Sanitize title for folder name
-        import re
-        safe_title = re.sub(r'[<>:"/\\|?*]', '_', script_title)
-        safe_title = safe_title.replace(' ', '_')
+        # Ensure generated Grok videos/images are in expected DaVinci project folders.
+        try:
+            sync_info = _sync_generated_media_to_project(
+                _get_run_output_dir(script_title, create=True)
+            )
+            logger.info(
+                f"🎞️ Pre-Resolve media sync: {sync_info['videos_copied']} video(s), "
+                f"{sync_info['images_copied']} image(s) copied"
+            )
+        except Exception as sync_err:
+            logger.warning(f"⚠️ Media sync before create_resolve_with_videos failed: {sync_err}")
 
-        # Build path to aroll folder
-        base_path = os.path.expanduser("~/Dev/Videos/Edited/Final")
-        aroll_path = os.path.join(base_path, safe_title, "aroll")
+        def _is_video_file(filename: str) -> bool:
+            return filename.lower().endswith((".mp4", ".mov", ".m4v"))
+
+        def _get_default_aroll_source():
+            candidate_dirs = []
+
+            env_dir = (os.environ.get("SCRIPTCRAFT_DEFAULT_AROLL_DIR") or "").strip()
+            if env_dir:
+                candidate_dirs.append(os.path.expanduser(env_dir))
+
+            candidate_dirs.append(os.path.expanduser("~/Dev/Davinci/Template/aRoll"))
+            candidate_dirs.append(os.path.expanduser("~/Dev/Davinci/Template/Raw"))
+
+            for folder in candidate_dirs:
+                if not os.path.isdir(folder):
+                    continue
+                files = sorted([f for f in os.listdir(folder) if _is_video_file(f)])
+                if files:
+                    return folder, files
+
+            return None, []
+
+        use_default_aroll = bool(data.get("use_default_aroll", False))
+
+        project_path = _get_run_output_dir(script_title, create=False)
+        aroll_path = str(project_path / "aRoll")
 
         # Get list of video files
         video_files = []
         if os.path.exists(aroll_path):
-            video_files = [f for f in os.listdir(
-                aroll_path) if f.endswith('.mp4')]
+            video_files = [f for f in os.listdir(aroll_path) if _is_video_file(f)]
             logger.info(f"📹 Found {len(video_files)} video(s) in aroll folder")
+
+        # Optional fallback for testing DaVinci flow without downloaded HeyGen aRoll.
+        used_default_aroll = False
+        default_source = None
+        if use_default_aroll and len(video_files) == 0:
+            default_source, default_videos = _get_default_aroll_source()
+            if default_source and default_videos:
+                logger.info(
+                    f"🧪 Using default A-roll test clips from: {default_source} "
+                    f"({len(default_videos)} videos)"
+                )
+                aroll_path = default_source
+                video_files = default_videos
+                used_default_aroll = True
+            else:
+                logger.warning(
+                    "⚠️ use_default_aroll requested, but no default clips were found"
+                )
 
         # Sort videos by chapter/part order
         def parse_chapter_info(filename):
             """Extract chapter and part numbers from filename.
 
-            Matches any filename containing Ch{N} then p{N}, e.g.:
+            Matches any filename containing Ch{N} and p{N}, e.g.:
               Ch1p1, Ch1p2, Ch6p1         (no separator)
               Ch1-Pt1, Ch1-pt1, Ch2-p2   (dash + optional 't')
               Ch1_Pt1                     (underscore)
-              Title-Ch3p2.mp4            (title prefix)
+              Title-Ch3p2.mp4            (title prefix, any separator)
               heygen_...-Ch1p1_id.mp4    (heygen with ID suffix)
               Ch1p1b                     (b-duplicate sorts after Ch1p1)
 
@@ -3263,11 +5553,16 @@ def create_resolve_with_videos():
             import re
             name = filename
 
-            # Intro/exit clips always go first
+            # Exit clip ("AI with Roz Exit Clip.mov") always goes LAST,
+            # after every chapter clip and any unknown clips.
+            if re.search(r'AI\s+with\s+Roz.*Exit', name, re.IGNORECASE):
+                return (99999, 0)
+
+            # Other "AI with Roz" intro clips always go first
             if re.search(r'AI\s+with\s+Roz', name, re.IGNORECASE):
                 return (0, 0)
 
-            # Universal pattern: Ch{X} + optional separator + p/P + optional t/T + {Y} + optional b
+            # Universal pattern: Ch{X} then optional separator then p/P then optional t/T then {Y} then optional b
             # Covers: Ch1p1, Ch1-p1, Ch1-Pt1, Ch1-pt1, Ch1_Pt1, Ch6p1, Ch2-p2, etc.
             match = re.search(r'Ch(\d+)[-_]?[Pp][Tt]?(\d+)(b?)', name)
             if match:
@@ -3317,13 +5612,25 @@ def create_resolve_with_videos():
         logger.info(f"   aRoll path: {aroll_path}")
         logger.info(f"   Videos to add: {len(sorted_videos)}")
 
+        broll_media_path = str(project_path / "bRoll")
+        images_media_path = str(project_path / "images")
+
         # Create the project with videos
         result = create_resolve_project_with_videos(
             script_title,
             edl_file_path,
             aroll_path,
-            sorted_videos
+            sorted_videos,
+            broll_media_path,
+            images_media_path,
+            generate_subtitles,
         )
+
+        if isinstance(result, dict):
+            result["used_default_aroll"] = used_default_aroll
+            result["aroll_source"] = aroll_path
+            if used_default_aroll:
+                result["default_aroll_source"] = default_source
 
         # Clean up temp file
         if edl_file_path and os.path.exists(edl_file_path):
@@ -3404,7 +5711,8 @@ def execute_curl():
                     # Extract job ID if available (HeyGen specific)
                     job_id = None
                     if isinstance(response_data, dict):
-                        job_id = response_data.get('data', {}).get('video_id') or \
+                        data_obj = response_data.get('data') or {}
+                        job_id = (data_obj.get('video_id') if isinstance(data_obj, dict) else None) or \
                             response_data.get('video_id') or \
                             response_data.get('job_id') or \
                             response_data.get('id')
@@ -3471,29 +5779,36 @@ def setup_project():
         import shutil
         from pathlib import Path
 
-        # Create safe directory name
-        safe_title = "".join(
-            c for c in script_title
-            if c.isalnum() or c in (' ', '-', '_')
-        ).rstrip()
-        safe_title = safe_title.replace(' ', '_')
-
         # Define paths
-        base_path = Path.home() / "Dev" / "Videos" / "Edited" / "Final"
-        project_path = base_path / safe_title
+        safe_title = _safe_title_for_paths(script_title)
+        project_path = _get_run_output_dir(script_title, create=True)
         template_path = Path.home() / "Dev" / "Davinci" / "Template"
 
         logger.info(f"📁 Creating project folder: {project_path}")
 
-        # Create project directory (remove if exists)
+        # Create project directory if it doesn't exist
+        # IMPORTANT: Do NOT delete existing project - preserve downloaded videos!
         if project_path.exists():
-            logger.info(f"⚠️ Removing existing project: {project_path}")
-            shutil.rmtree(project_path)
+            logger.info(f"✅ Project folder already exists: {project_path}")
+            logger.info(
+                "   Preserving existing aRoll videos and other content")
+        else:
+            project_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"✅ Created new project folder")
 
-        project_path.mkdir(parents=True, exist_ok=True)
+        # Ensure subfolders exist (without deleting existing content)
+        aroll_path = project_path / "aRoll"
+        aroll_path.mkdir(exist_ok=True)
+        broll_path = project_path / "bRoll"
+        broll_path.mkdir(exist_ok=True)
+        images_path = project_path / "images"
+        images_path.mkdir(exist_ok=True)
+        script_path = project_path / "script"
+        script_path.mkdir(exist_ok=True)
 
-        # Copy template files
-        if template_path.exists():
+        # Copy template files ONLY if project is new (no aroll videos exist)
+        aroll_videos = list(aroll_path.glob("*.mp4"))
+        if template_path.exists() and len(aroll_videos) == 0:
             logger.info(f"📋 Copying template from: {template_path}")
             file_count = sum(
                 1 for _ in template_path.rglob('*') if _.is_file())
@@ -3520,6 +5835,11 @@ def setup_project():
                         f"📊 Progress: {copied_count}/{file_count} files copied")
 
             logger.info(f"✅ Template files copied ({copied_count} total)")
+        elif len(aroll_videos) > 0:
+            logger.info(
+                f"ℹ️ Skipping template copy - {len(aroll_videos)} "
+                f"aRoll videos already exist"
+            )
         else:
             logger.warning(
                 f"⚠️ Template path not found: {template_path}"
@@ -3529,40 +5849,15 @@ def setup_project():
         script_dir = project_path / "script"
         script_dir.mkdir(exist_ok=True)
 
-        # Copy B-roll images to images folder if they exist
-        broll_images_dir = Path.home() / "Dev" / "brollimages"
-        images_dir = project_path / "images"
-
-        if broll_images_dir.exists():
-            images_dir.mkdir(exist_ok=True)
-
-            # Get all image files from broll images directory
-            image_files = list(broll_images_dir.glob("*.png")) + \
-                list(broll_images_dir.glob("*.jpg")) + \
-                list(broll_images_dir.glob("*.jpeg")) + \
-                list(broll_images_dir.glob("*.webp"))
-
-            if image_files:
-                logger.info(
-                    f"📸 Found {len(image_files)} B-roll images to copy")
-                copied_count = 0
-
-                for image_file in image_files:
-                    try:
-                        dest_file = images_dir / image_file.name
-                        shutil.copy2(image_file, dest_file)
-                        copied_count += 1
-                    except Exception as copy_error:
-                        logger.warning(
-                            f"⚠️ Could not copy {image_file.name}: {copy_error}")
-
-                logger.info(
-                    f"✅ Copied {copied_count} B-roll images to project")
-            else:
-                logger.info("ℹ️ No B-roll images found to copy")
-        else:
-            logger.info(
-                f"ℹ️ B-roll images directory not found: {broll_images_dir}")
+        # Sync generated media into DaVinci project structure.
+        # - Grok videos: broll -> bRoll
+        # - Generated images already produced in project/images are kept there
+        # - Legacy fallback copies from ~/Dev/brollimages when needed
+        media_sync = _sync_generated_media_to_project(project_path)
+        logger.info(
+            f"🎞️ Media sync complete: {media_sync['videos_copied']} video(s) -> bRoll, "
+            f"{media_sync['images_copied']} image(s) copied"
+        )
 
         # Save script as Word document if content provided
         if script_content:
@@ -3594,7 +5889,8 @@ def setup_project():
         return jsonify({
             "success": True,
             "project_path": str(project_path),
-            "script_dir": str(script_dir)
+            "script_dir": str(script_dir),
+            "media_sync": media_sync,
         })
 
     except Exception as e:
@@ -3755,14 +6051,12 @@ def download_heygen_video():
 
             # Save to project aroll folder if script title provided
             if script_title:
-                base_path = Path.home() / "Dev" / "Videos" / "Edited"
-                base_path = base_path / "Final"
-                project_path = base_path / safe_title
-                aroll_path = project_path / "aroll"
+                project_path = _get_run_output_dir(script_title, create=True)
+                aroll_path = project_path / "aRoll"
 
                 # Create project folders if they don't exist
                 aroll_path.mkdir(parents=True, exist_ok=True)
-                broll_path = project_path / "broll"
+                broll_path = project_path / "bRoll"
                 broll_path.mkdir(parents=True, exist_ok=True)
                 images_path = project_path / "images"
                 images_path.mkdir(parents=True, exist_ok=True)

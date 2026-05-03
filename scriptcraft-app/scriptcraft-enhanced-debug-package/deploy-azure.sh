@@ -13,7 +13,7 @@ CONTAINER_APP_NAME="scriptcraft-app"
 CONTAINER_APP_ENV="linedrive-env"
 CONTAINER_REGISTRY="scriptcraftregistry"
 IMAGE_NAME="scriptcraft"
-BUILD_VERSION="2.1.$(date +%Y%m%d%H%M)"
+BUILD_VERSION="3.0.$(date +%Y%m%d%H%M)"
 IMAGE_TAG="$BUILD_VERSION"
 
 echo "🚀 ScriptCraft Azure Container Apps Deployment"

@@ -1,10 +1,10 @@
 # ScriptCraft Web App Dockerfile
 # Production-ready containerized AI script creation application
 
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 # Build argument for version
-ARG BUILD_VERSION=2.1.0
+ARG BUILD_VERSION=3.0.0
 ENV APP_VERSION=${BUILD_VERSION}
 
 # Set working directory
