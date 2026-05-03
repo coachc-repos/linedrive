@@ -865,6 +865,10 @@
                     <span class="toolbar-icon">🤖</span>
                     <span class="toolbar-text">Grok Test</span>
                 </button>
+                <button class="toolbar-btn" onclick="openResolveInspector()" title="Inspect current DaVinci Resolve timeline">
+                    <span class="toolbar-icon">🔍</span>
+                    <span class="toolbar-text">Inspect Resolve</span>
+                </button>
                 <button class="toolbar-btn" onclick="openApiKeysModal()" title="Manage API Keys">
                     <span class="toolbar-icon">🔑</span>
                     <span class="toolbar-text">API Keys</span>
@@ -901,6 +905,37 @@
             <!-- Hidden inputs preserve the existing JS contract; values are managed via the API Keys modal (🔑 toolbar button). -->
             <input type="hidden" id="grokApiKey" value="{{ saved_grok_api_key or '' }}">
             <input type="hidden" id="googleApiKey" value="{{ saved_google_api_key or '' }}">
+        </div>
+
+        <!-- Resolve Inspector Modal -->
+        <div id="resolveInspectorModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:10060; align-items:center; justify-content:center;">
+            <div style="background:#0f172a; border:1px solid #334155; border-radius:10px; width:min(1200px, 96vw); height:min(85vh, 900px); padding:18px 22px; box-shadow:0 20px 50px rgba(0,0,0,0.6); display:flex; flex-direction:column;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h2 style="margin:0; color:#e2e8f0; font-size:1.1em;">🔍 DaVinci Resolve Timeline Inspector</h2>
+                    <div>
+                        <button onclick="refreshResolveInspector()" style="margin-right:8px; padding:4px 12px; background:#1e293b; border:1px solid #334155; color:#60a5fa; border-radius:4px; cursor:pointer; font-size:0.85em;">🔄 Refresh</button>
+                        <button onclick="copyResolveInspectorJson()" style="margin-right:8px; padding:4px 12px; background:#1e293b; border:1px solid #334155; color:#94a3b8; border-radius:4px; cursor:pointer; font-size:0.85em;">📋 Copy JSON</button>
+                        <button onclick="closeResolveInspector()" style="background:transparent; color:#94a3b8; border:none; font-size:1.4em; cursor:pointer;">×</button>
+                    </div>
+                </div>
+                <div id="resolveInspectorSummary" style="color:#94a3b8; font-size:0.82em; margin-bottom:8px;"></div>
+                <div id="resolveInspectorTabs" style="display:flex; gap:4px; flex-wrap:wrap; border-bottom:1px solid #334155; padding-bottom:6px; margin-bottom:8px;"></div>
+                <div id="resolveInspectorBody" style="flex:1; overflow:auto; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:10px; color:#cbd5e1; font-size:0.82em;">
+                    <div style="color:#94a3b8;">Click <strong>🔄 Refresh</strong> to load the current timeline.</div>
+                </div>
+                <div id="resolveInspectorJson" style="display:none; flex:1; overflow:auto; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:10px; color:#cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.75em; white-space:pre;"></div>
+            </div>
+        </div>
+
+        <!-- Probe Fusion Comp Modal -->
+        <div id="probeFusionOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:10070; align-items:center; justify-content:center;">
+            <div style="background:#0f172a; border:1px solid #334155; border-radius:10px; width:min(1100px, 95vw); height:min(80vh, 850px); padding:18px 22px; box-shadow:0 20px 50px rgba(0,0,0,0.6); display:flex; flex-direction:column;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h2 id="probeFusionTitle" style="margin:0; color:#e2e8f0; font-size:1.05em;">🔬 Fusion Comp Probe</h2>
+                    <button onclick="closeProbeFusion()" style="background:transparent; color:#94a3b8; border:none; font-size:1.4em; cursor:pointer;">×</button>
+                </div>
+                <div id="probeFusionBody" style="flex:1; overflow:auto; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:10px; color:#cbd5e1; font-size:0.82em;"></div>
+            </div>
         </div>
 
         <!-- API Keys Modal -->
@@ -2132,7 +2167,26 @@ Time management content here...`;
             const terms = [];
             const seen = new Set();
 
-            const pushTerm = (raw) => {
+            // Build a short filename slug (snake_case, ≤30 chars) — matches Grok's safe_term style.
+            const fileSlug = (raw) => {
+                return String(raw || '')
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, '_')
+                    .replace(/^_+|_+$/g, '')
+                    .slice(0, 30) || 'broll';
+            };
+            const pad2 = (n) => (n < 10 ? '0' + n : '' + n);
+
+            // Match Grok's timestamp format: YYYYMMDD_HHMMSS (local time).
+            const buildTimestamp = () => {
+                const d = new Date();
+                const p = (n) => (n < 10 ? '0' + n : '' + n);
+                return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+            };
+            const ts = buildTimestamp();
+
+            // ctx: { rowIndex, timecode }
+            const pushTerm = (raw, ctx) => {
                 if (!raw) return;
                 let t = String(raw).trim();
                 if (!t) return;
@@ -2146,11 +2200,22 @@ Time management content here...`;
                     .replace(/^-|-$/g, '');
                 if (!slug || seen.has(slug)) return;
                 seen.add(slug);
-                terms.push({ display: t, url: `https://www.shutterstock.com/video/search/${encodeURIComponent(slug)}` });
+                const idx = (ctx && Number.isInteger(ctx.rowIndex)) ? ctx.rowIndex : terms.length;
+                // Filename basename WITHOUT extension — user keeps their downloaded file's
+                // original extension (.mp4 / .mov / .webm / etc.) untouched.
+                const filename = `broll_${ts}_${pad2(idx)}_${fileSlug(t)}`;
+                terms.push({
+                    display: t,
+                    url: `https://www.shutterstock.com/video/search/${encodeURIComponent(slug)}`,
+                    rowIndex: idx,
+                    timecode: (ctx && ctx.timecode) || '',
+                    filename,
+                });
             };
 
-            // 1) Parse table rows (column 2 = Search Term)
+            // 1) Parse table rows (column 2 = Search Term). Track row index from the table itself.
             sources.forEach((src) => {
+                let rowIndex = 0;
                 src.split('\n').forEach((line) => {
                     const s = line.trim();
                     if (!s.startsWith('|')) return;
@@ -2160,18 +2225,21 @@ Time management content here...`;
                     if (cells.length < 2) return;
                     const headerJoined = cells.join(' ').toLowerCase();
                     if (headerJoined.includes('timecode') && headerJoined.includes('search')) return;
+                    const timecode = cells[0] || '';
                     const cell = cells[1];
                     if (!cell) return;
-                    cell.split(/\s+OR\s+|,|\/|\u2022/i).forEach(pushTerm);
+                    const ctx = { rowIndex, timecode };
+                    cell.split(/\s+OR\s+|,|\/|\u2022/i).forEach((raw) => pushTerm(raw, ctx));
+                    rowIndex += 1;
                 });
             });
 
-            // 2) Look for explicit "Stock Footage Search String:" lines anywhere
+            // 2) Look for explicit "Stock Footage Search String:" lines anywhere (no row context).
             sources.forEach((src) => {
                 const re = /Stock\s+Footage\s+Search\s+String\s*:\s*([^\n]+)/gi;
                 let m;
                 while ((m = re.exec(src)) !== null) {
-                    m[1].split(/\s+OR\s+|,|\/|\u2022/i).forEach(pushTerm);
+                    m[1].split(/\s+OR\s+|,|\/|\u2022/i).forEach((raw) => pushTerm(raw, null));
                 }
             });
 
@@ -2181,6 +2249,43 @@ Time management content here...`;
         // Kept for backward compat; the rows are now plain <a target="_blank"> links.
         function openShutterstockInPane(url) {
             try { window.open(url, '_blank', 'noopener,noreferrer'); } catch (_) {}
+        }
+
+        // Copy the suggested broll filename to the clipboard so the user can rename their
+        // manually downloaded Shutterstock file with one paste. Falls back to a hidden
+        // <textarea> + execCommand for browsers without async clipboard access.
+        function copyShutterstockFilename(btnEl, filename) {
+            if (!filename) return;
+            const flash = (ok) => {
+                if (!btnEl) return;
+                const orig = btnEl.textContent;
+                btnEl.textContent = ok ? '✅ Copied' : '❌ Failed';
+                btnEl.classList.toggle('copied', ok);
+                setTimeout(() => {
+                    btnEl.textContent = orig;
+                    btnEl.classList.remove('copied');
+                }, 1200);
+            };
+            const fallback = () => {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = filename;
+                    ta.style.position = 'fixed';
+                    ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    const ok = document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    flash(!!ok);
+                } catch (_) {
+                    flash(false);
+                }
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(filename).then(() => flash(true)).catch(fallback);
+            } else {
+                fallback();
+            }
         }
 
         function renderShutterstockLinks(links) {
@@ -2200,6 +2305,12 @@ Time management content here...`;
                     .shutterstock-link-row.active { background: #1d4ed8; border-color: #60a5fa; }
                     .shutterstock-link-row .ss-term { color: #e2e8f0; font-weight: 600; }
                     .shutterstock-link-row .ss-url { color: #93c5fd; font-size: 11px; word-break: break-all; }
+                    .ss-fname-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+                    .ss-fname { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #fbbf24; background: #0f172a; border: 1px solid #334155; border-radius: 4px; padding: 3px 6px; word-break: break-all; user-select: all; }
+                    .ss-copy-btn { flex: 0 0 auto; font-size: 11px; padding: 3px 8px; background: #334155; color: #e2e8f0; border: 1px solid #475569; border-radius: 4px; cursor: pointer; }
+                    .ss-copy-btn:hover { background: #475569; }
+                    .ss-copy-btn.copied { background: #16a34a; border-color: #22c55e; color: #fff; }
+                    .ss-tc { color: #94a3b8; font-size: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
                     .shutterstock-pane { display: flex; flex-direction: column; border: 1px solid #334155; border-radius: 6px; overflow: hidden; background: #020617; }
                     .shutterstock-pane-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: #1e293b; border-bottom: 1px solid #334155; }
                     .shutterstock-pane-header .title { color: #e2e8f0; font-weight: 600; }
@@ -2212,14 +2323,23 @@ Time management content here...`;
                     <div class="shutterstock-list">
             `;
 
+            const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             links.forEach((l) => {
-                const safeDisplay = l.display.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const safeDisplay = esc(l.display);
                 const safeUrlAttr = l.url.replace(/"/g, '&quot;');
+                const safeFilename = esc(l.filename || '');
+                const tcLabel = l.timecode ? `<span class="ss-tc">${esc(l.timecode)}</span>` : '';
                 html += `
-                    <a class="shutterstock-link-row" href="${safeUrlAttr}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">
-                        <span class="ss-term">${safeDisplay}</span>
-                        <span class="ss-url">${l.url}</span>
-                    </a>
+                    <div class="shutterstock-link-row">
+                        <a href="${safeUrlAttr}" target="_blank" rel="noopener noreferrer" style="text-decoration:none; display:flex; flex-direction:column; gap:2px;">
+                            <span class="ss-term">${safeDisplay} ${tcLabel}</span>
+                            <span class="ss-url">${l.url}</span>
+                        </a>
+                        <div class="ss-fname-row" onclick="event.stopPropagation();">
+                            <span class="ss-fname" title="Suggested filename for the manually downloaded clip">${safeFilename}</span>
+                            <button type="button" class="ss-copy-btn" onclick="copyShutterstockFilename(this, '${safeFilename.replace(/'/g, "\\'")}')">📋 Copy</button>
+                        </div>
+                    </div>
                 `;
             });
 
@@ -4594,6 +4714,262 @@ Thank you for watching!`;
                     // (success confirmation suppressed)
                 }
             });
+        }
+
+        // ---- Resolve Inspector modal ----
+        let _resolveInspectorData = null;
+
+        function openResolveInspector() {
+            const modal = document.getElementById('resolveInspectorModal');
+            if (!modal) return;
+            modal.style.display = 'flex';
+            refreshResolveInspector();
+        }
+
+        function closeResolveInspector() {
+            const modal = document.getElementById('resolveInspectorModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function refreshResolveInspector() {
+            const summary = document.getElementById('resolveInspectorSummary');
+            const tabs = document.getElementById('resolveInspectorTabs');
+            const body = document.getElementById('resolveInspectorBody');
+            const jsonView = document.getElementById('resolveInspectorJson');
+            jsonView.style.display = 'none';
+            body.style.display = 'block';
+            summary.textContent = 'Connecting to DaVinci Resolve…';
+            tabs.innerHTML = '';
+            body.innerHTML = '<div style="color:#94a3b8;">Loading…</div>';
+            try {
+                const res = await fetch('/api/resolve/inspect');
+                const data = await res.json();
+                _resolveInspectorData = data;
+                if (!data.success) {
+                    summary.textContent = '';
+                    body.innerHTML = '<div style="color:#f87171;">❌ ' + (data.error || 'Unknown error') + '</div>';
+                    return;
+                }
+                _renderResolveInspector(data);
+            } catch (e) {
+                summary.textContent = '';
+                body.innerHTML = '<div style="color:#f87171;">❌ Request failed: ' + e.message + '</div>';
+            }
+        }
+
+        function _renderResolveInspector(data) {
+            const summary = document.getElementById('resolveInspectorSummary');
+            const tabs = document.getElementById('resolveInspectorTabs');
+            const body = document.getElementById('resolveInspectorBody');
+            summary.innerHTML =
+                '<strong style="color:#e2e8f0;">' + _ri_esc(data.project_name || '?') + '</strong>' +
+                ' · Timeline: <strong style="color:#e2e8f0;">' + _ri_esc(data.timeline_name || '?') + '</strong>' +
+                ' · ' + data.fps + ' fps · ' +
+                data.video_track_count + ' video / ' + data.audio_track_count + ' audio tracks · ' +
+                data.total_clips + ' total clips';
+
+            const allTracks = [...(data.video_tracks || []), ...(data.audio_tracks || [])];
+            tabs.innerHTML = '';
+            allTracks.forEach((t) => {
+                const btn = document.createElement('button');
+                const label = (t.track_type === 'video' ? 'V' : 'A') + t.track_index +
+                    (t.track_name ? (' · ' + t.track_name) : '') +
+                    ' (' + t.item_count + ')';
+                btn.textContent = label;
+                btn.style.cssText = 'padding:4px 10px; background:#1e293b; border:1px solid #334155; color:#cbd5e1; border-radius:4px; cursor:pointer; font-size:0.8em;';
+                btn.onclick = () => {
+                    Array.from(tabs.children).forEach(c => c.style.background = '#1e293b');
+                    btn.style.background = '#0ea5e9';
+                    body.innerHTML = _renderTrackHtml(t);
+                };
+                tabs.appendChild(btn);
+            });
+            if (allTracks.length) {
+                tabs.children[0].click();
+            } else {
+                body.innerHTML = '<div style="color:#94a3b8;">No tracks found.</div>';
+            }
+        }
+
+        function _renderTrackHtml(track) {
+            if (!track.items || !track.items.length) {
+                return '<div style="color:#94a3b8;">Empty track.</div>';
+            }
+            let html = '';
+            track.items.forEach((item, i) => {
+                const tag = item.is_adjustment_clip
+                    ? '<span style="background:#7c2d12; color:#fed7aa; padding:1px 6px; border-radius:3px; font-size:0.75em; margin-left:6px;">ADJUSTMENT</span>'
+                    : '';
+                const tl = item.timeline || {};
+                const src = item.source || {};
+                const mpi = item.media_pool_item || {};
+                const mpiProps = mpi.clip_property || {};
+                const fxList = (item.fusion_comp_names && item.fusion_comp_names.length)
+                    ? item.fusion_comp_names.map(n => '<span style="background:#1e3a8a; color:#bfdbfe; padding:1px 6px; border-radius:3px; font-size:0.75em; margin-right:4px;">' + _ri_esc(n) + '</span>').join('')
+                    : '<span style="color:#64748b;">none</span>';
+                const probeBtn = (item.fusion_comp_count > 0 && item.unique_id)
+                    ? '<button onclick="probeFusionComp(\'' + _ri_esc(item.unique_id) + '\', \'' + _ri_esc(item.name || '') + '\')" style="margin-left:8px; padding:2px 8px; background:#1e3a8a; border:1px solid #3b82f6; color:#bfdbfe; border-radius:4px; cursor:pointer; font-size:0.75em;">🔬 Probe Fusion</button>'
+                    : '';
+                const props = item.properties || {};
+                const propRows = Object.keys(props).sort().map(k =>
+                    '<tr><td style="padding:1px 8px; color:#64748b; vertical-align:top;">' + _ri_esc(k) + '</td>' +
+                    '<td style="padding:1px 8px; color:#cbd5e1; word-break:break-all;">' + _ri_esc(JSON.stringify(props[k])) + '</td></tr>'
+                ).join('');
+
+                html +=
+                    '<details ' + (i < 3 ? 'open' : '') + ' style="margin-bottom:8px; background:#0b1424; border:1px solid #1e293b; border-radius:6px;">' +
+                        '<summary style="padding:6px 10px; cursor:pointer; color:#e2e8f0;">' +
+                            '<strong>#' + (i + 1) + ' ' + _ri_esc(item.name || '(unnamed)') + '</strong>' + tag +
+                            ' <span style="color:#64748b; font-size:0.85em;">' +
+                            '· ' + (tl.start_tc || tl.start_frame) + ' → ' + (tl.end_tc || tl.end_frame) +
+                            ' · dur ' + (tl.duration_tc || tl.duration_frames) + ' frames' +
+                            ' · fusion: ' + item.fusion_comp_count +
+                            '</span>' +
+                        '</summary>' +
+                        '<div style="padding:8px 12px;">' +
+                            '<div style="margin-bottom:6px;"><span style="color:#64748b;">Effects (Fusion comps):</span> ' + fxList + probeBtn + '</div>' +
+                            '<div style="margin-bottom:6px; color:#94a3b8;">' +
+                                '<span style="color:#64748b;">Source file:</span> ' +
+                                _ri_esc(mpiProps['File Path'] || mpi.name || '(none — generator/adjustment)') +
+                            '</div>' +
+                            '<div style="margin-bottom:6px; color:#94a3b8;">' +
+                                '<span style="color:#64748b;">Source range:</span> ' +
+                                _ri_esc(String(src.start_tc || src.start_frame || '?')) + ' → ' +
+                                _ri_esc(String(src.end_tc || src.end_frame || '?')) +
+                                ' · left offset ' + (src.left_offset ?? '-') + ', right offset ' + (src.right_offset ?? '-') +
+                            '</div>' +
+                            (item.markers && item.markers.length
+                                ? '<div style="margin-bottom:6px; color:#94a3b8;"><span style="color:#64748b;">Markers:</span> ' +
+                                    item.markers.map(m => _ri_esc((m.color || '?') + ' @ ' + (m.timecode || m.frame_id) + (m.name ? (' "' + m.name + '"') : ''))).join(' · ') +
+                                  '</div>'
+                                : '') +
+                            '<details style="margin-top:6px;"><summary style="cursor:pointer; color:#60a5fa;">All properties (' + Object.keys(props).length + ')</summary>' +
+                                '<table style="border-collapse:collapse; margin-top:4px; font-size:0.78em;">' + propRows + '</table>' +
+                            '</details>' +
+                        '</div>' +
+                    '</details>';
+            });
+            return html;
+        }
+
+        function copyResolveInspectorJson() {
+            if (!_resolveInspectorData) {
+                alert('Nothing to copy yet — click Refresh first.');
+                return;
+            }
+            const text = JSON.stringify(_resolveInspectorData, null, 2);
+            navigator.clipboard.writeText(text).then(() => {
+                const body = document.getElementById('resolveInspectorBody');
+                const jsonView = document.getElementById('resolveInspectorJson');
+                jsonView.textContent = text;
+                jsonView.style.display = 'block';
+                body.style.display = 'none';
+            }).catch(err => alert('Copy failed: ' + err));
+        }
+
+        function _ri_esc(s) {
+            if (s === null || s === undefined) return '';
+            return String(s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        async function probeFusionComp(uniqueId, clipName) {
+            const overlay = document.getElementById('probeFusionOverlay');
+            const body = document.getElementById('probeFusionBody');
+            const title = document.getElementById('probeFusionTitle');
+            title.textContent = '🔬 Probing Fusion comps for: ' + clipName;
+            body.innerHTML = '<div style="color:#94a3b8;">Loading…</div>';
+            overlay.style.display = 'flex';
+            try {
+                const res = await fetch('/api/resolve/probe-fusion?unique_id=' + encodeURIComponent(uniqueId));
+                const data = await res.json();
+                if (!data.success) {
+                    body.innerHTML = '<div style="color:#f87171;">❌ ' + _ri_esc(data.error || 'Unknown error') + '</div>';
+                    return;
+                }
+                let html = '<div style="margin-bottom:10px; color:#94a3b8;">Clip: <strong style="color:#e2e8f0;">' + _ri_esc(data.clip_name) + '</strong> · ' + data.fusion_comp_count + ' Fusion comp(s)</div>';
+                if (!data.comps || !data.comps.length) {
+                    html += '<div style="color:#94a3b8;">No comps to display.</div>';
+                } else {
+                    data.comps.forEach(c => {
+                        html += '<details open style="margin-bottom:10px; background:#0b1424; border:1px solid #1e293b; border-radius:6px;">' +
+                            '<summary style="padding:6px 10px; cursor:pointer; color:#e2e8f0;"><strong>Comp #' + c.index + ': ' + _ri_esc(c.name) + '</strong>';
+                        if (c.tool_count !== undefined) html += ' <span style="color:#64748b;">· ' + c.tool_count + ' tool(s)</span>';
+                        html += '</summary><div style="padding:8px 12px;">';
+                        // Save-as-preset button (saves the whole comp).
+                        html += '<div style="margin-bottom:8px;">' +
+                            '<button onclick="saveCompPreset(\'' + _ri_esc(uniqueId) + '\', this)" ' +
+                            'style="padding:4px 10px; background:#065f46; border:1px solid #10b981; color:#d1fae5; border-radius:4px; cursor:pointer; font-size:0.8em;">' +
+                            '💾 Save as broll preset</button> ' +
+                            '<span style="color:#64748b; font-size:0.75em;">Saves the entire comp (MediaIn → effect → MediaOut) as <code>fusion_presets/default_broll.setting</code> — applied to every V3 clip on next Create DaVinci Project.</span>' +
+                            '</div>';
+                        if (c.error) {
+                            html += '<div style="color:#f87171;">⚠ ' + _ri_esc(c.error) + '</div>';
+                        } else if (c.note) {
+                            html += '<div style="color:#fbbf24; margin-bottom:8px;">⚠ ' + _ri_esc(c.note) + '</div>';
+                        }
+                        if (c.tools && c.tools.length) {
+                            html += '<div style="color:#94a3b8; margin-bottom:6px;">Editable nodes — these can potentially be set via the API:</div>';
+                            c.tools.forEach(t => {
+                                const inputCount = t.input_count || 0;
+                                const inputRows = Object.keys(t.inputs || {}).map(k => {
+                                    const v = t.inputs[k];
+                                    return '<tr><td style="padding:1px 8px; color:#94a3b8; vertical-align:top;">' + _ri_esc(k) + '</td>' +
+                                           '<td style="padding:1px 8px; color:#cbd5e1; word-break:break-all;">' + _ri_esc(JSON.stringify(v)) + '</td></tr>';
+                                }).join('');
+                                html += '<details style="margin-bottom:6px; background:#020617; border:1px solid #1e293b; border-radius:4px;">' +
+                                    '<summary style="padding:4px 8px; cursor:pointer; color:#bfdbfe;">' +
+                                        '<strong>' + _ri_esc(t.name || '(unnamed)') + '</strong>' +
+                                        ' <span style="color:#64748b; font-size:0.85em;">[' + _ri_esc(t.id || '?') + '] · ' + inputCount + ' input(s)</span>' +
+                                    '</summary>' +
+                                    '<div style="padding:6px 10px;"><table style="border-collapse:collapse; font-size:0.78em;">' + inputRows + '</table></div>' +
+                                    '</details>';
+                            });
+                        }
+                        html += '</div></details>';
+                    });
+                }
+                body.innerHTML = html;
+            } catch (e) {
+                body.innerHTML = '<div style="color:#f87171;">❌ Request failed: ' + _ri_esc(e.message) + '</div>';
+            }
+        }
+
+        function closeProbeFusion() {
+            const overlay = document.getElementById('probeFusionOverlay');
+            if (overlay) overlay.style.display = 'none';
+        }
+
+        async function saveCompPreset(uniqueId, btnEl) {
+            const orig = btnEl ? btnEl.textContent : '';
+            if (btnEl) { btnEl.disabled = true; btnEl.textContent = '💾 Saving…'; }
+            try {
+                const res = await fetch('/api/resolve/save-comp-preset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ unique_id: uniqueId, preset_name: 'default_broll' }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    if (btnEl) { btnEl.textContent = '✅ Saved'; btnEl.style.background = '#047857'; }
+                    alert('Preset saved!\n\n' + data.preset_path + (data.backup_path ? '\n\nPrevious version backed up to:\n' + data.backup_path : ''));
+                } else {
+                    if (btnEl) { btnEl.textContent = '❌ Failed'; btnEl.style.background = '#7f1d1d'; }
+                    alert('Save failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                if (btnEl) { btnEl.textContent = '❌ Failed'; btnEl.style.background = '#7f1d1d'; }
+                alert('Request failed: ' + e.message);
+            } finally {
+                if (btnEl) {
+                    setTimeout(() => {
+                        btnEl.disabled = false;
+                        btnEl.textContent = orig;
+                        btnEl.style.background = '#065f46';
+                    }, 4000);
+                }
+            }
         }
 
         // ---- API Keys modal (Google / HeyGen / Grok) ----

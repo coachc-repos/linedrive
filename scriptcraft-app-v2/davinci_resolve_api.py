@@ -805,21 +805,1371 @@ def _apply_effect_to_aroll_clips(timeline, effect_name="MagicZoomPro"):
 
 def _broll_sort_key(clip_name: str):
     """
-    Order broll clips by the index baked into Grok-generated filenames.
+    Order broll clips by the index baked into the filename.
 
-    Filenames look like: ``grok_<timestamp>_<index>_<safe_term>.mp4``
-    Lower index == earlier row in the broll table.
-    Non-Grok / unrecognized names sort to the end (alphabetically).
+    Recognized naming patterns (case-insensitive, the leading folder/path
+    is ignored — only the basename matters):
+
+      1. ``grok_<timestamp>_<index>_<safe_term>.<ext>``  — produced by Grok
+         e.g. ``grok_20260427_193603_05_cluttered_fitness_app.mp4``
+      2. ``broll_<timestamp>_<index>_<safe_term>.<ext>``  — manual stock
+         (recommended), with or without an extension
+         e.g. ``broll_20260502_143022_05_gym_workout_montage.mov``
+      3. ``broll_<index>_<anything>.<ext>``  — manual without timestamp
+         e.g. ``broll_05_shutterstock_gym_montage.mp4``
+      4. ``<index>_<anything>.<ext>``  — bare-index shorthand
+         e.g. ``05_shutterstock_gym_montage.mp4``
+
+    The ``<index>`` controls timeline order: clip with index 0 (or 00, 01…)
+    is the first on V3, index 1 is the second, etc. Use zero-padded indexes
+    (e.g. 01, 02 … 33) so the count matches the broll table row order even
+    when you have more than 9 clips.
+
+    Files that match no pattern sort to the end alphabetically.
     """
+    import os as _os
     import re
-    name = clip_name or ""
-    m = re.match(r"grok_(\d+)_(\d+)_", name)
+    name = _os.path.basename(clip_name or "")
+    lower = name.lower()
+
+    # Pattern 1: grok_<ts>_<idx>_*
+    m = re.match(r"grok_(\d+)_(\d+)_", lower)
     if m:
         ts = int(m.group(1))
         idx = int(m.group(2))
-        # Primary key: index in table; secondary: timestamp; tertiary: name
-        return (0, idx, ts, name.lower())
-    return (1, 0, 0, name.lower())
+        return (0, idx, ts, lower)
+
+    # Pattern 2: broll_<ts>_<idx>_*  (timestamped manual download)
+    # Timestamp is 8+ digits (e.g. YYYYMMDD or YYYYMMDD_HHMMSS collapsed),
+    # but to be lenient we accept any ≥6-digit number here.
+    m = re.match(r"broll_(\d{6,})_(\d+)[_\-.]", lower)
+    if m:
+        ts = int(m.group(1))
+        idx = int(m.group(2))
+        return (0, idx, ts, lower)
+
+    # Pattern 3: broll_<idx>_*  (no timestamp)
+    m = re.match(r"broll_(\d+)[_\-.]", lower)
+    if m:
+        return (0, int(m.group(1)), 0, lower)
+
+    # Pattern 4: <idx>_*  (bare leading number)
+    m = re.match(r"(\d+)[_\-.]", lower)
+    if m:
+        return (0, int(m.group(1)), 0, lower)
+
+    return (1, 0, 0, lower)
+
+
+def _apply_fade_out_to_v3_clips(timeline, fade_seconds: float = 1.0, track_index: int = 3):
+    """
+    Add an opacity fade-out at the tail end of every clip on the given video
+    track (default V3 = broll). The clip ramps from full opacity down to 0
+    over the last `fade_seconds` of its duration so it eases back to the
+    aroll underneath.
+
+    Implementation:
+      1. Try the documented TimelineItem keyframe API:
+           item.AddVideoFadeKeyframe / SetClipEnabled - not in public API
+         then fall back to opacity-property keyframes:
+           item.SetProperty("Opacity", 100) at fade-start frame
+           item.SetProperty("Opacity", 0)   at clip-end frame
+         using item.AddKeyframe(propertyName, frame) when available.
+      2. If keyframe APIs aren't exposed, fall back to a single static
+         opacity reduction (logged) so we at least don't error out.
+
+    Returns: {success, applied, skipped, failed, message, errors}
+    """
+    result = {
+        "attempted": True,
+        "success": False,
+        "applied": 0,
+        "skipped": 0,
+        "failed": 0,
+        "errors": [],
+        "message": "",
+    }
+    if not timeline:
+        result["message"] = "No timeline."
+        return result
+
+    try:
+        items = timeline.GetItemListInTrack("video", track_index) or []
+    except Exception as e:
+        result["message"] = f"GetItemListInTrack failed: {e}"
+        return result
+    if not items:
+        result["message"] = f"No clips on V{track_index}."
+        return result
+
+    # Determine timeline framerate so we can convert seconds → frames.
+    fps = 24.0
+    try:
+        raw_fps = timeline.GetSetting("timelineFrameRate")
+        if raw_fps:
+            fps = float(raw_fps)
+    except Exception:
+        pass
+    fade_frames = max(1, int(round(fade_seconds * fps)))
+
+    print(f"\n🌅 Applying {fade_seconds}s fade-out ({fade_frames}f @ {fps}fps) to V{track_index} clips...")
+
+    for idx, item in enumerate(items):
+        try:
+            name = item.GetName() or f"<clip {idx}>"
+        except Exception:
+            name = f"<clip {idx}>"
+        try:
+            duration = int(item.GetDuration() or 0)
+        except Exception:
+            duration = 0
+        if duration <= 1:
+            result["skipped"] += 1
+            print(f"   ⏭️  {name}: duration <= 1, skipping")
+            continue
+
+        # Clamp fade so it doesn't exceed clip length
+        local_fade = min(fade_frames, max(1, duration - 1))
+        # Frames are clip-local (0..duration-1) for SetProperty/AddKeyframe APIs.
+        fade_start_local = duration - local_fade
+        fade_end_local = duration - 1
+
+        applied_method = None
+        last_err = None
+
+        # --- Strategy 1: keyframed Opacity via AddKeyframe / SetProperty ---
+        try:
+            add_kf = getattr(item, "AddKeyframe", None)
+            set_prop = getattr(item, "SetProperty", None)
+            if callable(add_kf) and callable(set_prop):
+                # Some Resolve builds expect property-value-at-frame writes.
+                # Try the "AddKeyframe(prop, frame)" + "SetProperty(prop, val)"
+                # pattern: jump playhead is not needed because AddKeyframe is
+                # frame-addressed.
+                ok1 = add_kf("Opacity", fade_start_local)
+                set_prop("Opacity", 100.0)
+                ok2 = add_kf("Opacity", fade_end_local)
+                set_prop("Opacity", 0.0)
+                if ok1 or ok2:
+                    applied_method = "AddKeyframe+SetProperty"
+        except Exception as e:
+            last_err = e
+
+        # --- Strategy 2: SetProperty with (name, value, frame) signature ---
+        if not applied_method:
+            try:
+                set_prop = getattr(item, "SetProperty", None)
+                if callable(set_prop):
+                    r1 = set_prop("Opacity", 100.0, fade_start_local)
+                    r2 = set_prop("Opacity", 0.0, fade_end_local)
+                    if r1 or r2:
+                        applied_method = "SetProperty(name,val,frame)"
+            except Exception as e:
+                last_err = e
+
+        # --- Strategy 3: AddFlag/AddVideoOpacityKeyframe variants ---
+        if not applied_method:
+            for meth in ("AddVideoOpacityKeyframe", "AddOpacityKeyframe"):
+                try:
+                    fn = getattr(item, meth, None)
+                    if callable(fn):
+                        r1 = fn(fade_start_local, 100.0)
+                        r2 = fn(fade_end_local, 0.0)
+                        if r1 or r2:
+                            applied_method = meth
+                            break
+                except Exception as e:
+                    last_err = e
+
+        if applied_method:
+            result["applied"] += 1
+            print(f"   ✅ {name}: fade-out via {applied_method} (frames {fade_start_local}→{fade_end_local})")
+        else:
+            result["failed"] += 1
+            err = f"{name}: no opacity-keyframe API succeeded ({last_err})"
+            result["errors"].append(err)
+            print(f"   ⚠️ {err}")
+
+    total = len(items)
+    result["success"] = result["applied"] > 0
+    result["message"] = (
+        f"Faded {result['applied']}/{total} V{track_index} clip(s) "
+        f"({result['skipped']} skipped, {result['failed']} failed)"
+    )
+    return result
+
+
+def _clear_comp_tools(comp, name: str):
+    """
+    Delete every tool from `comp` so a subsequent Paste of a full preset
+    (MediaIn1/MediaIn2/macro/MediaOut1) doesn't collide with existing
+    tool names. Resolve renames pasted tools to ..._1 on collision, which
+    breaks the preset's internal SourceOp wiring and silently drops nodes.
+    """
+    if comp is None:
+        return
+    try:
+        gtl = getattr(comp, "GetToolList", None)
+        if not callable(gtl):
+            return
+        tools = gtl(False) or {}
+        deleted = 0
+        for _k, t in list(tools.items()):
+            try:
+                tname = ""
+                try:
+                    tname = t.GetAttrs().get("TOOLS_Name") or ""
+                except Exception:
+                    pass
+                # Use Comp.Delete(tool) if available; some builds expose it
+                # only on the tool itself as Delete().
+                ok = False
+                try:
+                    delete_fn = getattr(t, "Delete", None)
+                    if callable(delete_fn):
+                        delete_fn()
+                        ok = True
+                except Exception:
+                    pass
+                if ok:
+                    deleted += 1
+            except Exception:
+                pass
+        print(f"      🧹 {name}: cleared {deleted} pre-existing tool(s)")
+    except Exception as _ce:
+        print(f"      ⚠️ {name}: clear comp failed: {_ce}")
+
+
+def _rewire_tiles_swap_with_fade(comp, item, timeline, name: str):
+    """
+    Find the pasted mTuber_4_Tiles_Swap macro inside `comp` (handles
+    Resolve-renamed copies like `_1`), wire MediaIn1 → macro.Input1+Input2,
+    insert AlphaMultiply(1.0→0.0) keyframed over the last second, and
+    point MediaOut1 at it.
+
+    Returns True if MediaOut1 was successfully connected to either the
+    macro or the AlphaMultiply node.
+    """
+    if comp is None:
+        return False
+    try:
+        media_in = comp.FindTool("MediaIn1")
+        media_out = comp.FindTool("MediaOut1")
+    except Exception:
+        media_in = media_out = None
+
+    # Locate the Tiles Swap macro by scanning all tools.
+    mtuber = None
+    try:
+        tl = comp.GetToolList(False) or {}
+        all_names = []
+        for _k, _t in tl.items():
+            try:
+                tname = _t.GetAttrs().get("TOOLS_Name") or ""
+            except Exception:
+                tname = ""
+            all_names.append(tname or "?")
+            # Accept ANY mTuber-named tool. Resolve sometimes flattens the
+            # macro and assigns it the inner engine name (mTuber_4_Pixels
+            # vs mTuber_4_Tiles_Swap) — match on the common prefix so the
+            # fade still attaches and MediaOut1 still gets rewired.
+            if tname.startswith("mTuber"):
+                mtuber = _t
+        if mtuber:
+            print(f"      🎯 {name}: matched macro tool in tools={all_names}")
+        else:
+            print(f"      ⚠️ {name}: no Tiles_Swap macro found. Tools: {all_names}")
+    except Exception as _se:
+        print(f"      ⚠️ {name}: tool scan failed: {_se}")
+
+    if not mtuber:
+        return False
+
+    # Macro-only preset: comp already has MediaIn1 (auto-bound to this
+    # V3 broll clip) and MediaOut1. We need to wire:
+    #   macro.Input2 ← MediaIn1            (foreground = this broll clip)
+    #   macro.Input1 ← Background (transparent, since per-clip comp has
+    #                              no second media — the wipe reveals
+    #                              transparency, which composites over
+    #                              whatever is on V1/V2 below)
+    #   MediaOut1.Input ← AlphaMultiply ← macro
+    if media_out is None:
+        print(f"      ↪️  {name}: comp lacks MediaOut1 — abort rewire")
+        return False
+    if media_in is None:
+        print(f"      ↪️  {name}: comp lacks MediaIn1 — abort rewire")
+        return False
+
+    # 1) Add a transparent Background for macro.Input1.
+    bg_node = None
+    try:
+        add_tool = getattr(comp, "AddTool", None)
+        if callable(add_tool):
+            bg_node = add_tool("Background", -32768, -32768)
+            if bg_node:
+                try:
+                    bg_node.SetInput("TopLeftAlpha", 0.0)
+                    bg_node.SetInput("TopLeftRed", 0.0)
+                    bg_node.SetInput("TopLeftGreen", 0.0)
+                    bg_node.SetInput("TopLeftBlue", 0.0)
+                    bg_node.SetInput("Type", 0)  # solid
+                except Exception:
+                    pass
+                print(f"      ➕ {name}: added transparent Background")
+    except Exception as _be:
+        print(f"      ⚠️ {name}: AddTool(Background) failed: {_be}")
+
+    # 2) Wire macro inputs.
+    try:
+        if bg_node is not None:
+            mtuber.ConnectInput("Input1", bg_node)
+            print(f"      🔗 {name}: macro.Input1 ← Background")
+    except Exception as _w1:
+        print(f"      ⚠️ {name}: macro.Input1 ← Background failed: {_w1}")
+    try:
+        mtuber.ConnectInput("Input2", media_in)
+        print(f"      🔗 {name}: macro.Input2 ← MediaIn1")
+    except Exception as _w2:
+        print(f"      ⚠️ {name}: macro.Input2 ← MediaIn1 failed: {_w2}")
+
+    fade_node = None
+    try:
+        fps2 = 24.0
+        try:
+            fps2 = float(timeline.GetSetting("timelineFrameRate") or 24)
+        except Exception:
+            pass
+        fade_frames2 = max(1, int(round(1.0 * fps2)))
+        g_start = g_end = None
+        try:
+            cattrs = comp.GetAttrs() or {}
+            g_start = cattrs.get("COMPN_GlobalStart")
+            g_end = cattrs.get("COMPN_GlobalEnd")
+        except Exception:
+            pass
+        if g_start is None or g_end is None:
+            try:
+                g_start = int(item.GetStart())
+                g_end = int(item.GetEnd())
+            except Exception:
+                g_start = 0
+                g_end = fade_frames2 * 5
+
+        fade_start_f = max(int(g_start), int(g_end) - fade_frames2)
+        fade_end_f = int(g_end) - 1
+
+        try:
+            add_tool = getattr(comp, "AddTool", None)
+            if callable(add_tool):
+                fade_node = add_tool("AlphaMultiply", -32768, -32768)
+        except Exception as _ae:
+            print(f"      ⚠️ {name}: AddTool(AlphaMultiply) failed: {_ae}")
+
+        if fade_node:
+            try:
+                fade_node.ConnectInput("Input", mtuber)
+                print(f"      🔗 {name}: connected AlphaMultiply.Input ← macro")
+            except Exception as _ce:
+                print(f"      ⚠️ {name}: AlphaMultiply.Input←macro failed: {_ce}")
+            try:
+                fade_node.SetInput("Multiplier", 1.0, fade_start_f)
+                fade_node.SetInput("Multiplier", 0.0, fade_end_f)
+                print(f"      🌅 {name}: fade Multiplier 1.0@{fade_start_f} → 0.0@{fade_end_f}")
+            except Exception as _ke:
+                print(f"      ⚠️ {name}: SetInput keyframe failed: {_ke}")
+                try:
+                    fade_node.SetInput("Multiplier", 1.0)
+                except Exception:
+                    pass
+    except Exception as _fe:
+        print(f"      ⚠️ {name}: fade injection failed: {_fe}")
+
+    out_src = fade_node if fade_node else mtuber
+    if media_out and out_src:
+        try:
+            media_out.ConnectInput("Input", out_src)
+            print(f"      🔗 {name}: connected MediaOut1.Input ← {'AlphaMultiply' if fade_node else 'macro'}")
+            return True
+        except Exception as _ce:
+            print(f"      ⚠️ {name}: ConnectInput MediaOut1←out failed: {_ce}")
+    return False
+
+
+def _apply_blur_to_v3_clips(timeline, track_index: int = 3,
+                            max_blur: float = 20.0):
+    """
+    Smoke-test for programmatic Fusion automation. For every clip on the
+    given video track:
+
+        MediaIn1 → Blur1 → MediaOut1
+
+    with Blur1.XBlurSize keyframed 0.0 (clip start) → max_blur (clip end),
+    so the image starts crisp and gradually blurs while playing.
+
+    No .setting file, no plugins, no Paste(). Just AddTool + ConnectInput
+    + SetInput(value, frame). If this works reliably, more elaborate
+    Fusion effects can follow the same pattern.
+    """
+    result = {"success": False, "message": "", "applied": 0, "failed": 0,
+              "errors": []}
+    try:
+        items = timeline.GetItemListInTrack("video", track_index) or []
+    except Exception as e:
+        result["message"] = f"GetItemListInTrack(video, {track_index}) failed: {e}"
+        return result
+    if not items:
+        result["success"] = True
+        result["message"] = f"No clips on V{track_index}; nothing to blur."
+        return result
+
+    print(f"   🌫️ Applying Blur smoke-test to {len(items)} V{track_index} clip(s) (0 → {max_blur})")
+
+    for item in items:
+        try:
+            name = item.GetName() or "<unnamed>"
+        except Exception:
+            name = "<unnamed>"
+
+        # Get or create per-clip Fusion comp.
+        comp = None
+        try:
+            cnt = item.GetFusionCompCount() or 0
+            if cnt >= 1:
+                comp = item.GetFusionCompByIndex(1)
+            else:
+                add_fn = getattr(item, "AddFusionComp", None)
+                if callable(add_fn):
+                    comp = add_fn()
+        except Exception as e:
+            result["errors"].append(f"{name}: get/add comp: {e}")
+            result["failed"] += 1
+            continue
+        if comp is None:
+            result["errors"].append(f"{name}: no comp returned")
+            result["failed"] += 1
+            continue
+
+        # Frame range for keyframes. Per-clip Fusion comps use comp-local
+        # frames (0..duration-1), NOT timeline-absolute frames. Pull the
+        # range from the comp itself when available, fall back to the
+        # clip's source duration otherwise.
+        f_start, f_end = 0, 24
+        try:
+            cattrs = comp.GetAttrs() or {}
+            gs = cattrs.get("COMPN_GlobalStart")
+            ge = cattrs.get("COMPN_GlobalEnd")
+            if gs is not None and ge is not None and ge > gs:
+                f_start = int(gs)
+                f_end = int(ge) - 1
+            else:
+                raise ValueError("no comp range")
+        except Exception:
+            try:
+                dur = int(item.GetEnd()) - int(item.GetStart())
+                f_start = 0
+                f_end = max(1, dur - 1)
+            except Exception:
+                pass
+        if f_end <= f_start:
+            f_end = f_start + 1
+
+        lock = getattr(comp, "Lock", None)
+        unlock = getattr(comp, "Unlock", None)
+        try:
+            if callable(lock):
+                lock()
+
+            media_in = comp.FindTool("MediaIn1")
+            media_out = comp.FindTool("MediaOut1")
+            if media_in is None or media_out is None:
+                result["errors"].append(
+                    f"{name}: comp missing MediaIn1={media_in is not None} "
+                    f"MediaOut1={media_out is not None}"
+                )
+                result["failed"] += 1
+                continue
+
+            # Avoid stacking duplicate Blur tools on re-runs.
+            blur = comp.FindTool("Blur1")
+            if blur is None:
+                add_tool = getattr(comp, "AddTool", None)
+                if not callable(add_tool):
+                    result["errors"].append(f"{name}: AddTool not callable")
+                    result["failed"] += 1
+                    continue
+                blur = add_tool("Blur", -32768, -32768)
+                if blur is None:
+                    result["errors"].append(f"{name}: AddTool('Blur') returned None")
+                    result["failed"] += 1
+                    continue
+                print(f"      ➕ {name}: added Blur1")
+            else:
+                print(f"      ♻️ {name}: reusing existing Blur1")
+
+            # Wire MediaIn1 → Blur1 → MediaOut1.
+            try:
+                blur.ConnectInput("Input", media_in)
+            except Exception as e:
+                result["errors"].append(f"{name}: Blur1.Input ← MediaIn1: {e}")
+            try:
+                media_out.ConnectInput("Input", blur)
+            except Exception as e:
+                result["errors"].append(f"{name}: MediaOut1.Input ← Blur1: {e}")
+
+            # Keyframe XBlurSize 0.0 → max_blur over clip duration.
+            # Resolve's external scripting bridge will NOT auto-create a
+            # BezierSpline modifier when you call SetInput(value, frame)
+            # on a previously-static input. We have to add the spline
+            # explicitly and connect it to the input, then write keyframes
+            # onto the spline itself.
+            try:
+                add_tool = getattr(comp, "AddTool", None)
+                spline_name = "BlurSpline1"
+                spline = comp.FindTool(spline_name)
+                if spline is None and callable(add_tool):
+                    spline = add_tool("BezierSpline", -32768, -32768)
+                    if spline is not None:
+                        try:
+                            spline.SetAttrs({"TOOLS_Name": spline_name})
+                        except Exception:
+                            pass
+                        print(f"      ➕ {name}: added {spline_name}")
+
+                if spline is not None:
+                    # Connect the spline as the source of XBlurSize. After
+                    # this, blur.XBlurSize is animated by the spline.
+                    try:
+                        blur.ConnectInput("XBlurSize", spline)
+                        print(f"      🔗 {name}: Blur1.XBlurSize ← {spline_name}")
+                    except Exception as _ce:
+                        print(f"      ⚠️ {name}: ConnectInput XBlurSize failed: {_ce}")
+
+                    # Write keyframes onto the spline. The spline's value
+                    # is exposed as `Value` and indexed by frame.
+                    try:
+                        spline.SetKeyFrames({
+                            f_start: {1: 0.0},
+                            f_end: {1: float(max_blur)},
+                        })
+                        print(f"      🌅 {name}: spline keys 0.0@{f_start} → {max_blur}@{f_end}")
+                    except Exception as _ke:
+                        # Fallback: write via Value subscript syntax
+                        try:
+                            spline["Value"][f_start] = 0.0
+                            spline["Value"][f_end] = float(max_blur)
+                            print(f"      🌅 {name}: spline subscript keys 0.0@{f_start} → {max_blur}@{f_end}")
+                        except Exception as _ke2:
+                            print(f"      ⚠️ {name}: spline keyframe write failed: {_ke} / {_ke2}")
+                else:
+                    # Last-resort: still set a static value so the blur is at
+                    # least visible at the midpoint.
+                    blur.SetInput("XBlurSize", float(max_blur) / 2.0)
+                    print(f"      ⚠️ {name}: no spline; static XBlurSize={max_blur/2.0}")
+
+                # Lock Y to X so a single spline drives both axes.
+                try:
+                    blur.SetInput("LockXY", 1.0)
+                except Exception:
+                    pass
+
+                # Force the comp to evaluate at start, mid, and end so
+                # Resolve caches the rendered output. Without this the
+                # editor's source viewer still shows the un-blurred frame
+                # until the user manually scrubs in the Fusion page.
+                try:
+                    set_ct = getattr(comp, "SetCurrentTime", None)
+                    if callable(set_ct):
+                        mid = (f_start + f_end) // 2
+                        for _f in (f_start, mid, f_end):
+                            set_ct(_f)
+                except Exception as _se:
+                    print(f"      ⚠️ {name}: SetCurrentTime evaluate failed: {_se}")
+                # Also try comp.Render() which forces a full evaluation.
+                try:
+                    render_fn = getattr(comp, "Render", None)
+                    if callable(render_fn):
+                        render_fn({"Tool": blur, "Quality": 1})
+                except Exception:
+                    pass
+
+                result["applied"] += 1
+            except Exception as e:
+                result["errors"].append(f"{name}: keyframe block: {e}")
+                result["failed"] += 1
+        except Exception as e:
+            result["errors"].append(f"{name}: outer: {e}")
+            result["failed"] += 1
+        finally:
+            try:
+                if callable(unlock):
+                    unlock()
+            except Exception:
+                pass
+
+    total = result["applied"] + result["failed"]
+    result["success"] = result["applied"] > 0 and result["failed"] == 0
+    result["message"] = (
+        f"Blur applied to {result['applied']}/{total} V{track_index} clip(s)"
+        + (f" — {result['failed']} failed" if result["failed"] else "")
+    )
+
+    # Force the timeline to re-cache the V3 thumbnails. Without this,
+    # the editor still shows the un-blurred frame until the user opens
+    # the Fusion page and scrubs once. Recipe:
+    #   1. Switch to Fusion page (loads each comp into the engine)
+    #   2. Seek the playhead through each V3 clip's mid-point
+    #   3. Switch back to Edit page
+    try:
+        import DaVinciResolveScript as dvr_script
+        _resolve = dvr_script.scriptapp("Resolve")
+        if _resolve is not None:
+            _resolve.OpenPage("fusion")
+            try:
+                fps = float(timeline.GetSetting("timelineFrameRate") or 24)
+            except Exception:
+                fps = 24.0
+            for _it in items:
+                try:
+                    _s = int(_it.GetStart())
+                    _e = int(_it.GetEnd())
+                    _mid = _s + max(1, (_e - _s) // 2)
+                    total_secs = _mid / fps
+                    hh = int(total_secs // 3600)
+                    mm = int((total_secs % 3600) // 60)
+                    ss = int(total_secs % 60)
+                    ff = int(round((_mid % fps)))
+                    tc = f"{hh:02d}:{mm:02d}:{ss:02d}:{ff:02d}"
+                    timeline.SetCurrentTimecode(tc)
+                except Exception:
+                    pass
+            _resolve.OpenPage("edit")
+            print(f"   🔄 page bounce edit→fusion(scrub {len(items)} clips)→edit")
+    except Exception as _pe:
+        print(f"   ⚠️ page bounce failed: {_pe}")
+
+    return result
+
+
+def _apply_slide_wipe_to_v3_clips(timeline, track_index: int = 3,
+                                  wipe_seconds: float = 1.0):
+    """
+    Apply a programmatic right-to-left slide-off wipe to every clip on the
+    given video track (default V3 = broll). Uses ONLY built-in Fusion tools
+    (no plugin, no macro, no .setting file):
+
+        MediaIn1 → Transform1 (Center.X 0.5→-0.6 over last `wipe_seconds`)
+                 → AlphaMultiply1 (Multiplier 1.0→0.0 over same range)
+                 → MediaOut1
+
+    The Transform slides the broll off the left edge while the AlphaMultiply
+    cleanly reveals V1 underneath. Per-clip path uses the proven Strategy D
+    sequence: seek playhead to mid-clip on Edit page, open Fusion page,
+    grab fusion.GetCurrentComp(), edit it.
+    """
+    result = {"success": False, "applied": 0, "skipped": 0, "failed": 0,
+              "errors": [], "message": "", "track": track_index}
+    try:
+        items = timeline.GetItemListInTrack("video", track_index) or []
+    except Exception as e:
+        result["message"] = f"GetItemListInTrack(video, {track_index}) failed: {e}"
+        return result
+    if not items:
+        result["success"] = True
+        result["message"] = f"No clips on V{track_index}; nothing to apply."
+        return result
+
+    try:
+        import DaVinciResolveScript as dvr_script
+        resolve_handle = dvr_script.scriptapp("Resolve")
+        fusion_app = dvr_script.scriptapp("Fusion")
+    except Exception as e:
+        result["message"] = f"Could not get Resolve/Fusion handles: {e}"
+        return result
+
+    try:
+        fps = float(timeline.GetSetting("timelineFrameRate") or 24)
+    except Exception:
+        fps = 24.0
+    wipe_frames = max(1, int(round(wipe_seconds * fps)))
+
+    print(f"   🌊 Applying {wipe_seconds}s right-to-left slide wipe to "
+          f"{len(items)} V{track_index} clip(s) ({wipe_frames}f @ {fps}fps)")
+
+    import time as _time
+    for item in items:
+        try:
+            name = item.GetName() or ""
+        except Exception:
+            name = ""
+
+        # --- Strategy D: seek to mid-clip, open Fusion page, get live comp.
+        try:
+            clip_start = int(item.GetStart())
+            clip_end = int(item.GetEnd())
+        except Exception as e:
+            result["failed"] += 1
+            result["errors"].append(f"{name}: GetStart/End failed: {e}")
+            continue
+
+        target_frame = clip_start + max(1, (clip_end - clip_start) // 2)
+        total_secs = target_frame / fps
+        tc = (f"{int(total_secs // 3600):02d}:"
+              f"{int((total_secs % 3600) // 60):02d}:"
+              f"{int(total_secs % 60):02d}:"
+              f"{int(round(target_frame % fps)):02d}")
+
+        try:
+            resolve_handle.OpenPage("edit")
+            _time.sleep(0.15)
+            timeline.SetCurrentTimecode(tc)
+        except Exception as _se:
+            print(f"      ⚠️ {name}: seek to {tc} failed: {_se}")
+
+        try:
+            resolve_handle.OpenPage("fusion")
+            _time.sleep(0.35)
+        except Exception:
+            pass
+
+        live_comp = None
+        try:
+            gcc = getattr(fusion_app, "GetCurrentComp", None)
+            if callable(gcc):
+                live_comp = gcc()
+        except Exception as _ce:
+            print(f"      ⚠️ {name}: GetCurrentComp failed: {_ce}")
+
+        if live_comp is None:
+            result["failed"] += 1
+            result["errors"].append(f"{name}: no live comp")
+            print(f"      ⚠️ {name}: no live comp")
+            continue
+
+        # --- Build the wipe rig.
+        try:
+            media_in = live_comp.FindTool("MediaIn1")
+            media_out = live_comp.FindTool("MediaOut1")
+        except Exception as e:
+            result["failed"] += 1
+            result["errors"].append(f"{name}: FindTool failed: {e}")
+            continue
+        if not media_in or not media_out:
+            result["failed"] += 1
+            result["errors"].append(f"{name}: missing MediaIn1/MediaOut1")
+            print(f"      ⚠️ {name}: missing MediaIn1/MediaOut1 in live comp")
+            continue
+
+        # Wipe window: last `wipe_frames` of the comp's render range.
+        # IMPORTANT: keyframes MUST be set in the comp's local time domain.
+        # COMPN_GlobalStart/End and item.GetStart()/End() can return timeline-
+        # absolute frames (e.g. 86400+) depending on Resolve build, which puts
+        # keyframes outside the visible playback window and the wipe never
+        # animates. We always normalize to local comp time below.
+        g_start = g_end = None
+        try:
+            cattrs = live_comp.GetAttrs() or {}
+            g_start = cattrs.get("COMPN_GlobalStart")
+            g_end = cattrs.get("COMPN_GlobalEnd")
+        except Exception:
+            pass
+        clip_dur = max(1, int(clip_end) - int(clip_start))
+        if g_start is None or g_end is None:
+            local_start, local_end = 0, clip_dur
+        else:
+            # Local range is always 0 .. (g_end - g_start), regardless of
+            # whether the comp reports global or local-absolute frames.
+            local_end = max(1, int(g_end) - int(g_start))
+            local_start = 0
+        wipe_start_f = max(local_start, local_end - wipe_frames)
+        wipe_end_f = local_end - 1
+        if wipe_end_f <= wipe_start_f:
+            wipe_end_f = wipe_start_f + 1
+
+        try:
+            live_comp.Lock()
+        except Exception:
+            pass
+
+        transform_node = None
+        fade_node = None
+        try:
+            # Build the wipe rig as a Fusion .setting text and Paste it. This
+            # is the only mechanism that actually creates BezierSpline / XYPath
+            # modifiers with multiple keyframes in this Resolve build —
+            # AddTool("BezierSpline") + SetInput(value, time) and
+            # `tool.Input = BezierSpline{KeyFrames=...}` in Lua both silently
+            # produce empty splines (verified via .setting export).
+            #
+            # We give every operator a Wipe_-prefixed name so it can't collide
+            # with anything Resolve auto-creates, then look them up by name.
+            wipe_text = (
+                "{\n"
+                "  Tools = ordered() {\n"
+                "    Wipe_Transform = Transform {\n"
+                "      Inputs = {\n"
+                "        Center = Input {\n"
+                "          SourceOp = \"Wipe_XY\",\n"
+                "          Source = \"Value\",\n"
+                "        },\n"
+                "      },\n"
+                "      ViewInfo = OperatorInfo { Pos = { 165, 49.5 } },\n"
+                "    },\n"
+                "    Wipe_XY = XYPath {\n"
+                "      DrawMode = \"ModifyOnly\",\n"
+                "      Inputs = {\n"
+                "        X = Input { SourceOp = \"Wipe_XSpline\", Source = \"Value\", },\n"
+                "        Y = Input { SourceOp = \"Wipe_YSpline\", Source = \"Value\", },\n"
+                "      },\n"
+                "    },\n"
+                "    Wipe_XSpline = BezierSpline {\n"
+                "      SplineColor = { Red = 255, Green = 0, Blue = 0 },\n"
+                "      NameSet = true,\n"
+                "      KeyFrames = {\n"
+                f"        [{wipe_start_f}] = {{ 0.5, Flags = {{ Linear = true }} }},\n"
+                f"        [{wipe_end_f}]   = {{ -0.6, Flags = {{ Linear = true }} }},\n"
+                "      },\n"
+                "    },\n"
+                "    Wipe_YSpline = BezierSpline {\n"
+                "      SplineColor = { Red = 0, Green = 255, Blue = 0 },\n"
+                "      NameSet = true,\n"
+                "      KeyFrames = {\n"
+                f"        [{wipe_start_f}] = {{ 0.5, Flags = {{ Linear = true }} }},\n"
+                f"        [{wipe_end_f}]   = {{ 0.5, Flags = {{ Linear = true }} }},\n"
+                "      },\n"
+                "    },\n"
+                "    Wipe_Alpha = AlphaMultiply {\n"
+                "      Inputs = {\n"
+                "        Multiplier = Input {\n"
+                "          SourceOp = \"Wipe_ASpline\",\n"
+                "          Source = \"Value\",\n"
+                "        },\n"
+                "        Input = Input {\n"
+                "          SourceOp = \"Wipe_Transform\",\n"
+                "          Source = \"Output\",\n"
+                "        },\n"
+                "      },\n"
+                "      ViewInfo = OperatorInfo { Pos = { 275, 49.5 } },\n"
+                "    },\n"
+                "    Wipe_ASpline = BezierSpline {\n"
+                "      SplineColor = { Red = 0, Green = 0, Blue = 255 },\n"
+                "      NameSet = true,\n"
+                "      KeyFrames = {\n"
+                f"        [{wipe_start_f}] = {{ 1.0, Flags = {{ Linear = true }} }},\n"
+                f"        [{wipe_end_f}]   = {{ 0.0, Flags = {{ Linear = true }} }},\n"
+                "      },\n"
+                "    },\n"
+                "  },\n"
+                "  ActiveTool = \"Wipe_Alpha\",\n"
+                "}\n"
+            )
+
+            # Parse the text via dvr_script.readfile (writes a temp file first).
+            paste_table = None
+            paste_table_err = None
+            try:
+                import tempfile, os as _os
+                tmp_dir = tempfile.gettempdir()
+                tmp_path = _os.path.join(
+                    tmp_dir, f"linedrive_wipe_{abs(hash(name)) & 0xffffffff:x}.setting"
+                )
+                with open(tmp_path, "w", encoding="utf-8") as _fw:
+                    _fw.write(wipe_text)
+                rf = getattr(dvr_script, "readfile", None)
+                if callable(rf):
+                    paste_table = rf(tmp_path)
+                else:
+                    rf2 = getattr(fusion_app, "readfile", None)
+                    if callable(rf2):
+                        paste_table = rf2(tmp_path)
+            except Exception as _re:
+                paste_table_err = str(_re)
+
+            paste_status = "skipped"
+            try:
+                live_comp.Lock()
+            except Exception:
+                pass
+            try:
+                paste_fn = getattr(live_comp, "Paste", None)
+                if callable(paste_fn):
+                    if paste_table:
+                        ret = paste_fn(paste_table)
+                        paste_status = f"table:{ret!r}"
+                    else:
+                        # Fall back to string paste if readfile unavailable.
+                        ret = paste_fn(wipe_text)
+                        paste_status = f"text:{ret!r} (readfile_err={paste_table_err})"
+                else:
+                    paste_status = "no_paste_fn"
+            except Exception as _pe:
+                paste_status = f"paste_err:{_pe}"
+            finally:
+                try:
+                    live_comp.Unlock()
+                except Exception:
+                    pass
+
+            # Look up the pasted tools (Resolve may suffix _1 / _2 if the
+            # comp was previously processed).
+            def _find_first(tool_basename):
+                # Try base, then _1.._5
+                for cand in (tool_basename, *(f"{tool_basename}_{i}" for i in range(1, 6))):
+                    try:
+                        t = live_comp.FindTool(cand)
+                        if t:
+                            return t, cand
+                    except Exception:
+                        pass
+                return None, None
+
+            transform_node, t_used = _find_first("Wipe_Transform")
+            fade_node, a_used = _find_first("Wipe_Alpha")
+
+            # Wire MediaIn1 → Wipe_Transform → Wipe_Alpha → MediaOut1.
+            connect_status = []
+            if transform_node and media_in:
+                try:
+                    transform_node.ConnectInput("Input", media_in)
+                    connect_status.append("In→T")
+                except Exception as _e:
+                    connect_status.append(f"In→T_err:{_e}")
+            if fade_node and transform_node:
+                # Wipe_Alpha already has Input wired to Wipe_Transform via
+                # the pasted text, but re-assert in case the SourceOp lookup
+                # was deferred until after both ops existed.
+                try:
+                    fade_node.ConnectInput("Input", transform_node)
+                    connect_status.append("T→A")
+                except Exception as _e:
+                    connect_status.append(f"T→A_err:{_e}")
+            if media_out and fade_node:
+                try:
+                    media_out.ConnectInput("Input", fade_node)
+                    connect_status.append("A→Out")
+                except Exception as _e:
+                    connect_status.append(f"A→Out_err:{_e}")
+
+            print(f"      🌊 {name}: wipe local frames {wipe_start_f}..{wipe_end_f} "
+                  f"(g_start={g_start}, g_end={g_end}, dur={clip_dur}) "
+                  f"paste={paste_status} t={t_used!r} a={a_used!r} "
+                  f"wires={'/'.join(connect_status) or 'none'}")
+            if transform_node and fade_node:
+                result["applied"] += 1
+            else:
+                result["failed"] += 1
+                result["errors"].append(
+                    f"{name}: paste did not produce Wipe_Transform/Wipe_Alpha "
+                    f"(paste={paste_status})"
+                )
+        except Exception as e:
+            result["failed"] += 1
+            result["errors"].append(f"{name}: build wipe failed: {e}")
+            print(f"      ⚠️ {name}: build wipe failed: {e}")
+        finally:
+            try:
+                live_comp.Unlock()
+            except Exception:
+                pass
+
+    result["success"] = result["applied"] > 0
+    result["message"] = (f"Slide-wipe applied to {result['applied']}/{len(items)} "
+                         f"V{track_index} clip(s)"
+                         + (f" — {result['failed']} failed" if result['failed'] else ""))
+    return result
+
+
+def _apply_fusion_preset_to_v3_clips(timeline, preset_path: str, track_index: int = 3):
+    """
+    Load a saved Fusion comp preset onto every clip on the given video track
+    (default V3 = broll). Uses Composition.LoadSettings(path) so the entire
+    saved comp (MediaIn → effect → MediaOut wiring) is applied in one shot.
+
+    Each clip already has an implicit Fusion comp at index 1 (MediaIn1 →
+    MediaOut1); LoadSettings replaces it with the saved one. The new
+    composition's MediaIn1 reconnects to the host clip's media.
+
+    Returns: {success, applied, skipped, failed, message}
+    """
+    result = {"success": False, "applied": 0, "skipped": 0, "failed": 0, "errors": [],
+              "message": "", "track": track_index}
+    try:
+        items = timeline.GetItemListInTrack("video", track_index) or []
+    except Exception as e:
+        result["message"] = f"GetItemListInTrack(video, {track_index}) failed: {e}"
+        return result
+
+    if not items:
+        result["success"] = True  # nothing to do is not a failure
+        result["message"] = f"No clips on V{track_index}; nothing to apply."
+        return result
+
+    if not os.path.exists(preset_path):
+        result["message"] = f"Preset file not found: {preset_path}"
+        return result
+
+    # Pre-read the preset text once for the Paste-into-comp fallback path.
+    preset_text = ""
+    try:
+        with open(preset_path, "r", encoding="utf-8", errors="replace") as _pf:
+            preset_text = _pf.read()
+    except Exception as e:
+        result["message"] = f"Could not read preset file: {e}"
+        return result
+
+    # Parse the .setting file into a Fusion settings table via the scripting
+    # module's readfile() — this is what comp.Paste() actually expects (a
+    # table, not a string). Without this, comp.Paste(text) silently returns
+    # False on every clip.
+    preset_table = None
+    try:
+        import DaVinciResolveScript as dvr_script
+        readfile = getattr(dvr_script, "readfile", None)
+        if callable(readfile):
+            preset_table = readfile(preset_path)
+            print(f"   📖 Parsed preset via dvr_script.readfile → type={type(preset_table).__name__} truthy={bool(preset_table)}")
+        else:
+            # Try via the Fusion app object
+            try:
+                fusion_app = dvr_script.scriptapp("Fusion")
+                rf2 = getattr(fusion_app, "readfile", None) if fusion_app else None
+                if callable(rf2):
+                    preset_table = rf2(preset_path)
+                    print(f"   📖 Parsed preset via fusion.readfile → type={type(preset_table).__name__} truthy={bool(preset_table)}")
+                else:
+                    print("   ⚠️ Neither dvr_script.readfile nor fusion.readfile available")
+            except Exception as _e:
+                print(f"   ⚠️ Fusion readfile path failed: {_e}")
+    except Exception as e:
+        print(f"   ⚠️ Could not parse preset into settings table: {e}")
+
+    # Get Resolve + Fusion app handles. We deliberately do NOT switch to the
+    # Fusion page here — Strategy D below alternates Edit (to seek playhead)
+    # and Fusion (to load the per-clip comp into fusion.GetCurrentComp()).
+    resolve_handle = None
+    fusion_app = None
+    try:
+        import DaVinciResolveScript as dvr_script
+        resolve_handle = dvr_script.scriptapp("Resolve")
+        fusion_app = dvr_script.scriptapp("Fusion")
+        print(f"   🪟 Fusion app handle: {fusion_app!r}")
+    except Exception as _e:
+        print(f"   ⚠️ Could not get Resolve/Fusion handles: {_e}")
+
+    print(f"   🎨 Applying mTuber preset to {len(items)} V{track_index} clip(s) → {preset_path}")
+
+    # Resolve's ImportFusionCompFromFile sometimes only accepts files with
+    # .comp / .setting extensions in particular folders. Make a sibling .comp
+    # copy of the preset to widen compatibility, since some builds dispatch
+    # on file extension.
+    preset_comp_copy = None
+    try:
+        if preset_path.lower().endswith(".setting"):
+            comp_alt = preset_path[:-len(".setting")] + ".comp"
+            # Always refresh from current .setting so the alias never goes
+            # stale (a previous run may have written a different macro).
+            import shutil as _shutil
+            _shutil.copyfile(preset_path, comp_alt)
+            preset_comp_copy = comp_alt
+    except Exception as _e:
+        print(f"   ⚠️ Could not create .comp alias for preset: {_e}")
+
+    # One-time deep diagnostic on the first clip so we can see what Resolve
+    # actually exposes (its __getattr__ is permissive: hasattr is unreliable).
+    if items:
+        first = items[0]
+        try:
+            fname = first.GetName() or ""
+        except Exception:
+            fname = "<no name>"
+        print(f"   🔬 Diagnostic on first clip: {fname}")
+        for meth in ("ImportFusionCompFromFile", "LoadFusionCompByName",
+                     "GetFusionCompByIndex", "GetFusionCompCount",
+                     "AddFusionComp", "DeleteFusionCompByName",
+                     "GetFusionCompNameList", "RenameFusionCompByName"):
+            obj = getattr(first, meth, None)
+            print(f"      • {meth}: present={obj is not None} callable={callable(obj)}")
+        try:
+            print(f"      • current FusionCompCount = {first.GetFusionCompCount()}")
+        except Exception as _e:
+            print(f"      • GetFusionCompCount raised: {_e}")
+        try:
+            names = first.GetFusionCompNameList()
+            print(f"      • current FusionCompNameList = {names}")
+        except Exception as _e:
+            print(f"      • GetFusionCompNameList raised: {_e}")
+
+    for item in items:
+        name = ""
+        try:
+            name = item.GetName() or ""
+        except Exception:
+            pass
+
+        applied_via = None
+        last_err = None
+
+        # Strategy A: item.ImportFusionCompFromFile(path) — the canonical
+        # clip-level API for loading a saved comp. Try both .setting and .comp.
+        for try_path in (preset_path, preset_comp_copy):
+            if not try_path or applied_via:
+                continue
+            # Call unconditionally; Resolve's permissive __getattr__ can
+            # report `callable=True` from a diagnostic but still raise on
+            # invocation. Capture the real outcome with full diagnostics.
+            try:
+                ret = item.ImportFusionCompFromFile(try_path)
+                print(f"      🔎 {name}: ImportFusionCompFromFile({os.path.basename(try_path)}) → {ret!r}")
+                if ret:
+                    applied_via = f"ImportFusionCompFromFile({os.path.basename(try_path)}) → {ret!r}"
+                    # Try to activate the just-imported comp if we got a name.
+                    try:
+                        if isinstance(ret, str):
+                            load_named = getattr(item, "LoadFusionCompByName", None)
+                            if callable(load_named):
+                                load_ret = load_named(ret)
+                                print(f"      🔎 {name}: LoadFusionCompByName({ret!r}) → {load_ret!r}")
+                    except Exception as _le:
+                        print(f"      ⚠️ {name}: LoadFusionCompByName raised: {_le}")
+            except Exception as e:
+                last_err = (last_err + " | " if last_err else "") + f"ImportFusionCompFromFile({os.path.basename(try_path) if try_path else '?'}): {type(e).__name__}: {e}"
+                print(f"      ⚠️ {name}: ImportFusionCompFromFile raised: {type(e).__name__}: {e}")
+
+        # Strategy D: DISABLED.
+        # Seeking the playhead and grabbing fusion.GetCurrentComp() landed
+        # on whichever clip Resolve happened to expose (often a V2 aroll or
+        # a transition stub), then _clear_comp_tools() destroyed it. The
+        # per-clip comp from item.GetFusionCompByIndex(1) (Strategy B) is
+        # the only safe target.
+        if False and not applied_via and fusion_app and preset_table is not None and resolve_handle is not None:
+            try:
+                import time as _time
+                clip_start = int(item.GetStart())
+                clip_end = int(item.GetEnd())
+                try:
+                    fps = float(timeline.GetSetting("timelineFrameRate") or 24)
+                except Exception:
+                    fps = 24.0
+                # Middle of the clip avoids any transition zones at the edges.
+                target_frame = clip_start + max(1, (clip_end - clip_start) // 2)
+                total_secs = target_frame / fps
+                hh = int(total_secs // 3600)
+                mm = int((total_secs % 3600) // 60)
+                ss = int(total_secs % 60)
+                ff = int(round((target_frame % fps)))
+                tc = f"{hh:02d}:{mm:02d}:{ss:02d}:{ff:02d}"
+
+                # Switch to Edit page so SetCurrentTimecode is honored.
+                try:
+                    resolve_handle.OpenPage("edit")
+                    _time.sleep(0.15)
+                except Exception:
+                    pass
+                try:
+                    seek_ret = timeline.SetCurrentTimecode(tc)
+                    print(f"      🎯 {name}: SetCurrentTimecode({tc}) → {seek_ret!r} (start={clip_start}, fps={fps})")
+                except Exception as _se:
+                    print(f"      ⚠️ {name}: SetCurrentTimecode failed: {_se}")
+
+                # Now open Fusion page — this loads the clip-under-playhead's
+                # comp as the live Fusion comp.
+                try:
+                    resolve_handle.OpenPage("fusion")
+                    _time.sleep(0.35)
+                except Exception:
+                    pass
+
+                live_comp = None
+                try:
+                    gcc = getattr(fusion_app, "GetCurrentComp", None)
+                    if callable(gcc):
+                        live_comp = gcc()
+                    if live_comp is None:
+                        live_comp = getattr(fusion_app, "CurrentComp", None)
+                except Exception as _ce:
+                    print(f"      ⚠️ {name}: GetCurrentComp failed: {_ce}")
+
+                # Identify the live comp so we can confirm it differs per clip.
+                comp_id = None
+                try:
+                    attrs = live_comp.GetAttrs() if live_comp else None
+                    if isinstance(attrs, dict):
+                        comp_id = attrs.get("COMPS_Name") or attrs.get("COMPS_FileName")
+                except Exception:
+                    pass
+                print(f"      🔎 {name}: live_comp={live_comp!r} id={comp_id!r}")
+
+                if live_comp is not None:
+                    paste_fn = getattr(live_comp, "Paste", None)
+                    lock_fn = getattr(live_comp, "Lock", None)
+                    unlock_fn = getattr(live_comp, "Unlock", None)
+                    # Tool count before/after to verify nodes were added.
+                    pre_count = None
+                    try:
+                        gtl = getattr(live_comp, "GetToolList", None)
+                        if callable(gtl):
+                            pre_count = len(gtl(False) or {})
+                    except Exception:
+                        pass
+                    if callable(paste_fn):
+                        try:
+                            if callable(lock_fn):
+                                lock_fn()
+                            # Clear existing tools so pasted MediaIn1/MediaOut1
+                            # don't collide and get renamed.
+                            _clear_comp_tools(live_comp, name)
+                            try:
+                                gtl = getattr(live_comp, "GetToolList", None)
+                                pre_count = len(gtl(False) or {}) if callable(gtl) else 0
+                            except Exception:
+                                pre_count = 0
+                            ret = paste_fn(preset_table)
+                            post_count = None
+                            try:
+                                gtl = getattr(live_comp, "GetToolList", None)
+                                if callable(gtl):
+                                    post_count = len(gtl(False) or {})
+                            except Exception:
+                                pass
+                            print(f"      🔎 {name}: live_comp.Paste(table) → {ret!r} tools {pre_count}→{post_count}")
+                            # Fallback: if dict-paste added no tools, retry
+                            # with the raw .setting text (string).
+                            if (post_count is None or pre_count is None or post_count <= pre_count) and preset_text:
+                                try:
+                                    ret2 = paste_fn(preset_text)
+                                    post_count2 = None
+                                    try:
+                                        gtl = getattr(live_comp, "GetToolList", None)
+                                        if callable(gtl):
+                                            post_count2 = len(gtl(False) or {})
+                                    except Exception:
+                                        pass
+                                    print(f"      🔎 {name}: live_comp.Paste(text) → {ret2!r} tools {pre_count}→{post_count2}")
+                                    if post_count2 is not None and pre_count is not None and post_count2 > pre_count:
+                                        ret = ret2
+                                        post_count = post_count2
+                                except Exception as _pe2:
+                                    print(f"      ⚠️ {name}: Paste(text) raised: {_pe2}")
+                            if callable(unlock_fn):
+                                unlock_fn()
+                            if ret and post_count and pre_count and post_count > pre_count:
+                                # Verify the macro actually landed in THIS comp.
+                                # If not, live_comp is the wrong comp (a title/
+                                # transition stacked on top of our V3 broll), so
+                                # invalidate the success and let Strategy B run
+                                # against item.GetFusionCompByIndex(1) instead.
+                                wired = _rewire_tiles_swap_with_fade(live_comp, item, timeline, name)
+                                if wired:
+                                    applied_via = "live fusion.CurrentComp.Paste"
+                                else:
+                                    print(f"      ↪️  {name}: live comp lacks Tiles_Swap macro — falling through to per-clip comp (Strategy B)")
+                        except Exception as _pe:
+                            last_err = (last_err + " | " if last_err else "") + f"live Paste: {_pe}"
+            except Exception as e:
+                last_err = (last_err + " | " if last_err else "") + f"strategy D: {e}"
+
+        # Strategy B: Get/create comp, then comp.Paste(text) — requires the
+        # raw .setting text. Drops onto the existing MediaIn1/MediaOut1.
+        if not applied_via:
+            try:
+                comp = None
+                count = 0
+                try:
+                    count = item.GetFusionCompCount() or 0
+                except Exception:
+                    pass
+                try:
+                    if count >= 1:
+                        comp = item.GetFusionCompByIndex(1)
+                    else:
+                        add_fn = getattr(item, "AddFusionComp", None)
+                        if callable(add_fn):
+                            comp = add_fn()
+                except Exception as e:
+                    last_err = (last_err + " | " if last_err else "") + f"get/add comp: {e}"
+
+                print(f"      🔎 {name}: comp obj={comp!r} count={count}")
+                if comp is not None:
+                    paste_fn = getattr(comp, "Paste", None)
+                    lock_fn = getattr(comp, "Lock", None)
+                    unlock_fn = getattr(comp, "Unlock", None)
+                    print(f"      🔎 {name}: Paste={callable(paste_fn)} Lock={callable(lock_fn)} Unlock={callable(unlock_fn)} table_truthy={bool(preset_table)}")
+
+                    # Strategy B1: Lock comp + Paste the parsed settings TABLE.
+                    # Lock() is required for structural edits to remote comps.
+                    if callable(paste_fn) and preset_table:
+                        try:
+                            if callable(lock_fn):
+                                lock_ret = lock_fn()
+                                print(f"      🔎 {name}: comp.Lock() → {lock_ret!r}")
+                            ret = paste_fn(preset_table)
+                            print(f"      🔎 {name}: comp.Paste(table) → {ret!r}")
+                            if ret:
+                                # Rewire macro and inject 1s fade-out while
+                                # the comp is still locked for structural edits.
+                                _rewire_tiles_swap_with_fade(comp, item, timeline, name)
+                                applied_via = "comp.Lock+Paste(table)+Unlock"
+                            if callable(unlock_fn):
+                                unlock_ret = unlock_fn()
+                                print(f"      🔎 {name}: comp.Unlock() → {unlock_ret!r}")
+                        except Exception as e:
+                            last_err = (last_err + " | " if last_err else "") + f"Lock/Paste(table): {e}"
+                            try:
+                                if callable(unlock_fn):
+                                    unlock_fn()
+                            except Exception:
+                                pass
+
+                    # Strategy B2: legacy text-paste fallback (almost always
+                    # fails on modern Resolve, kept for completeness).
+                    if not applied_via and callable(paste_fn) and preset_text:
+                        try:
+                            if callable(lock_fn):
+                                lock_fn()
+                            ret = paste_fn(preset_text)
+                            print(f"      🔎 {name}: comp.Paste(text) → {ret!r}")
+                            if ret:
+                                _rewire_tiles_swap_with_fade(comp, item, timeline, name)
+                                applied_via = "comp.Paste(text)"
+                            if callable(unlock_fn):
+                                unlock_fn()
+                        except Exception as e:
+                            last_err = (last_err + " | " if last_err else "") + f"Paste(text): {e}"
+                            try:
+                                if callable(unlock_fn):
+                                    unlock_fn()
+                            except Exception:
+                                pass
+
+                    # Strategy C: comp.LoadSettings(path) — last resort; many
+                    # Resolve builds expose this on Fusion Studio root only,
+                    # not on per-clip comps, but try anyway.
+                    if not applied_via:
+                        load_fn = getattr(comp, "LoadSettings", None)
+                        print(f"      🔎 {name}: comp.LoadSettings callable={callable(load_fn)}")
+                        if callable(load_fn):
+                            try:
+                                ret = load_fn(preset_path)
+                                print(f"      🔎 {name}: comp.LoadSettings(path) → {ret!r}")
+                                if ret:
+                                    applied_via = "comp.LoadSettings(path)"
+                            except Exception as e:
+                                last_err = (last_err + " | " if last_err else "") + f"LoadSettings: {e}"
+            except Exception as e:
+                last_err = (last_err + " | " if last_err else "") + f"strategy B/C: {e}"
+
+        if applied_via:
+            result["applied"] += 1
+            print(f"      ✅ {name} ({applied_via})")
+        else:
+            result["failed"] += 1
+            err_msg = last_err or "no method succeeded"
+            result["errors"].append(f"{name}: {err_msg}")
+            print(f"      ⚠️ {name} — {err_msg}")
+
+    result["success"] = result["applied"] > 0 and result["failed"] == 0
+    result["message"] = (f"mTuber preset applied to {result['applied']}/{len(items)} V{track_index} clip(s)"
+                         + (f" — {result['failed']} failed" if result['failed'] else ""))
+    return result
 
 
 def _add_broll_clips_above_aroll(media_pool, timeline, broll_bin):
@@ -1623,6 +2973,44 @@ def create_resolve_project_with_videos(
             f"   {'✅' if broll_v2_result.get('success') else '⚠️'} "
             f"{broll_v2_result.get('message')}"
         )
+
+        # ------------------------------------------------------------------
+        # SMOKE TEST: programmatic Fusion automation. Add a simple Blur
+        # node to every V3 broll clip with two keyframes (clear → blurry
+        # over the clip's duration). No .setting paste, no plugin macros
+        # — just AddTool + ConnectInput + SetInput. If this works, more
+        # elaborate effects can follow the same pattern.
+        # ------------------------------------------------------------------
+        wipe_result = _apply_blur_to_v3_clips(
+            timeline, track_index=3, max_blur=20.0
+        )
+        print(
+            f"   {'✅' if wipe_result.get('success') else '⚠️'} "
+            f"{wipe_result.get('message')}"
+        )
+        for _err in (wipe_result.get("errors") or [])[:5]:
+            print(f"      • {_err}")
+        base_result["broll_wipe_v3"] = wipe_result
+
+        # ------------------------------------------------------------------
+        # 1-second fade-out is now injected as an AlphaMultiply node inside
+        # each clip's Fusion comp during _apply_fusion_preset_to_v3_clips
+        # (TimelineItem opacity-keyframe API is not exposed by Resolve, so
+        # the standalone fade pass below was a no-op). Keeping the call
+        # behind a flag so it still runs as a diagnostic but no longer
+        # blocks success.
+        # ------------------------------------------------------------------
+        try:
+            fade_result = _apply_fade_out_to_v3_clips(timeline, fade_seconds=1.0, track_index=3)
+            print(
+                f"   {'✅' if fade_result.get('success') else 'ℹ️'} "
+                f"(timeline-item fade pass — Fusion-comp AlphaMultiply is the real fade): "
+                f"{fade_result.get('message')}"
+            )
+            base_result["broll_fade_out"] = fade_result
+        except Exception as _fade_err:
+            print(f"   ⚠️ broll fade-out skipped: {_fade_err}")
+            base_result["broll_fade_out"] = {"success": False, "error": str(_fade_err)}
 
         # ------------------------------------------------------------------
         # Configure audio tracks (A1='aroll sound', A2='background sound')

@@ -4026,6 +4026,67 @@ def api_extract_docx():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/resolve/inspect", methods=["GET"])
+def api_resolve_inspect():
+    """Inspect the currently-loaded DaVinci Resolve timeline.
+
+    Returns every clip on every video & audio track including B-roll,
+    adjustment clips, fusion comp names, and the property bag for each
+    timeline item (transform, composite mode, retime, etc.).
+    """
+    try:
+        from resolve_inspector import inspect_current_timeline
+        result = inspect_current_timeline()
+        status = 200 if result.get("success") else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.error(f"❌ /api/resolve/inspect failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/resolve/probe-fusion", methods=["GET"])
+def api_resolve_probe_fusion():
+    """For a given timeline item unique_id, dump every Fusion comp's tool list.
+
+    Use this to see whether a paid template (e.g. mTuber 4 Tiles Swap) exposes
+    its inputs to the scripting API or is encrypted.
+    """
+    try:
+        unique_id = request.args.get("unique_id", "").strip()
+        if not unique_id:
+            return jsonify({"success": False, "error": "unique_id query param is required"}), 400
+        from resolve_inspector import probe_fusion_comp
+        result = probe_fusion_comp(unique_id)
+        status = 200 if result.get("success") else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.error(f"❌ /api/resolve/probe-fusion failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/resolve/save-comp-preset", methods=["POST"])
+def api_resolve_save_comp_preset():
+    """Save the Fusion composition from one timeline clip as a reusable preset.
+
+    Body JSON: { "unique_id": "...", "preset_name": "default_broll" (optional) }
+
+    The preset file (default: scriptcraft-app-v2/fusion_presets/default_broll.setting)
+    is what Create DaVinci Project will auto-apply to every V3 broll clip.
+    """
+    try:
+        from resolve_inspector import save_comp_preset
+        payload = request.get_json(silent=True) or {}
+        unique_id = (payload.get("unique_id") or "").strip()
+        if not unique_id:
+            return jsonify({"success": False, "error": "unique_id is required"}), 400
+        preset_name = (payload.get("preset_name") or "").strip() or None
+        result = save_comp_preset(unique_id, preset_name=preset_name)
+        return jsonify(result), (200 if result.get("success") else 400)
+    except Exception as e:
+        logger.error(f"❌ /api/resolve/save-comp-preset failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/keys", methods=["GET"])
 def api_keys_get():
     """Return all saved API keys (Google, HeyGen, Grok). Falls back to env vars."""
@@ -5492,7 +5553,12 @@ def create_resolve_with_videos():
             import re
             name = filename
 
-            # Intro/exit clips always go first
+            # Exit clip ("AI with Roz Exit Clip.mov") always goes LAST,
+            # after every chapter clip and any unknown clips.
+            if re.search(r'AI\s+with\s+Roz.*Exit', name, re.IGNORECASE):
+                return (99999, 0)
+
+            # Other "AI with Roz" intro clips always go first
             if re.search(r'AI\s+with\s+Roz', name, re.IGNORECASE):
                 return (0, 0)
 
