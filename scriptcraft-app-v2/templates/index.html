@@ -869,6 +869,10 @@
                     <span class="toolbar-icon">🔍</span>
                     <span class="toolbar-text">Inspect Resolve</span>
                 </button>
+                <button class="toolbar-btn" onclick="openSwipeTestModal()" title="Create a fresh Resolve timeline with one broll clip and apply the swipe Fusion comp for fast iteration">
+                    <span class="toolbar-icon">🌬️</span>
+                    <span class="toolbar-text">Swipe Test</span>
+                </button>
                 <button class="toolbar-btn" onclick="openApiKeysModal()" title="Manage API Keys">
                     <span class="toolbar-icon">🔑</span>
                     <span class="toolbar-text">API Keys</span>
@@ -924,6 +928,50 @@
                     <div style="color:#94a3b8;">Click <strong>🔄 Refresh</strong> to load the current timeline.</div>
                 </div>
                 <div id="resolveInspectorJson" style="display:none; flex:1; overflow:auto; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:10px; color:#cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.75em; white-space:pre;"></div>
+            </div>
+        </div>
+
+        <!-- Swipe Test Modal -->
+        <div id="swipeTestOverlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:10072; align-items:center; justify-content:center;">
+            <div style="background:#0f172a; border:1px solid #334155; border-radius:10px; width:min(720px, 95vw); max-height:90vh; padding:18px 22px; box-shadow:0 20px 50px rgba(0,0,0,0.6); display:flex; flex-direction:column;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h2 style="margin:0; color:#e2e8f0; font-size:1.1em;">🌬️ Swipe Fusion Comp — Quick Test</h2>
+                    <button onclick="closeSwipeTestModal()" style="background:transparent; color:#94a3b8; border:none; font-size:1.4em; cursor:pointer;">×</button>
+                </div>
+                <div style="color:#94a3b8; font-size:0.82em; margin-bottom:10px;">
+                    Creates a fresh DaVinci Resolve timeline, drops one broll clip on V1 and V<span id="swipeTrackEcho">3</span>,
+                    then runs <code style="color:#e2e8f0;">_apply_wipe_to_v3_clips</code> on the configured track.
+                </div>
+                <label style="color:#cbd5e1; font-size:0.85em; margin-bottom:4px;">Broll video path (absolute):</label>
+                <input id="swipeTestVideoPath" type="text"
+                       value="~/dev/test_broll.mov"
+                       placeholder="/Users/you/Movies/sample_broll.mp4"
+                       style="width:100%; padding:8px 10px; background:#020617; border:1px solid #334155; border-radius:6px; color:#e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.85em; margin-bottom:10px;">
+                <div style="display:flex; gap:12px; margin-bottom:10px;">
+                    <div style="flex:1;">
+                        <label style="color:#cbd5e1; font-size:0.85em;">Track index</label>
+                        <input id="swipeTestTrackIndex" type="number" min="1" max="20" value="3"
+                               oninput="document.getElementById('swipeTrackEcho').textContent = this.value || '3'"
+                               style="width:100%; padding:6px 8px; background:#020617; border:1px solid #334155; border-radius:6px; color:#e2e8f0;">
+                    </div>
+                    <div style="flex:1;">
+                        <label style="color:#cbd5e1; font-size:0.85em;">Slide seconds</label>
+                        <input id="swipeTestSlideSeconds" type="number" step="0.05" min="0.05" value="0.4"
+                               style="width:100%; padding:6px 8px; background:#020617; border:1px solid #334155; border-radius:6px; color:#e2e8f0;">
+                    </div>
+                    <div style="flex:1.4;">
+                        <label style="color:#cbd5e1; font-size:0.85em;">Timeline name prefix</label>
+                        <input id="swipeTestTimelineName" type="text" value="swipe_test"
+                               style="width:100%; padding:6px 8px; background:#020617; border:1px solid #334155; border-radius:6px; color:#e2e8f0;">
+                    </div>
+                </div>
+                <div style="display:flex; gap:8px; margin-bottom:10px;">
+                    <button id="swipeTestRunBtn" onclick="runSwipeTest()"
+                            style="padding:8px 16px; background:#0ea5e9; border:none; color:#fff; border-radius:6px; cursor:pointer; font-weight:600;">▶ Run Test</button>
+                    <button onclick="closeSwipeTestModal()"
+                            style="padding:8px 16px; background:#1e293b; border:1px solid #334155; color:#cbd5e1; border-radius:6px; cursor:pointer;">Close</button>
+                </div>
+                <div id="swipeTestResult" style="flex:1; overflow:auto; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:10px; color:#cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.78em; white-space:pre-wrap; min-height:120px;">Result will appear here…</div>
             </div>
         </div>
 
@@ -4718,6 +4766,61 @@ Thank you for watching!`;
 
         // ---- Resolve Inspector modal ----
         let _resolveInspectorData = null;
+
+        // ---- Swipe Test ---------------------------------------------------
+        function openSwipeTestModal() {
+            const overlay = document.getElementById('swipeTestOverlay');
+            if (!overlay) return;
+            overlay.style.display = 'flex';
+            const last = localStorage.getItem('lineDrive.swipeTest.videoPath');
+            if (last) document.getElementById('swipeTestVideoPath').value = last;
+        }
+
+        function closeSwipeTestModal() {
+            const overlay = document.getElementById('swipeTestOverlay');
+            if (overlay) overlay.style.display = 'none';
+        }
+
+        async function runSwipeTest() {
+            const videoPath = document.getElementById('swipeTestVideoPath').value.trim();
+            const trackIndex = parseInt(document.getElementById('swipeTestTrackIndex').value || '3', 10);
+            const slideSeconds = parseFloat(document.getElementById('swipeTestSlideSeconds').value || '0.4');
+            const timelineName = document.getElementById('swipeTestTimelineName').value.trim() || 'swipe_test';
+            const out = document.getElementById('swipeTestResult');
+            const btn = document.getElementById('swipeTestRunBtn');
+
+            if (!videoPath) {
+                out.textContent = '❌ Please enter an absolute path to a broll video.';
+                return;
+            }
+            localStorage.setItem('lineDrive.swipeTest.videoPath', videoPath);
+
+            btn.disabled = true;
+            const originalLabel = btn.textContent;
+            btn.textContent = '⏳ Running…';
+            out.textContent = 'Connecting to DaVinci Resolve, importing clip, building timeline, applying swipe…';
+            try {
+                const res = await fetch('/api/resolve/test-swipe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        video_path: videoPath,
+                        track_index: trackIndex,
+                        slide_seconds: slideSeconds,
+                        timeline_name: timelineName,
+                    }),
+                });
+                const data = await res.json();
+                const ok = !!data.success;
+                out.textContent = (ok ? '✅ ' : '❌ ') + 'HTTP ' + res.status + '\n\n' +
+                    JSON.stringify(data, null, 2);
+            } catch (e) {
+                out.textContent = '❌ Request failed: ' + e.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalLabel;
+            }
+        }
 
         function openResolveInspector() {
             const modal = document.getElementById('resolveInspectorModal');

@@ -4044,6 +4044,154 @@ def api_resolve_inspect():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/resolve/test-swipe", methods=["POST"])
+def api_resolve_test_swipe():
+    """Fast feedback loop for the V3 broll swipe transition.
+
+    Body JSON:
+        {
+            "video_path": "/abs/path/to/sample.mp4"   (required),
+            "track_index": 3                          (optional, default 3),
+            "slide_seconds": 0.4                      (optional, default 0.4),
+            "timeline_name": "swipe_test"             (optional)
+        }
+
+    Behavior:
+        1. Connect to running Resolve, get/create a project.
+        2. Import the video into a `swipe_test` bin.
+        3. Create a fresh empty timeline (name suffixed with timestamp).
+        4. Append the clip to V1 *and* to the configured track (default V3)
+           so the swipe (which runs on V3 by default) has something to bite.
+        5. Call `_apply_wipe_to_v3_clips(...)` from davinci_resolve_api.
+
+    Returns the wipe-result dict so the UI can show diagnostics.
+    """
+    payload = request.get_json(silent=True) or {}
+    video_path = (payload.get("video_path") or "").strip()
+    track_index = int(payload.get("track_index") or 3)
+    slide_seconds = float(payload.get("slide_seconds") or 0.4)
+    base_name = (payload.get("timeline_name") or "swipe_test").strip() or "swipe_test"
+
+    if not video_path:
+        return jsonify({"success": False, "error": "video_path is required"}), 400
+    video_path = os.path.expanduser(video_path)
+    if not os.path.isfile(video_path):
+        return jsonify({"success": False, "error": f"video_path not found: {video_path}"}), 400
+
+    try:
+        # Connect to Resolve.
+        resolve_script_api = (
+            "/Library/Application Support/Blackmagic Design/"
+            "DaVinci Resolve/Developer/Scripting"
+        )
+        resolve_script_lib = (
+            "/Applications/DaVinci Resolve/DaVinci Resolve.app/"
+            "Contents/Libraries/Fusion/fusionscript.so"
+        )
+        os.environ["RESOLVE_SCRIPT_API"] = resolve_script_api
+        os.environ["RESOLVE_SCRIPT_LIB"] = resolve_script_lib
+        modules_path = os.path.join(resolve_script_api, "Modules")
+        if modules_path not in sys.path:
+            sys.path.append(modules_path)
+
+        import DaVinciResolveScript as dvr_script  # type: ignore
+        resolve = dvr_script.scriptapp("Resolve")
+        if resolve is None:
+            return jsonify({"success": False,
+                            "error": "Could not connect to DaVinci Resolve. "
+                                     "Is it running?"}), 500
+
+        pm = resolve.GetProjectManager()
+        project = pm.GetCurrentProject()
+        if project is None:
+            # Try to create / open a scratch project.
+            project = pm.CreateProject("ScriptCraft_SwipeTest") or \
+                      pm.LoadProject("ScriptCraft_SwipeTest")
+            if project is None:
+                return jsonify({"success": False,
+                                "error": "No current project and could not "
+                                         "create 'ScriptCraft_SwipeTest'"}), 500
+
+        media_pool = project.GetMediaPool()
+        root_folder = media_pool.GetRootFolder()
+
+        # Make / find a swipe_test bin.
+        bin_name = "swipe_test"
+        target_bin = None
+        try:
+            for sub in (root_folder.GetSubFolderList() or []):
+                if sub.GetName() == bin_name:
+                    target_bin = sub
+                    break
+        except Exception:
+            pass
+        if target_bin is None:
+            try:
+                media_pool.SetCurrentFolder(root_folder)
+                target_bin = media_pool.AddSubFolder(root_folder, bin_name)
+            except Exception:
+                target_bin = root_folder
+        try:
+            media_pool.SetCurrentFolder(target_bin)
+        except Exception:
+            pass
+
+        # Import the video.
+        imported = media_pool.ImportMedia([video_path]) or []
+        if not imported:
+            return jsonify({"success": False,
+                            "error": f"ImportMedia returned nothing for {video_path}"}), 500
+        clip = imported[0]
+
+        # Create a fresh timeline.
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timeline_name = f"{base_name}_{ts}"
+        timeline = media_pool.CreateEmptyTimeline(timeline_name)
+        if timeline is None:
+            return jsonify({"success": False,
+                            "error": f"CreateEmptyTimeline('{timeline_name}') returned None"}), 500
+        project.SetCurrentTimeline(timeline)
+
+        # Make sure the target track exists.
+        try:
+            current_video_tracks = timeline.GetTrackCount("video") or 1
+            while current_video_tracks < track_index:
+                timeline.AddTrack("video")
+                current_video_tracks = timeline.GetTrackCount("video") or current_video_tracks + 1
+        except Exception as _te:
+            logger.warning(f"⚠️ Could not ensure V{track_index} exists: {_te}")
+
+        # Place the clip exactly once on the target track.
+        appended_target = media_pool.AppendToTimeline([{
+            "mediaPoolItem": clip,
+            "startFrame": 0,
+            "endFrame": int(clip.GetClipProperty("Frames") or 240) - 1,
+            "trackIndex": track_index,
+        }]) or []
+        logger.info(f"🧪 swipe-test: appended V{track_index}={len(appended_target)}")
+
+        # Apply the swipe.
+        from davinci_resolve_api import _apply_wipe_to_v3_clips
+        wipe_result = _apply_wipe_to_v3_clips(
+            timeline,
+            track_index=track_index,
+            slide_seconds=slide_seconds,
+        )
+
+        return jsonify({
+            "success": bool(wipe_result.get("success")),
+            "timeline": timeline_name,
+            "video_path": video_path,
+            "track_index": track_index,
+            "slide_seconds": slide_seconds,
+            "appended_target": len(appended_target),
+            "wipe": wipe_result,
+        })
+    except Exception as e:
+        logger.error(f"❌ /api/resolve/test-swipe failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/resolve/probe-fusion", methods=["GET"])
 def api_resolve_probe_fusion():
     """For a given timeline item unique_id, dump every Fusion comp's tool list.

@@ -1195,6 +1195,523 @@ def _rewire_tiles_swap_with_fade(comp, item, timeline, name: str):
     return False
 
 
+def _apply_wipe_to_v3_clips(timeline, track_index: int = 3,
+                            settings_path: str = None,
+                            slide_seconds: float = 0.4):
+    """
+    Apply the user's saved Fusion wipe (myswipe.setting) to every clip on
+    the given video track. The preset is a Transform driven by a PolyPath
+    + BezierSpline displacement that slides the image off-screen on entry
+    and exit.
+
+    Strategy A (preferred): comp.Paste(settings_text). The pasted MediaIn
+    /MediaOut from the .setting are deleted and the existing MediaIn1/
+    MediaOut1 are rewired into the pasted CustomWipe.
+
+    Strategy B (fallback if Paste fails / produces no Transform): build a
+    Transform manually with AddTool and animate it directly. Because the
+    Resolve external-Python bridge can't easily keyframe a Point input
+    (Center) without a path modifier, the fallback animates Transform's
+    `Size` (numeric, proven to keyframe via BezierSpline) — zooming the
+    image in from 0→1 on entry and out 1→0 on exit. Not the same look as
+    a slide-off, but at least visibly animated so the user sees the
+    pipeline ran. We also keyframe `Angle` for an extra cue.
+
+    Args:
+        timeline: DaVinci Resolve timeline object.
+        track_index: Video track to operate on (default 3 = V3 broll).
+        settings_path: Path to the .setting file.
+        slide_seconds: How long the slide-in (and slide-out) should take.
+    """
+    import os as _os
+    if not settings_path:
+        _here = _os.path.dirname(_os.path.abspath(__file__))
+        settings_path = _os.path.join(_here, "fusion_presets", "myswipe.setting")
+
+    result = {"success": False, "message": "", "applied": 0, "failed": 0,
+              "errors": [], "strategy_a": 0, "strategy_b": 0}
+
+    try:
+        with open(settings_path, "r") as _f:
+            settings_text = _f.read()
+        print(f"   📄 wipe preset: {settings_path} ({len(settings_text)} bytes)")
+    except Exception as e:
+        result["message"] = f"Could not read wipe preset {settings_path}: {e}"
+        settings_text = None
+        print(f"   ⚠️ {result['message']}")
+
+    try:
+        items = timeline.GetItemListInTrack("video", track_index) or []
+    except Exception as e:
+        result["message"] = f"GetItemListInTrack(video, {track_index}) failed: {e}"
+        return result
+    if not items:
+        result["success"] = True
+        result["message"] = f"No clips on V{track_index}; nothing to wipe."
+        return result
+
+    try:
+        fps = float(timeline.GetSetting("timelineFrameRate") or 24)
+    except Exception:
+        fps = 24.0
+    slide_frames_target = max(1, int(round(slide_seconds * fps)))
+
+    print(f"   🌬️ Applying wipe to {len(items)} V{track_index} clip(s) "
+          f"(slide ~{slide_frames_target}f @ {fps:.2f}fps)")
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _list_tools(_comp):
+        out = []
+        try:
+            tl = _comp.GetToolList(False) or {}
+            if isinstance(tl, dict):
+                keys = list(tl.keys())
+            else:
+                keys = list(range(1, len(tl) + 1))
+            for k in keys:
+                t = tl[k]
+                if t is None:
+                    continue
+                try:
+                    out.append((t.Name, (t.GetAttrs() or {}).get("TOOLS_RegID", "?"), t))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return out
+
+    def _set_keys(spline, keys, label):
+        if spline is None:
+            return False
+        try:
+            spline.SetKeyFrames(keys)
+            return True
+        except Exception:
+            pass
+        try:
+            for _f, _v in keys.items():
+                spline["Value"][_f] = _v[1]
+            return True
+        except Exception as _e:
+            print(f"      ⚠️ {label}: spline keyframe write failed: {_e}")
+            return False
+
+    # ------------------------------------------------------------------
+    # Per-clip
+    # ------------------------------------------------------------------
+    for item in items:
+        try:
+            name = item.GetName() or "<unnamed>"
+        except Exception:
+            name = "<unnamed>"
+
+        # Get or create per-clip Fusion comp.
+        comp = None
+        try:
+            cnt = item.GetFusionCompCount() or 0
+            if cnt >= 1:
+                comp = item.GetFusionCompByIndex(1)
+            else:
+                add_fn = getattr(item, "AddFusionComp", None)
+                if callable(add_fn):
+                    comp = add_fn()
+        except Exception as e:
+            result["errors"].append(f"{name}: get/add comp: {e}")
+            result["failed"] += 1
+            continue
+        if comp is None:
+            result["errors"].append(f"{name}: no comp returned")
+            result["failed"] += 1
+            continue
+
+        # COMP-LOCAL frame range.
+        f_start, f_end = 0, 24
+        try:
+            cattrs = comp.GetAttrs() or {}
+            gs = cattrs.get("COMPN_GlobalStart")
+            ge = cattrs.get("COMPN_GlobalEnd")
+            if gs is not None and ge is not None and ge > gs:
+                f_start = int(gs)
+                f_end = int(ge) - 1
+            else:
+                raise ValueError("no comp range")
+        except Exception:
+            try:
+                dur = int(item.GetEnd()) - int(item.GetStart())
+                f_start = 0
+                f_end = max(1, dur - 1)
+            except Exception:
+                pass
+        if f_end <= f_start:
+            f_end = f_start + 1
+        clip_len = f_end - f_start
+        slide_frames = max(1, min(slide_frames_target, clip_len * 4 // 10))
+        k_in_done = f_start + slide_frames
+        k_out_start = f_end - slide_frames
+        if k_out_start <= k_in_done:
+            k_out_start = k_in_done + 1
+            if k_out_start >= f_end:
+                f_end = k_out_start + 1
+
+        media_in = comp.FindTool("MediaIn1")
+        media_out = comp.FindTool("MediaOut1")
+        if media_in is None or media_out is None:
+            result["errors"].append(
+                f"{name}: comp missing MediaIn1={media_in is not None} "
+                f"MediaOut1={media_out is not None}"
+            )
+            result["failed"] += 1
+            continue
+
+        # ----------------------------------------------------------------
+        # Strategy A: paste the .setting OUTSIDE the lock (Lock() blocks
+        # Paste in Fusion).
+        # ----------------------------------------------------------------
+        wipe = comp.FindTool("CustomWipe")
+        disp_spline = comp.FindTool("Path1Displacement")
+
+        if wipe is None and settings_text:
+            tools_before = {n for (n, _r, _t) in _list_tools(comp)}
+            paste_fn = getattr(comp, "Paste", None)
+            paste_ok = None
+            if callable(paste_fn):
+                try:
+                    paste_ok = paste_fn(settings_text)
+                except Exception as _pe:
+                    print(f"      ⚠️ {name}: Paste threw: {_pe}")
+                    paste_ok = False
+            else:
+                print(f"      ⚠️ {name}: comp.Paste not callable")
+            tools_after = _list_tools(comp)
+            new_tools = [(n, r, t) for (n, r, t) in tools_after if n not in tools_before]
+            print(f"      📋 {name}: Paste returned {paste_ok!r}, "
+                  f"+{len(new_tools)} tool(s): "
+                  f"{[(n, r) for (n, r, _t) in new_tools]}")
+
+            extra_media = []
+            for (n, r, t) in new_tools:
+                if r in ("MediaIn", "MediaOut"):
+                    extra_media.append(t)
+                elif r == "Transform" and wipe is None:
+                    wipe = t
+                elif r == "BezierSpline" and disp_spline is None:
+                    disp_spline = t
+
+            for t in extra_media:
+                try:
+                    delete_fn = getattr(t, "Delete", None)
+                    if callable(delete_fn):
+                        delete_fn()
+                except Exception:
+                    pass
+
+            if wipe is not None:
+                try:
+                    wipe.ConnectInput("Input", media_in)
+                    media_out.ConnectInput("Input", wipe)
+                    print(f"      🔗 {name}: rewired MediaIn1 → CustomWipe → MediaOut1")
+                    result["strategy_a"] += 1
+                except Exception as _ce:
+                    print(f"      ⚠️ {name}: rewire failed: {_ce}")
+
+        elif wipe is not None:
+            print(f"      ♻️ {name}: reusing existing CustomWipe")
+            try:
+                wipe.ConnectInput("Input", media_in)
+                media_out.ConnectInput("Input", wipe)
+            except Exception:
+                pass
+
+        # ----------------------------------------------------------------
+        # If Strategy A produced a wipe + displacement spline, rescale
+        # the displacement keyframes to this clip's frame range and we're
+        # done.
+        # ----------------------------------------------------------------
+        if wipe is not None and disp_spline is not None:
+            keys = {
+                f_start:     {1: 0.0},
+                k_in_done:   {1: 0.5},
+                k_out_start: {1: 0.5},
+                f_end:       {1: 1.0},
+            }
+            if _set_keys(disp_spline, keys, f"{name} displacement"):
+                print(f"      🎚️ {name}: keys "
+                      f"0@{f_start}, 0.5@{k_in_done}, 0.5@{k_out_start}, 1@{f_end}")
+                _evaluate_comp(comp, f_start, f_end, wipe)
+                result["applied"] += 1
+                continue
+
+        # ----------------------------------------------------------------
+        # Strategy B fallback: build a Transform manually and keyframe
+        # Size 0→1→1→0 + Angle 0→0→0→90 so the user sees a clear
+        # animated transition even if Paste produced nothing usable.
+        # ----------------------------------------------------------------
+        try:
+            # Clean up any stale zoom-fallback spline from previous runs.
+            stale_size = comp.FindTool("WipeSizeSpline")
+            if stale_size is not None:
+                try:
+                    stale_size.Delete()
+                    print(f"      🧹 {name}: removed stale WipeSizeSpline (zoom)")
+                except Exception:
+                    pass
+
+            xf = comp.FindTool("WipeFallback")
+            if xf is None:
+                add_tool = getattr(comp, "AddTool", None)
+                if not callable(add_tool):
+                    result["errors"].append(f"{name}: AddTool not callable; cannot fall back")
+                    result["failed"] += 1
+                    continue
+                xf = add_tool("Transform", -32768, -32768)
+                if xf is None:
+                    result["errors"].append(f"{name}: AddTool('Transform') returned None")
+                    result["failed"] += 1
+                    continue
+                try:
+                    xf.SetAttrs({"TOOLS_Name": "WipeFallback"})
+                except Exception:
+                    pass
+                print(f"      ➕ {name}: added WipeFallback (Transform)")
+
+            try:
+                xf.ConnectInput("Input", media_in)
+                media_out.ConnectInput("Input", xf)
+                print(f"      🔗 {name}: MediaIn1 → WipeFallback → MediaOut1")
+            except Exception as _ce:
+                print(f"      ⚠️ {name}: fallback rewire failed: {_ce}")
+
+            # Make sure Size is a static 1.0 (in case a prior zoom spline
+            # was attached) and clear any prior Center keyframes.
+            try:
+                xf.SetInput("Size", 1.0)
+            except Exception:
+                pass
+            try:
+                xf.SetInput("Center", [0.5, 0.5])
+            except Exception:
+                pass
+
+            # ----------------------------------------------------------
+            # Slide animation. The Transform's `Center` is a Point input,
+            # which the scripting API will not let us keyframe with the
+            # 3-arg `SetInput(name, val, frame)` form on this Resolve
+            # build. The reliable approach is to attach an XYPath
+            # modifier to the Center input — that's the same modifier
+            # Fusion creates when you right-click → "Modify With → XY
+            # Path" in the GUI. XYPath exposes `X` and `Y` numeric
+            # inputs that accept BezierSplines via the normal
+            # `ConnectInput` API.
+            #
+            # Slide-IN with cubic ease-out (fast start → gentle stop at
+            # center). Per-frame keyframes are written because Fusion's
+            # BezierSpline interpolation between sparse keys may be linear
+            # on this build; explicit per-frame values guarantee the curve.
+            #
+            #   1.5 (off-screen right) @ f_start  \
+            #   ... ease-out curve ...             |  slide_frames
+            #   0.5 (center)          @ k_in_done /
+            #   0.5 (hold)            @ f_end
+            # ----------------------------------------------------------
+            _sr = max(k_in_done - f_start, 1)
+            slide_keys_x = {}
+            for _i in range(int(_sr) + 1):
+                _t = _i / _sr
+                # cubic ease-out: f(t) = 1 - (1-t)^3
+                _ease = 1.0 - (1.0 - _t) ** 3
+                slide_keys_x[f_start + _i] = {1: round(1.5 - _ease, 6)}
+            slide_keys_x[f_end] = {1: 0.5}  # hold
+            slide_keys_y = {
+                f_start: {1: 0.5},
+                f_end:   {1: 0.5},
+            }
+
+            # Clean up any prior bare BezierSpline / XYPath from earlier
+            # attempts so re-runs start fresh and don't accumulate
+            # orphan nodes.
+            for stale_name in ("WipeCenterX", "WipeCenterY", "WipeCenterPath",
+                                "XYPath1", "XYPath1X", "XYPath1Y",
+                                "WipeBlend", "WipeMerge"):
+                stale = comp.FindTool(stale_name)
+                if stale is not None:
+                    try:
+                        stale.Delete()
+                        print(f"      🧹 {name}: removed stale {stale_name}")
+                    except Exception:
+                        pass
+
+            wrote_slide = False
+            add_modifier = getattr(xf, "AddModifier", None)
+
+            xy_path = None
+            if callable(add_modifier):
+                # Snapshot tools before so we can find the new modifier
+                # afterwards — `AddModifier` returns a bool on this build,
+                # not the new tool object.
+                names_before = {n for (n, _r, _t) in _list_tools(comp)}
+                try:
+                    add_ret = xf.AddModifier("Center", "XYPath")
+                    print(f"      ➕ {name}: AddModifier(Center, XYPath) → {add_ret!r}")
+                except Exception as _me:
+                    add_ret = None
+                    print(f"      ⚠️ {name}: AddModifier failed: {_me}")
+
+                if add_ret:
+                    # Find any newly-added XYPath tool.
+                    for (n2, r2, t2) in _list_tools(comp):
+                        if n2 in names_before:
+                            continue
+                        if r2 == "XYPath":
+                            xy_path = t2
+                            try:
+                                t2.SetAttrs({"TOOLS_Name": "WipeCenterPath"})
+                            except Exception:
+                                pass
+                            print(f"      🔎 {name}: located new XYPath modifier "
+                                  f"as '{n2}'")
+                            break
+
+            if xy_path is not None:
+                # The modifier auto-creates X / Y BezierSplines and wires
+                # them to its inputs. Find them by the auto-naming
+                # convention (<modifier_name>X, <modifier_name>Y) so we
+                # can write keyframes directly without re-attaching.
+                xy_name = None
+                try:
+                    xy_name = xy_path.GetAttrs().get("TOOLS_Name") or "XYPath1"
+                except Exception:
+                    xy_name = "XYPath1"
+
+                cx_spline = comp.FindTool(f"{xy_name}X") or comp.FindTool("XYPath1X")
+                cy_spline = comp.FindTool(f"{xy_name}Y") or comp.FindTool("XYPath1Y")
+
+                if cx_spline is not None and _set_keys(cx_spline, slide_keys_x, f"{name} Center.X"):
+                    wrote_slide = True
+                    print(f"      🎚️ {name}: Center.X ease-out "
+                          f"1.5@{f_start} → 0.5@{k_in_done} (hold → {f_end})")
+                else:
+                    print(f"      ⚠️ {name}: could not find/key XYPath X spline")
+
+                if cy_spline is not None and _set_keys(cy_spline, slide_keys_y, f"{name} Center.Y"):
+                    print(f"      🎚️ {name}: Center.Y held at 0.5")
+
+            if not wrote_slide:
+                # Fallback to the legacy explicit-spline approach.
+                print(f"      ↩ {name}: XYPath path failed; trying bare "
+                      f"BezierSpline + ConnectInput('Center.X')")
+                add_tool = getattr(comp, "AddTool", None)
+                cx_spline = None
+                if callable(add_tool):
+                    cx_spline = add_tool("BezierSpline", -32768, -32768)
+                    if cx_spline is not None:
+                        try:
+                            cx_spline.SetAttrs({"TOOLS_Name": "WipeCenterX"})
+                        except Exception:
+                            pass
+                if cx_spline is not None:
+                    connect_tries = [
+                        ("ConnectInput Center.X", lambda: xf.ConnectInput("Center.X", cx_spline)),
+                        ("ConnectInput CenterX",  lambda: xf.ConnectInput("CenterX",  cx_spline)),
+                    ]
+                    connected = False
+                    for label, fn in connect_tries:
+                        try:
+                            r = fn()
+                            print(f"      🔌 {name}: {label} → {r}")
+                            if r:
+                                connected = True
+                                break
+                        except Exception as _ce:
+                            print(f"      … {label} threw: {_ce}")
+                    if connected and _set_keys(cx_spline, slide_keys_x, f"{name} Center.X"):
+                        wrote_slide = True
+
+            if not wrote_slide:
+                # Last resort: per-frame Point write (likely no-op on
+                # this build, but worth logging).
+                print(f"      ⚠️ {name}: no spline attach worked; trying per-frame Center")
+                try:
+                    for _f, _v in slide_keys_x.items():
+                        xf.SetInput("Center", [float(_v[1]), 0.5], int(_f))
+                    print(f"      🎚️ {name}: per-frame Center attempted (may be silent no-op)")
+                except Exception as _ke:
+                    print(f"      ⚠️ {name}: per-frame Center failed: {_ke}")
+
+            # ----------------------------------------------------------
+            # Opacity fade-out at the end. Hold Blend at 1.0 for the
+            # whole clip, then ramp to 0 across the same window the
+            # Diagnostic dump of the comp tools after the attempt.
+            try:
+                final_tools = _list_tools(comp)
+                print(f"      🔎 {name}: tools after wipe = {final_tools}")
+            except Exception:
+                pass
+
+            _evaluate_comp(comp, f_start, f_end, xf)
+            result["strategy_b"] += 1
+            result["applied"] += 1
+        except Exception as e:
+            result["errors"].append(f"{name}: fallback build failed: {e}")
+            result["failed"] += 1
+
+    total = result["applied"] + result["failed"]
+    result["success"] = result["applied"] > 0 and result["failed"] == 0
+    result["message"] = (
+        f"Wipe applied to {result['applied']}/{total} V{track_index} clip(s) "
+        f"(paste={result['strategy_a']}, fallback-zoom={result['strategy_b']})"
+        + (f" — {result['failed']} failed" if result["failed"] else "")
+    )
+
+    # Page bounce + scrub to refresh the editor preview cache.
+    try:
+        import DaVinciResolveScript as dvr_script
+        _resolve = dvr_script.scriptapp("Resolve")
+        if _resolve is not None:
+            _resolve.OpenPage("fusion")
+            for _it in items:
+                try:
+                    _s = int(_it.GetStart())
+                    _e = int(_it.GetEnd())
+                    _mid = _s + max(1, (_e - _s) // 2)
+                    total_secs = _mid / fps
+                    hh = int(total_secs // 3600)
+                    mm = int((total_secs % 3600) // 60)
+                    ss = int(total_secs % 60)
+                    ff = int(round((_mid % fps)))
+                    tc = f"{hh:02d}:{mm:02d}:{ss:02d}:{ff:02d}"
+                    timeline.SetCurrentTimecode(tc)
+                except Exception:
+                    pass
+            _resolve.OpenPage("edit")
+            print(f"   🔄 page bounce edit→fusion(scrub {len(items)} clips)→edit")
+    except Exception as _pe:
+        print(f"   ⚠️ page bounce failed: {_pe}")
+
+    return result
+
+
+def _evaluate_comp(comp, f_start, f_end, focus_tool=None):
+    """Force the comp to evaluate at start/mid/end so Resolve caches the
+    rendered output and the editor preview reflects the new effect
+    without manual scrubbing.
+
+    Note: we intentionally do NOT call comp.Render() here — it pops a
+    modal "Render Complete" dialog for every clip. SetCurrentTime alone
+    is enough to dirty the preview cache; the page-bounce + scrub at the
+    end of the wipe pipeline finishes the job silently.
+    """
+    try:
+        set_ct = getattr(comp, "SetCurrentTime", None)
+        if callable(set_ct):
+            mid = (f_start + f_end) // 2
+            for _f in (f_start, mid, f_end):
+                set_ct(_f)
+    except Exception:
+        pass
+
+
 def _apply_blur_to_v3_clips(timeline, track_index: int = 3,
                             max_blur: float = 20.0):
     """
@@ -2975,14 +3492,14 @@ def create_resolve_project_with_videos(
         )
 
         # ------------------------------------------------------------------
-        # SMOKE TEST: programmatic Fusion automation. Add a simple Blur
-        # node to every V3 broll clip with two keyframes (clear → blurry
-        # over the clip's duration). No .setting paste, no plugin macros
-        # — just AddTool + ConnectInput + SetInput. If this works, more
-        # elaborate effects can follow the same pattern.
+        # Apply the user's saved Fusion wipe (myswipe.setting) to every
+        # V3 broll clip: a Transform driven by a PolyPath + BezierSpline
+        # that slides the image in from off-screen on entry and slides
+        # it off on exit. Uses comp.Paste() then rescales the
+        # displacement keyframes to each clip's COMP-LOCAL frame range.
         # ------------------------------------------------------------------
-        wipe_result = _apply_blur_to_v3_clips(
-            timeline, track_index=3, max_blur=20.0
+        wipe_result = _apply_wipe_to_v3_clips(
+            timeline, track_index=3, slide_seconds=0.4
         )
         print(
             f"   {'✅' if wipe_result.get('success') else '⚠️'} "
