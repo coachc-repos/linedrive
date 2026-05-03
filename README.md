@@ -1,458 +1,275 @@
-# 📚 LineDrive - AI-Powered Content Creation & Baseball Data Platform
+# 📚 LineDrive — AI-Powered Content Creation, Video Production & Baseball Data Platform
 
-**Version 2.0.0** | [Full Documentation](DOCUMENTATION.md)
+**Version 2.1.x** (May 2026)
 
-A comprehensive multi-module platform combining AI-powered YouTube script creation, emotional thumbnail generation, and baseball tournament data management.
+A multi-module platform combining:
+- **ScriptCraft v2** — AI-powered YouTube script writing + DaVinci Resolve / Fusion video production automation + HeyGen avatar videos
+- **Emotional thumbnail generator** — 6 AI-powered thumbnail variations (Gemini Flash Image)
+- **Baseball tournament data** — Perfect Game / Little League / USA Baseball scrapers with Azure Data Lake storage
+- **Social media** — X/Twitter content distribution
 
-## � Quick Start
+---
 
-### YouTube Script Creation (Primary Feature)
+## 🚀 Quick Start
 
-**Console UI** (Fastest - 3 minutes):
+### ScriptCraft v2 — active web GUI (recommended)
 ```bash
-python console_launcher_modular.py
-# Select: 2. 🎬 Full Script Creation Workflow
-```
-
-**Web GUI** (Visual Interface):
-```bash
-cd scriptcraft-app
+cd scriptcraft-app-v2
+source ../venv314/bin/activate
 python web_gui.py
-# Open: http://localhost:8080
+# Open http://localhost:8080
+```
+Provides the full pipeline: topic → 4-agent script writing → review → polish → YouTube upload details → emotional thumbnails → B-roll image generation → DaVinci Resolve timeline build with V3 B-roll + Fusion blur effects → EDL marker export → HeyGen avatar video.
+
+### Console UI (baseline)
+```bash
+python console_launcher_module.py
+# Select: Full Script Creation Workflow
 ```
 
-### Emotional Thumbnail Generation
-
+### Baseball scrapers
 ```bash
-# Standalone test
+# Web GUI
+python scraper_web_gui.py
+
+# Console batch UI
+cd batch_scrapers && python batch_scraper_ui.py
+```
+
+### Emotional thumbnails (standalone)
+```bash
 python tools/test_emotional_thumbnails.py
-
-# Integrated in workflow (automatic at Step 4.8)
-# Generates 6 AI-powered variations using Gemini Flash Image
 ```
-
-### Baseball Tournament Data
-
-```bash
-cd batch_scrapers
-python batch_scraper_ui.py
-# Options: Perfect Game scraping, YouTube transcripts, Azure storage
-```
-
-## 🎯 Core Capabilities
-
-| Feature | Description | Entry Point |
-|---------|-------------|-------------|
-| **🎬 Script Creation** | AI-powered 4-agent workflow for YouTube scripts | `console_launcher_modular.py` |
-| **🎨 Thumbnails** | 6 emotional variations with Gemini AI | `tools/media/emotional_thumbnail_generator.py` |
-| **⚾ Baseball Data** | Multi-league tournament scraping + Azure storage | `batch_scrapers/batch_scraper_ui.py` |
-| **📱 Social Media** | X/Twitter integration for content distribution | `social_media/` |
-| **☁️ Azure Deploy** | Container Apps + Static Web Apps | `scriptcraft-app/` |
-
-## 📖 Documentation
-
-**📘 [DOCUMENTATION.md](DOCUMENTATION.md)** - Complete system documentation including:
-- Architecture & design patterns
-- Module descriptions & API reference
-- Development guide & best practices
-- Deployment instructions
-- Troubleshooting guide
-
-## �️ Project Structure
-
-```
-linedrive/
-├── 🎬 ScriptCraft System
-│   ├── console_launcher_modular.py    # Primary console entry
-│   ├── console_ui/                    # UI modules
-│   └── scriptcraft-app/               # Web GUI + Azure deployment
-│
-├── 🤖 AI Agents
-│   └── linedrive_azure/agents/
-│       ├── enhanced_autogen_system.py # 4-agent workflow
-│       ├── script_writer_agent_client.py
-│       ├── script_review_agent_client.py
-│       └── youtube_upload_details_agent_client.py
-│
-├── 🎨 Media Generation
-│   └── tools/media/
-│       ├── emotional_thumbnail_generator.py  # ✨ NEW v2.0
-│       └── thumbnail_generator.py            # Legacy
-│
-├── ⚾ Baseball Data
-│   ├── batch_scrapers/                # Tournament scraping
-│   ├── scraper/                       # Multi-league support
-│   └── linedrive_azure/storage/       # Azure Data Lake
-│
-└── 📱 Social Media
-    └── social_media/                  # X/Twitter integration
-```
-
-## 🔧 Prerequisites
-
-```bash
-# Python 3.12
-python --version  # Must be 3.12.x
-
-# Virtual environment
-source venv314/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Azure CLI (for authentication)
-az login
-```
-
-## 🎨 What's New in v2.0.0
-
-### Emotional Thumbnail Generator
-- **6 AI-powered variations**: ANGRY, SHOCKED, SCARED, EXCITED, SKEPTICAL, DETERMINED
-- **Gemini Flash Image API**: Advanced AI transformations
-- **Template preservation**: Maintains pose while transforming background/expression
-- **Auto-integration**: Generates at Step 4.8 in script workflow
-- **Quick testing**: `python tools/test_emotional_thumbnails.py`
-
-### Improvements
-- ✅ Lazy loading for better import performance
-- ✅ 15-minute timeout for complex script chapters
-- ✅ Enhanced logging and progress indicators
-- ✅ Consolidated documentation
-
-## 📝 Example Usage
-
-### Complete Script Workflow
-```bash
-# Console (interactive)
-python console_launcher_modular.py
-
-# Inputs:
-# - Topic: "AI at Home is a Must"
-# - Audience: general
-# - Tone: conversational
-# - Length: short (3-5 min)
-
-# Outputs:
-# ✅ Complete script (Word + Markdown)
-# ✅ YouTube upload details
-# ✅ 6 thumbnail variations
-# ✅ B-roll suggestions
-```
-
-### Thumbnail Generation Only
+or programmatically:
 ```python
 from tools.media.emotional_thumbnail_generator import EmotionalThumbnailGenerator
-
 gen = EmotionalThumbnailGenerator()
 results = gen.generate_all_thumbnails(
     script_title="Your Title",
     script_content="Your script...",
-    youtube_upload_details="## 🖼️ THUMBNAIL TEXT\nYour text..."
+    youtube_upload_details="## 🖼️ THUMBNAIL TEXT\nYour text...",
 )
 ```
 
-## � Deployment
+---
 
-### Azure Container Apps
-```bash
-cd scriptcraft-app
-docker build -t linedrive-scriptcraft .
-az containerapp create --name linedrive-scriptcraft ...
+## 🎯 Core Capabilities
+
+| Feature | Description | Entry Point |
+|---|---|---|
+| 🎬 Script Creation | 4-agent AI workflow (topic → write → review → polish) | [scriptcraft-app-v2/web_gui.py](scriptcraft-app-v2/web_gui.py) |
+| 🎞 DaVinci Resolve | Programmatic timeline build, B-roll on V3, EDL marker export, Fusion comp automation | [scriptcraft-app-v2/davinci_resolve_api.py](scriptcraft-app-v2/davinci_resolve_api.py) |
+| 🌫 Fusion FX | Programmatic Blur w/ BezierSpline keyframes per V3 clip + editor cache refresh | same as above |
+| 🎭 HeyGen Avatars | v2 API integration with template management + curl test | [generate_heygen_curls.py](generate_heygen_curls.py), [tools/heygen/](tools/heygen/) |
+| 🎨 Thumbnails | 6 emotional variations with Gemini Flash Image | [tools/media/emotional_thumbnail_generator.py](tools/media/emotional_thumbnail_generator.py) |
+| 🖼 B-roll Images | Per-chapter prompts → Shutterstock + AI images | [tools/media/broll_image_generator.py](tools/media/broll_image_generator.py) |
+| ⚾ Baseball Data | Multi-league scraping + Azure Data Lake | [scraper_web_gui.py](scraper_web_gui.py), [batch_scrapers/](batch_scrapers/) |
+| 📱 Social Media | X/Twitter posting | [social_media/](social_media/) |
+| ☁️ Azure Deploy | Container Apps + Static Web Apps | [scriptcraft-app/](scriptcraft-app/) (legacy deploy) |
+
+---
+
+## 🗂️ Project Structure
+
+```
+linedrive/
+├── scriptcraft-app-v2/                  # 🎬 ACTIVE web GUI + Resolve/Fusion/HeyGen
+│   ├── web_gui.py                       #   Flask + SSE on :8080
+│   ├── davinci_resolve_api.py           #   Resolve/Fusion automation
+│   ├── console_ui/                      #   workflows, text/word processing
+│   ├── linedrive_azure/agents/          #   AI agent clients
+│   ├── fusion_presets/                  #   Fusion .setting / .comp templates
+│   └── templates/                       #   HTML
+│
+├── scriptcraft-app/                     # 🕰 Legacy web GUI (still present)
+│
+├── console_ui/                          # Console workflows + text/word processing
+├── console_launcher_module.py           # Console UI entry
+│
+├── linedrive_azure/                     # Azure agents + storage + search (root copy)
+│   ├── agents/
+│   ├── storage/
+│   └── search/
+│
+├── tools/
+│   ├── media/
+│   │   ├── emotional_thumbnail_generator.py   # 6 variations (Gemini)
+│   │   └── broll_image_generator.py           # Per-chapter B-roll
+│   ├── heygen/
+│   ├── debug/, demos/, diagnostics/, samples/, setup/
+│   └── cloud-cost-assistant/
+│
+├── batch_scrapers/                      # ⚾ Tournament scrapers (PG/LL/USA)
+│   ├── common/, perfect_game/
+├── scraper/                             # Multi-league scraping framework
+├── scraper_web_gui.py                   # Scraper web UI
+│
+├── social_media/                        # X/Twitter platforms + UI
+├── cloud-cost-assistant/                # Standalone cost assistant Flask app
+├── gpt-oss/                             # OSS GPT helper Flask app
+├── web/                                 # Static web assets
+│
+├── templates/                           # Word .dotx + scraper templates
+├── output/                              # Generated artifacts
+├── backups/                             # Snapshot backups
+├── tests/, docs/                        # Tests + docs (where present)
+│
+├── azure.yaml                           # azd config
+├── exec-craft.sh, run_console.sh, run_script_creator.sh, start_scraper_gui.sh
+├── README.md                            # This file
+└── AI-ASSISTANT-PROMPT.md               # Context prompt for AI assistants
 ```
 
-### Azure Static Web Apps
+---
+
+## 🆕 What's New (last 3 weeks, ending May 2026)
+
+### ScriptCraft v2 launched
+- New active web GUI at [scriptcraft-app-v2/](scriptcraft-app-v2/) supersedes the original `scriptcraft-app/`. The v2 app has the full agent pipeline plus DaVinci Resolve / Fusion / HeyGen integration.
+
+### DaVinci Resolve automation ([davinci_resolve_api.py](scriptcraft-app-v2/davinci_resolve_api.py))
+- External-Python bridge via `DaVinciResolveScript.scriptapp("Resolve" / "Fusion")`.
+- Timeline construction with B-roll automatically placed on **V3**.
+- Per-clip **EDL marker export** for B-roll cues.
+- **Fusion comp automation** with a Blur node + BezierSpline-driven keyframes (clear → blurry over each clip's lifetime).
+- **Editor preview cache refresh**: per-clip `comp.SetCurrentTime` + `comp.Render` followed by an Edit↔Fusion page bounce that scrubs each V3 clip's mid-timecode so the Edit page reflects the new comp without manual interaction.
+- Script-title parsing now recognizes a `Title:` line.
+- Adjustment-clip insertion temporarily disabled.
+
+### HeyGen v2
+- Avatar video generation via the v2 API with template management and a curl-based test mode ([generate_heygen_curls.py](generate_heygen_curls.py), [tools/heygen/](tools/heygen/)).
+
+### Grok integration
+- Workflow for selecting Grok as a backend, including persistent API key storage.
+
+### UI / UX
+- Shutterstock tab now opens links in new browser tabs.
+- Thumbnail generation has cancel controls; stop-button UI aligned across panels.
+- Various B-roll error reporting and f-string compatibility fixes; thumbnail template path corrected.
+
+### Scraper Web GUI
+- Standalone Flask UI at [scraper_web_gui.py](scraper_web_gui.py) for the baseball scrapers.
+
+---
+
+## 🔧 Prerequisites
+
 ```bash
-cd web
-az staticwebapp create --name linedrive-web ...
+# Python 3.14 (project venv: venv314)
+python --version
+
+# Activate the project venv
+source venv314/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-See [DOCUMENTATION.md](DOCUMENTATION.md) for complete deployment instructions.
+### DaVinci Resolve scripting (for video pipeline)
+- DaVinci Resolve Studio installed and running locally.
+- `RESOLVE_SCRIPT_API`, `RESOLVE_SCRIPT_LIB`, and `PYTHONPATH` environment variables configured per Resolve's external scripting docs.
+- The Resolve preference **System → General → External scripting using** must be set to **Local**.
 
-## 🐛 Troubleshooting
+### Azure (for data lake + agents)
+```bash
+az login
+# Storage account: linedrivestorage  / container: tournament-data
+```
 
-### Common Issues
+### HeyGen
+- HeyGen API key configured (used by the curl generator).
 
-**Import Error: `google.generativeai`**
+### Gemini (for thumbnails / B-roll images)
+- `GOOGLE_API_KEY` (or equivalent) configured.
 ```bash
 pip install google-generativeai
 ```
 
-**Wrong Python/venv**
+---
+
+## 📝 Example Workflows
+
+### Full ScriptCraft v2 pipeline (web)
+1. `cd scriptcraft-app-v2 && python web_gui.py`
+2. Open http://localhost:8080
+3. Enter topic → audience → tone → length.
+4. Watch the SSE-streamed pipeline: topic enhancement → script writing → review → polish → YouTube upload details → 6 emotional thumbnails → per-chapter B-roll images → DaVinci Resolve timeline build (V3 B-roll + Fusion blur) → EDL markers → HeyGen avatar (optional).
+
+### DaVinci Resolve / Fusion smoke test
+The current Fusion smoke test (`_apply_blur_to_v3_clips` in [davinci_resolve_api.py](scriptcraft-app-v2/davinci_resolve_api.py)) adds a Blur to every V3 broll clip with two BezierSpline keyframes (0 → max_blur over the clip's COMP-LOCAL range) and forces the Edit page preview to refresh.
+
+### Baseball tournament scraping
 ```bash
-# Use venv314 explicitly
-venv314/bin/python console_launcher_modular.py
+python scraper_web_gui.py
+# or
+cd batch_scrapers && python batch_scraper_ui.py
 ```
-
-**Console UI errors**
-```bash
-# Always run from project root
-cd /Users/christhi/Dev/Github/linedrive
-python console_launcher_modular.py
-```
-
-See [DOCUMENTATION.md - Troubleshooting](DOCUMENTATION.md#troubleshooting) for more.
-
-## 🏷️ Version History
-
-- **v2.0.0** (Oct 2025) - Emotional Thumbnails + Gemini AI integration
-- **v1.5.24** (Oct 2025) - Tone selector + Technical levels
-- **v1.0** - Working Web GUI baseline
-
-## 📞 Support
-
-- **📘 Full Docs**: [DOCUMENTATION.md](DOCUMENTATION.md)
-- **🐛 Issues**: GitHub Issues
-- **📧 Contact**: Christian Thilmany
+Data lands in Azure Data Lake under `tournament-data/raw/year=YYYY/month=MM/day=DD/`.
 
 ---
 
-**© 2025 LineDrive Project**
+## 🗃 Azure Data Lake Storage
 
-All scraped data is automatically uploaded to Azure Data Lake:
+- **Storage account**: `linedrivestorage`
+- **Container**: `tournament-data`
+- **Path**: `raw/year=YYYY/month=MM/day=DD/<run>.json`, `processed/...`
+- **Auth**: `ChainedTokenCredential` with Azure CLI priority
 
-- **Storage Account:** `linedrivestorage`
-- **Container:** `tournament-data`
-- **Path Structure:** `raw/year=YYYY/month=MM/day=DD/`
-- **Authentication:** Azure CLI credentials
+---
 
-## 📚 Detailed Documentation
+## 🐛 Troubleshooting
 
-### Batch Scrapers System
+### DaVinci Resolve: Blur only visible after manual Fusion-page scrub
+Ensure each clip's comp is evaluated inside the Fusion page (`comp.SetCurrentTime` + `comp.Render({"Tool": tool, "Quality": 1})`) and that the post-loop page bounce scrubs each V3 clip's mid-timecode. Add a small `time.sleep(0.1)` per clip if the editor still shows stale thumbnails.
 
-#### YouTube Transcript Module
-
-**Purpose:** Extract, process, and store YouTube video transcripts with Azure integration.
-
-**Key Features:**
-
-- **Multi-language support:** Handles various transcript languages (en, en-US, etc.)
-- **Full-text generation:** Creates continuous readable text from timestamped entries
-- **Azure integration:** Automatic uploads to Data Lake storage
-- **Interactive menu:** Comprehensive viewing and export options
-- **Error handling:** Robust handling of missing transcripts and API failures
-
-**Data Structure:**
-```json
-{
-  "metadata": {
-    "fetched_at": "2025-08-12T16:34:57.189973",
-    "total_entries": 610,
-    "total_duration": 1276.549
-  },
-  "full_text": "Complete continuous transcript text...",
-  "transcript": [
-    {
-      "text": "Individual transcript segment",
-      "start": 0.96,
-      "duration": 4.08
-    }
-  ]
-}
+### Fusion: keyframes don't take effect
+On this Resolve build, `tool.SetInput(name, value, frame)` does not create a BezierSpline modifier. Explicitly add one:
+```python
+spline = comp.AddTool("BezierSpline", -32768, -32768)
+blur.ConnectInput("XBlurSize", spline)
+spline.SetKeyFrames({f_start: {1: 0.0}, f_end: {1: max_blur}})
 ```
 
-#### Perfect Game Tournament Scraper
+### Fusion: blur applied only to first 2 clips
+You're using timeline-absolute frames inside per-clip comps. Use COMP-LOCAL frames from `comp.GetAttrs()['COMPN_GlobalStart' / 'COMPN_GlobalEnd']`.
 
-**Purpose:** Collect tournament data from Perfect Game website with advanced filtering.
+### Web GUI hangs at completion
+SSE completion bug. Use the `while True:` "drain queue, then check done" pattern (see [AI-ASSISTANT-PROMPT.md](AI-ASSISTANT-PROMPT.md)).
 
-**Key Methods:**
+### Progress bar jumps to 50% or backward
+`send_update()` must early-return on `progress is None`; filter chapter "Writing/Reviewing X/Y" START messages.
 
-- **`fetch_youtube_transcript(video_id, languages)`**
-  - **Purpose:** Extract transcript data from YouTube videos
-  - **Parameters:**
-    - `video_id`: YouTube video ID (e.g., 'NgF2G9VItKY')
-    - `languages`: List of language codes to attempt
-  - **Returns:** List of transcript entries or None if failed
-  - **Error Handling:** Comprehensive handling of disabled/missing transcripts
+### "Thread already has an active run"
+Cancel existing runs and `time.sleep(5)` before retrying.
 
-- **`save_transcript_to_json(transcript, output_path)`**
-  - **Purpose:** Save transcript with metadata in enhanced JSON format
-  - **Features:** Metadata generation, full-text creation, timestamp processing
-  - **Output:** Both timestamped entries and continuous readable text
-
-### Azure Data Lake Storage Module
-
-**Purpose:** Centralized cloud storage for all scraped data with proper organization.
-
-**Key Methods:**
-
-- **`upload_raw_data(data, run_type)`**
-  - **Purpose:** Upload raw data as JSON with automatic metadata
-  - **Organization:** `raw/year=YYYY/month=MM/day=DD/tournaments_YYYYMMDD_HHMMSS.json`
-  - **Features:** Automatic partitioning, metadata enrichment, error handling
-
-- **`test_connection()`**
-  - **Purpose:** Verify Azure Data Lake connectivity and authentication
-  - **Returns:** Boolean success status with detailed logging
-
-**Authentication:** Uses ChainedTokenCredential with Azure CLI priority
-
-**Storage Pattern:**
-- **Container:** `tournament-data`
-- **Raw Data:** `raw/year=YYYY/month=MM/day=DD/`
-- **Processed Data:** `processed/year=YYYY/month=MM/day=DD/`
-
-### AutoGen Multi-Agent System
-
-**Purpose:** AI-powered tournament planning with specialized agent collaboration.
-
-**Agents:**
-- **TournamentFinder:** Searches and filters tournament data
-- **TournamentPlanner:** Creates tournament recommendations
-- **TournamentAdvisor:** Provides strategic tournament advice
-
-**Integration:**
-- **Azure AI:** Connected to Azure OpenAI services
-- **Grok API:** Alternative LLM backend for redundancy
-- **Data Sources:** Real-time Perfect Game scraping + Azure search
-
-## 🛠️ Development Setup
-
-### Prerequisites
-
+### Import error: `google.generativeai`
 ```bash
-# Python 3.11+ required
-python --version
-
-# Install dependencies
-pip install -r requirements.txt
+venv314/bin/pip install google-generativeai
 ```
 
-### Azure Configuration
-
+### Wrong Python / venv
 ```bash
-# Install Azure CLI
-# Login to Azure
-az login
-
-# Verify access to storage account
-az storage account show --name linedrivestorage --resource-group rg-linedrive-storage
+source venv314/bin/activate
+which python
 ```
 
-### Environment Setup
+---
 
-```bash
-# Clone repository
-git clone <repository-url>
-cd linedrive
+## 🏷️ Version History
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+- **v2.1.x** (May 2026) — DaVinci Resolve + Fusion automation in `scriptcraft-app-v2`; HeyGen v2; Grok workflow; scraper web GUI; thumbnail cancel controls; `Title:` parsing.
+- **v2.0.x** (Oct 2025) — Emotional thumbnails + Gemini Flash Image integration.
+- **v1.5.x** (Oct 2025) — Tone selector + technical levels.
+- **v1.0** — Working web GUI baseline.
 
-# Install dependencies
-pip install -r requirements.txt
-```
-
-## 📖 Usage Examples
-
-### Batch Scraping Workflow
-
-```bash
-# Start batch scraper interface
-cd batch_scrapers
-python batch_scraper_ui.py
-
-# Select Perfect Game scraper (Option 1)
-# Configure filters and run scraping
-# Data automatically uploads to Azure Data Lake
-```
-
-### YouTube Transcript Extraction
-
-```bash
-# Start batch scraper interface
-cd batch_scrapers
-python batch_scraper_ui.py
-
-# Select YouTube Transcript (Option 3)
-# Enter video URL or ID
-# Enable Azure upload in settings
-# View transcript and export options
-```
-
-### AutoGen Tournament Planning
-
-```bash
-# Start AutoGen interface
-python autogen_tournament_ui.py
-
-# Select agents and configure backends
-# Enter tournament requirements
-# Get AI-powered recommendations
-```
-
-## 🗂️ Data Storage Structure
-
-### Azure Data Lake Organization
-
-```text
-tournament-data/
-├── raw/
-│   └── year=2025/
-│       └── month=08/
-│           └── day=12/
-│               ├── tournaments_20250812_163457.json
-│               └── tournaments_20250812_164523.json
-└── processed/
-    └── year=2025/
-        └── month=08/
-            └── day=12/
-                └── tournaments_20250812_163457.csv
-```
-
-### Local Output Directory
-
-```text
-output/
-├── youtube_transcript_<video_id>_<timestamp>.json
-├── tournament_results_<timestamp>.json
-└── scraper_logs_<timestamp>.log
-```
-
-## 🔧 Configuration
-
-### Azure Storage Settings
-
-- **Storage Account:** `linedrivestorage`
-- **Resource Group:** `rg-linedrive-storage`
-- **Authentication:** Azure CLI credentials (ChainedTokenCredential)
-- **Container:** `tournament-data`
-
-### YouTube Transcript Settings
-
-- **Default Languages:** `['en', 'en-US']`
-- **Output Format:** Enhanced JSON with full_text field
-- **Azure Upload:** Configurable via menu settings
-
-### Perfect Game Scraper Settings
-
-- **Base URL:** `https://www.perfectgame.org/`
-- **Rate Limiting:** Built-in delays to respect site limits
-- **Error Handling:** Comprehensive retry logic
-
-## 📋 Recent Updates
-
-- ✅ **Enhanced YouTube Transcript System** - Full-text continuous transcript generation
-- ✅ **Azure Data Lake Integration** - Automatic uploads with proper authentication
-- ✅ **Batch Scraper UI** - Unified interface for all scraping operations
-- ✅ **Error Handling** - Comprehensive error handling and logging
-- ✅ **Data Structure** - Standardized JSON output with metadata
-- ✅ **Menu System** - Interactive configuration and settings management
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open Pull Request
+---
 
 ## 📞 Support
 
-For issues and questions:
+- **AI assistant context**: [AI-ASSISTANT-PROMPT.md](AI-ASSISTANT-PROMPT.md)
+- **Issues**: GitHub Issues
+- **Maintainer**: Christian Thilmany
 
-- Check the error logs in the `output/` directory
-- Verify Azure CLI authentication: `az account show`
-- Test Azure connectivity in batch scraper settings menu
+---
 
-
+© 2026 LineDrive Project
