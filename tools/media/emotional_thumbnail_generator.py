@@ -164,6 +164,64 @@ class EmotionalThumbnailGenerator:
 
         return variations
 
+    def _render_text_overlay(self, img, text):
+        """Render bold hook text onto the upper-left area of a thumbnail image."""
+        from PIL import ImageDraw, ImageFont
+
+        draw = ImageDraw.Draw(img)
+        w, h = img.size  # 1280x720
+
+        # Try to load a bold system font
+        font_size = 72
+        font = None
+        candidates = [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/Library/Fonts/Arial Bold.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+        for path in candidates:
+            if Path(path).exists():
+                try:
+                    font = ImageFont.truetype(path, font_size)
+                    break
+                except Exception:
+                    pass
+        if font is None:
+            # Scale up the default font as a last resort
+            font = ImageFont.load_default()
+
+        # Word-wrap to fit left ~55% of frame width
+        max_text_w = int(w * 0.55)
+        lines = []
+        words = text.split()
+        current = []
+        for word in words:
+            test = ' '.join(current + [word])
+            bbox = draw.textbbox((0, 0), test, font=font)
+            if bbox[2] - bbox[0] > max_text_w and current:
+                lines.append(' '.join(current))
+                current = [word]
+            else:
+                current.append(word)
+        if current:
+            lines.append(' '.join(current))
+
+        # Draw each line with thick black stroke + white fill
+        padding = 50
+        y = padding
+        for line in lines:
+            draw.text(
+                (padding, y), line,
+                font=font, fill='white',
+                stroke_width=5, stroke_fill='black'
+            )
+            lh = draw.textbbox((0, 0), line, font=font)[3]
+            y += lh + 10
+
+        return img
+
     def generate_thumbnail_variation(self, script_title, emotion_data, variation_num):
         """
         Generate a single thumbnail variation
@@ -258,6 +316,11 @@ CRITICAL RULES:
                         if img.size != (1280, 720):
                             img = img.resize(
                                 (1280, 720), Image.Resampling.LANCZOS)
+
+                        # Overlay hook text on the image
+                        hook_text = emotion_data.get('thumbnail_text', '')
+                        if hook_text:
+                            img = self._render_text_overlay(img, hook_text)
 
                         return img
 
