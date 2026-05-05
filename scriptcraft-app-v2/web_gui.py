@@ -1746,7 +1746,8 @@ async def process_script_creation(session_id, topic, audience, tone,
                         f"   API Key matches: {thumbnail_gen.api_key == api_key}")
 
                     print(f"\n🎬 Calling generate_all_thumbnails()...")
-                    thumb_cancel_evt = thumbnail_cancel_events.setdefault(session_id, _threading.Event())
+                    thumb_cancel_evt = _threading.Event()  # always fresh — never reuse a stale cancelled event
+                    thumbnail_cancel_events[session_id] = thumb_cancel_evt
                     thumbnail_results = thumbnail_gen.generate_all_thumbnails(
                         script_title=resolved_script_title,
                         script_content=final_script_content,
@@ -1810,15 +1811,17 @@ async def process_script_creation(session_id, topic, audience, tone,
                     print("="*70 + "\n")
 
                 except Exception as thumb_error:
+                    import traceback
+                    err_msg = f"{type(thumb_error).__name__}: {thumb_error}"
                     print("\n" + "="*70)
                     print("❌ THUMBNAIL GENERATION ERROR")
                     print("="*70)
                     print(f"Error type: {type(thumb_error).__name__}")
                     print(f"Error message: {thumb_error}")
-                    import traceback
                     print("\n📋 Full traceback:")
                     traceback.print_exc()
                     print("="*70 + "\n")
+                    streamer.send_update(f"❌ Thumbnail generation error: {err_msg}", 99)
                 finally:
                     thumbnail_cancel_events.pop(session_id, None)
 
@@ -1979,8 +1982,7 @@ async def process_existing_script(
                 script_title = re.sub(r'^\s*#\s*', '', (script_title or '').strip())
                 script_title = re.sub(r'^\s*Direct\s+Video\s*-\s*', '', script_title, flags=re.IGNORECASE)
                 script_title = script_title or "Untitled Script"
-                run_output_dir = _get_run_output_dir(script_title, create=True)
-                logger.info(f"📁 Using run folder: {run_output_dir}")
+                logger.info(f"📰 ✅ Using line as title: '{script_title}'")
 
         # 0) FINAL OVERRIDE: an explicit "Title: ..." line in the script always
         # wins over Heading: / H1 / first-line fallbacks. This keeps the
@@ -1996,6 +1998,10 @@ async def process_existing_script(
             if _explicit_title:
                 script_title = _explicit_title
                 logger.info(f"📰 ⭐ Overriding with explicit 'Title:' line: '{script_title}'")
+
+        # Ensure run_output_dir is always set (regardless of which title branch was taken)
+        run_output_dir = _get_run_output_dir(script_title, create=True)
+        logger.info(f"📁 Using run folder: {run_output_dir}")
 
         # Clean the script
         streamer.send_update("🧹 Cleaning script formatting...", 10)
@@ -2568,7 +2574,8 @@ async def process_existing_script(
                 else:
                     logger.warning(
                         "⚠️ Script processing did not find thumbnail hook text; using script title fallback")
-                thumb_cancel_evt = thumbnail_cancel_events.setdefault(session_id, _threading.Event())
+                thumb_cancel_evt = _threading.Event()  # always fresh — never reuse a stale cancelled event
+                thumbnail_cancel_events[session_id] = thumb_cancel_evt
                 thumbnail_results = thumbnail_gen.generate_all_thumbnails(
                     script_title=script_title,
                     script_content=cleaned_script,
@@ -2639,6 +2646,7 @@ async def process_existing_script(
                         )
             except Exception as e:
                 logger.error(f"❌ Thumbnail generation error: {e}")
+                streamer.send_update(f"❌ Thumbnail generation error: {e}", int(current_progress))
             finally:
                 thumbnail_cancel_events.pop(session_id, None)
 
@@ -2706,6 +2714,12 @@ async def process_existing_script(
 
         # Complete
         streamer.send_update("✅ Script processing complete!", 100)
+
+        saved_markdown_path, saved_docx_path = await _save_script_md_and_docx(
+            script_title,
+            final_output,
+        )
+
         streamer.result = {
             "success": True,
             "enhanced_script": final_output,  # SSE handler expects "enhanced_script" key
@@ -2722,6 +2736,8 @@ async def process_existing_script(
             "broll_table": broll_table,
             "broll_rows": broll_rows,
             "youtube_details": youtube_details,
+            "markdown_path": saved_markdown_path,
+            "docx_path": saved_docx_path,
         }
         logger.info("✅ Script processing completed successfully")
 

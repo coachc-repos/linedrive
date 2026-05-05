@@ -269,79 +269,125 @@ CRITICAL RULES:
             print(f"❌ Error generating variation {variation_num}: {e}")
             return None
 
-    def generate_all_thumbnails(self, script_title, script_content=None, youtube_upload_details=None):
+    def generate_all_thumbnails(self, script_title, script_content=None, youtube_upload_details=None,
+                                headline_text=None, headline_options=None,
+                                progress_callback=None, cancel_check=None):
         """
-        Generate all 6 thumbnail variations
+        Generate all thumbnail variations (6 per headline option).
 
         Args:
             script_title: Title/topic of the video
             script_content: Optional script content for context
             youtube_upload_details: Optional YouTube upload details with thumbnail text
+            headline_text: Override headline text (used as base_text if headline_options not given)
+            headline_options: List of headline text strings; generates 6 variations per option
+            progress_callback: Optional callable(msg: str) for progress updates
+            cancel_check: Optional callable() -> bool; returns True to stop generation
 
         Returns:
-            Dict with variation info and file paths
+            Dict with variation info, file paths, and optional 'cancelled' / 'error' keys
         """
-        # Extract thumbnail text from upload details if available
-        base_text = None
-        if youtube_upload_details:
-            base_text = self.extract_thumbnail_text_from_upload_details(
-                youtube_upload_details)
+        def _notify(msg):
+            if progress_callback:
+                try:
+                    progress_callback(msg)
+                except Exception:
+                    pass
 
-        # Generate emotional variations
-        variations = self.generate_emotional_variations(base_text)
+        def _is_cancelled():
+            if cancel_check:
+                try:
+                    return cancel_check()
+                except Exception:
+                    pass
+            return False
 
-        # Create safe filename
+        # Determine the list of headline options to iterate over
+        if headline_options:
+            options_list = headline_options[:3]  # max 3
+        elif headline_text:
+            options_list = [headline_text]
+        elif youtube_upload_details:
+            extracted = self.extract_thumbnail_text_from_upload_details(youtube_upload_details)
+            options_list = [extracted] if extracted else [None]
+        else:
+            options_list = [None]
+
+        # Create safe filename base
         safe_title = re.sub(
             r'[^\w\s-]', '', script_title).strip().replace(' ', '_')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         results = {
             "script_title": script_title,
-            "base_text": base_text,
             "variations": [],
-            "output_dir": str(self.output_dir)
+            "output_dir": str(self.output_dir),
+            "total_attempted": 0,
+            "cancelled": False,
         }
 
+        total_expected = 6 * len(options_list)
+        generated_count = 0
+
         print(f"\n{'='*70}")
-        print(f"🎬 Generating 6 Emotional Thumbnails: '{script_title}'")
+        print(f"🎬 Generating {total_expected} Emotional Thumbnails: '{script_title}'")
         print(f"📸 Template: {self.template_path or 'None (generating from scratch)'}")
-        if base_text:
-            print(f"💬 Base Text: {base_text}")
         print(f"{'='*70}\n")
 
-        for i, emotion_data in enumerate(variations, 1):
-            print(f"{'─'*70}")
-            print(f"🎭 Variation #{i}")
-            print(f"   Emotion: {emotion_data['emotion']}")
-            print(f"   Text: {emotion_data['thumbnail_text']}")
-            print(f"   Expression: {emotion_data['expression']}")
+        for opt_idx, base_text in enumerate(options_list, 1):
+            if _is_cancelled():
+                results["cancelled"] = True
+                _notify(f"🛑 Thumbnail generation cancelled after {generated_count}/{total_expected}")
+                break
 
-            # Generate thumbnail
-            img = self.generate_thumbnail_variation(
-                script_title, emotion_data, i)
+            if base_text:
+                print(f"💬 Option {opt_idx}/{len(options_list)}: {base_text}")
 
-            if img:
-                # Save file
-                filename = f"{safe_title}_v{i}_{timestamp}.png"
-                filepath = self.output_dir / filename
-                img.save(filepath, "PNG", quality=95)
+            variations = self.generate_emotional_variations(base_text)
 
-                print(f"   ✅ Generated: {img.size}")
-                print(f"   💾 Saved: {filename}\n")
+            for i, emotion_data in enumerate(variations, 1):
+                if _is_cancelled():
+                    results["cancelled"] = True
+                    _notify(f"🛑 Thumbnail generation cancelled after {generated_count}/{total_expected}")
+                    break
 
-                results["variations"].append({
-                    "number": i,
-                    "emotion": emotion_data['emotion'],
-                    "text": emotion_data['thumbnail_text'],
-                    "expression": emotion_data['expression'],
-                    "outfit": emotion_data['outfit'],
-                    "background": emotion_data['background'],
-                    "filename": filename,
-                    "filepath": str(filepath),
-                    "dimensions": img.size
-                })
-            else:
-                print(f"   ❌ Failed to generate\n")
+                global_num = (opt_idx - 1) * 6 + i
+                results["total_attempted"] += 1
+
+                _notify(f"🎭 Generating thumbnail {global_num}/{total_expected}: {emotion_data['emotion']}")
+                print(f"{'─'*70}")
+                print(f"🎭 Variation #{global_num} — {emotion_data['emotion']}")
+                print(f"   Text: {emotion_data['thumbnail_text']}")
+
+                img = self.generate_thumbnail_variation(script_title, emotion_data, global_num)
+
+                if img:
+                    filename = f"{safe_title}_opt{opt_idx}_v{i}_{timestamp}.png"
+                    filepath = self.output_dir / filename
+                    img.save(filepath, "PNG", quality=95)
+                    generated_count += 1
+
+                    print(f"   ✅ Generated: {img.size}")
+                    print(f"   💾 Saved: {filename}\n")
+
+                    results["variations"].append({
+                        "number": global_num,
+                        "option_index": opt_idx,
+                        "headline_text": base_text,
+                        "emotion": emotion_data['emotion'],
+                        "text": emotion_data['thumbnail_text'],
+                        "expression": emotion_data['expression'],
+                        "outfit": emotion_data['outfit'],
+                        "background": emotion_data['background'],
+                        "filename": filename,
+                        "filepath": str(filepath),
+                        "dimensions": img.size,
+                    })
+                else:
+                    print(f"   ❌ Failed to generate\n")
+
+            if results["cancelled"]:
+                break
 
         return results
 
