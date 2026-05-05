@@ -2176,6 +2176,7 @@ async def process_existing_script(
             final_output += f"{'=' * 80}\n\n{flow_analysis}"
 
         # Generate YouTube Upload Details if requested
+        youtube_details = None
         if checkboxes.get("youtube_details", False):
             current_progress = 15 + (completed_steps * progress_per_step)
             streamer.send_update("📺 Generating YouTube Upload Details...",
@@ -2720,6 +2721,7 @@ async def process_existing_script(
             "grok_videos": grok_videos,
             "broll_table": broll_table,
             "broll_rows": broll_rows,
+            "youtube_details": youtube_details,
         }
         logger.info("✅ Script processing completed successfully")
 
@@ -3365,7 +3367,8 @@ def progress_stream(session_id):
                                 "broll_images": streamer.result.get("broll_images"),
                                 "grok_videos": streamer.result.get("grok_videos"),
                                 "broll_table": streamer.result.get("broll_table"),
-                                "broll_rows": streamer.result.get("broll_rows")
+                                "broll_rows": streamer.result.get("broll_rows"),
+                                "youtube_details": streamer.result.get("youtube_details"),
                             }
 
                             print("\n" + "="*70)
@@ -3997,20 +4000,38 @@ def api_extract_docx():
         data = upload.read()
         doc = Document(io.BytesIO(data))
 
+        def _para_text(para):
+            """Extract paragraph text, preserving soft line-breaks (<w:br>) as \\n."""
+            parts = []
+            for node in para._p.iter():
+                local = node.tag.split("}")[-1] if "}" in node.tag else node.tag
+                if local == "br":
+                    br_type = node.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type", "")
+                    if br_type not in ("page", "column"):
+                        parts.append("\n")
+                elif local == "t":
+                    parts.append(node.text or "")
+            return "".join(parts).rstrip()
+
         lines = []
         for para in doc.paragraphs:
-            text = (para.text or "").rstrip()
+            raw = _para_text(para)
             style = (para.style.name or "") if para.style else ""
-            if text and style.startswith("Heading"):
-                # Map Heading 1/2/3... to markdown headers so downstream parsing works.
-                try:
-                    level = int(style.split()[-1])
-                except (ValueError, IndexError):
-                    level = 1
-                level = max(1, min(level, 6))
-                lines.append(("#" * level) + " " + text)
-            else:
-                lines.append(text)
+            # A paragraph may itself contain soft-return-separated sub-lines
+            sub_lines = raw.split("\n")
+            first = True
+            for sub in sub_lines:
+                sub = sub.rstrip()
+                if first and sub and style.startswith("Heading"):
+                    try:
+                        level = int(style.split()[-1])
+                    except (ValueError, IndexError):
+                        level = 1
+                    level = max(1, min(level, 6))
+                    lines.append(("#" * level) + " " + sub)
+                else:
+                    lines.append(sub)
+                first = False
 
         # Append simple table extraction (tab-separated rows).
         for table in doc.tables:
@@ -5964,6 +5985,10 @@ def setup_project():
 
             copied_count = 0
             for item in template_path.iterdir():
+                # Never copy the heygen folder into the project.
+                if item.name.lower() == "heygen":
+                    logger.info(f"⏭️ Skipping heygen folder (excluded from project copy)")
+                    continue
                 dest = project_path / item.name
                 if item.is_dir():
                     # Count files in directory

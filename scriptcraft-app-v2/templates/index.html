@@ -590,6 +590,48 @@
             resize: vertical;
         }
         
+        /* Script input Edit/Preview toggle */
+        .script-input-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 6px;
+        }
+        .script-input-tab {
+            padding: 4px 12px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 4px 4px 0 0;
+            color: #94a3b8;
+            font-size: 0.8em;
+            cursor: pointer;
+        }
+        .script-input-tab.active {
+            background: #0f172a;
+            border-bottom-color: #0f172a;
+            color: #e2e8f0;
+        }
+        #scriptInputPreview {
+            display: none;
+            min-height: 200px;
+            max-height: 500px;
+            overflow-y: auto;
+            padding: 12px 16px;
+            background: #0f172a;
+            border: 1px solid #475569;
+            border-radius: 4px;
+            color: #e2e8f0;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        #scriptInputPreview h1 { font-size: 1.4em; color: #f1f5f9; margin: 1em 0 0.4em; }
+        #scriptInputPreview h2 { font-size: 1.2em; color: #7dd3fc; margin: 1em 0 0.3em; border-bottom: 1px solid #1e3a5f; padding-bottom: 4px; }
+        #scriptInputPreview h3 { font-size: 1em; color: #38bdf8; margin: 0.8em 0 0.2em; font-weight: 700; }
+        #scriptInputPreview h4 { font-size: 0.9em; color: #a78bfa; margin: 0.6em 0 0.2em; font-style: italic; }
+        #scriptInputPreview p  { margin: 0.4em 0; }
+        #scriptInputPreview hr { border: none; border-top: 1px solid #334155; margin: 0.8em 0; }
+        #scriptInputPreview ul, #scriptInputPreview ol { padding-left: 1.6em; margin: 0.4em 0; }
+        #scriptInputPreview strong { color: #f8fafc; }
+
         /* Thumbnail Gallery Styles */
         .thumbnail-gallery {
             margin-top: 20px;
@@ -1161,7 +1203,12 @@
             <div id="scriptInputSection" style="display: none;">
                 <div class="form-group">
                     <label for="scriptInput">📝 Enter Your Script (Required when Script checkbox is unchecked):</label>
+                    <div class="script-input-tabs">
+                        <button class="script-input-tab active" id="scriptTabEdit" onclick="switchScriptInputTab('edit')">✏️ Edit</button>
+                        <button class="script-input-tab" id="scriptTabPreview" onclick="switchScriptInputTab('preview')">👁 Preview</button>
+                    </div>
                     <textarea id="scriptInput" placeholder="Paste or type your script content here, or click 'Load' button above to load a .md or .txt file..."></textarea>
+                    <div id="scriptInputPreview"></div>
                 </div>
             </div>
 
@@ -1314,7 +1361,10 @@ Time management content here...`;
                 null,  // No edlContent
                 null,  // No edlFilename
                 null,  // No curlCommands
-                null   // No brollImages
+                null,  // No brollImages
+                null,  // No grokVideos
+                null,  // No brollTable
+                null   // No youtubeDetails
             );
             
             const resultDiv = document.getElementById('result');
@@ -1927,7 +1977,8 @@ Time management content here...`;
                 p.curlCommands,
                 p.brollImages,
                 p.grokVideos,
-                p.brollTable
+                p.brollTable,
+                p.youtubeDetails
             );
 
             const resultDiv = document.getElementById('result');
@@ -1989,79 +2040,26 @@ Time management content here...`;
             });
             
             if (mainScriptDiv && mainScript) {
-                // Helper function to parse markdown tables
-                function parseTable(tableText) {
-                    const lines = tableText.trim().split('\n');
-                    if (lines.length < 2) return tableText;
-                    
-                    // Check if it's a valid table (has pipes)
-                    if (!lines[0].includes('|')) return tableText;
-                    
-                    let html = '<table class="broll-table"><thead><tr>';
-                    
-                    // Parse header row
-                    const headers = lines[0].split('|').map(h => h.trim()).filter(h => h);
-                    headers.forEach(header => {
-                        html += `<th>${header}</th>`;
-                    });
-                    html += '</tr></thead><tbody>';
-                    
-                    // Skip separator line (line 1), parse data rows (line 2+)
-                    for (let i = 2; i < lines.length; i++) {
-                        if (!lines[i].includes('|')) continue;
-                        
-                        html += '<tr>';
-                        const cells = lines[i].split('|').map(c => c.trim()).filter(c => c);
-                        cells.forEach(cell => {
-                            html += `<td>${cell}</td>`;
-                        });
-                        html += '</tr>';
-                    }
-                    
-                    html += '</tbody></table>';
-                    return html;
-                }
-                
-                // MANUAL PARSING - Handle bold and tables, no headings
-                let html = mainScript;
-                
-                // First, extract and convert tables
-                const tableRegex = /(\|[^\n]+\|\n\|[-:|]+\|\n(?:\|[^\n]+\|\n?)+)/g;
-                const tables = [];
-                html = html.replace(tableRegex, (match) => {
-                    const placeholder = `<TABLE_${tables.length}>`;
-                    tables.push(parseTable(match));
-                    return placeholder;
-                });
-                
-                // Now process the rest
-                html = html
-                    // Convert **bold** to <strong> BEFORE escaping
-                    .replace(/\*\*([^*]+)\*\*/g, '<BOLD>$1</BOLD>')
-                    // Escape HTML
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')
-                    // Restore bold markers
-                    .replace(/&lt;BOLD&gt;/g, '<strong>')
-                    .replace(/&lt;\/BOLD&gt;/g, '</strong>')
-                    // Convert double newlines to paragraph breaks
-                    .replace(/\n\n+/g, '</p><p>')
-                    // Convert single newlines to <br>
-                    .replace(/\n/g, '<br>')
-                    // Wrap in paragraphs
-                    .replace(/^/, '<p>')
-                    .replace(/$/, '</p>')
-                    // Convert --- to hr
-                    .replace(/<p><br>---<br><\/p>/g, '<hr>');
-                
-                // Restore tables
-                tables.forEach((table, i) => {
-                    html = html.replace(`&lt;TABLE_${i}&gt;`, table);
-                });
-                    
-                mainScriptDiv.innerHTML = html;
-                console.log('Content rendered (no markdown headings, with tables)');
+                // Pre-process script text to convert inline labels into proper markdown headings
+                let scriptMd = mainScript
+                    // Normalize: insert newlines before section keywords when mid-line
+                    .replace(/([^\n])(\s+)(Heading:\s*Chapter\s+\d+)/g, '$1\n$3')
+                    .replace(/([^\n])(\s+)(VISUAL CUE:)/g, '$1\n$3')
+                    .replace(/([^\n])(\s+)(Host:\s*(?:\n|$))/gm, '$1\n$3')
+                    // "Heading: Chapter N - Title" (raw script format) → ## Chapter N - Title
+                    .replace(/^\s*Heading:\s*(Chapter\s+\d+[^\n]*)/gm, '## $1')
+                    // "Chapter N: Title" plain text (no # prefix) → ## heading
+                    .replace(/^(?!#+\s)(Chapter\s+\d+[:.][^\n]*)/gm, '## $1')
+                    // Plain "Host:" standalone line → ### Host:
+                    .replace(/^\s*Host:\s*$/gm, '### Host:')
+                    // "**Host:**" bold label (processed scripts) → ### Host:
+                    .replace(/^\*\*Host:\*\*\s*$/gm, '### Host:')
+                    // Plain "VISUAL CUE: text" (possibly leading space) → #### heading
+                    .replace(/^\s*VISUAL CUE:\s*(.+)$/gm, '#### 🎬 VISUAL CUE: $1')
+                    // "**VISUAL CUE:** text" bold (processed scripts) → #### heading
+                    .replace(/^\*\*VISUAL CUE:\*\*\s*(.*)$/gm, '#### 🎬 VISUAL CUE: $1');
+                mainScriptDiv.innerHTML = marked.parse(scriptMd);
+                console.log('Content rendered via marked.parse');
             } else {
                 console.error('Failed to render:', { mainScriptDiv: !!mainScriptDiv, mainScript: !!mainScript });
             }
@@ -2119,6 +2117,33 @@ Time management content here...`;
                     .replace(/<p><br>---<br><\/p>/g, '<hr>');
                 flowImprovedDiv.innerHTML = html;
             }
+
+            // Render YouTube details if present
+            const youtubeDetailsDiv = document.getElementById('youtubeDetailsContent');
+            if (youtubeDetailsDiv) {
+                const ytContent = window._currentYoutubeDetails;
+                if (ytContent) {
+                    youtubeDetailsDiv.innerHTML = marked.parse(ytContent);
+                }
+            }
+        }
+
+        function copyYouTubeDetails() {
+            const content = window._currentYoutubeDetails || '';
+            if (!content) return;
+            navigator.clipboard.writeText(content).then(() => {
+                const btn = event.target;
+                const orig = btn.textContent;
+                btn.textContent = '✅ Copied!';
+                setTimeout(() => { btn.textContent = orig; }, 2000);
+            }).catch(() => {
+                const ta = document.createElement('textarea');
+                ta.value = content;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            });
         }
         
         // Function to switch tabs
@@ -2410,7 +2435,7 @@ Time management content here...`;
             return html;
         }
 
-        function createTabbedInterface(mainScript, demoPackages, thumbnails, chapterComparisons, flowOriginal, flowImproved, flowAnalysis, edlContent, edlFilename, curlCommands, brollImages, grokVideos, brollTable) {
+        function createTabbedInterface(mainScript, demoPackages, thumbnails, chapterComparisons, flowOriginal, flowImproved, flowAnalysis, edlContent, edlFilename, curlCommands, brollImages, grokVideos, brollTable, youtubeDetails) {
             let html = '<div class="tab-container">';
             const thumbnailList = Array.isArray(thumbnails)
                 ? thumbnails
@@ -2461,6 +2486,11 @@ Time management content here...`;
             // Add curl commands tab if available
             if (curlCommands) {
                 html += '<button class="tab-button" onclick="switchTab(\'curl\')">🚀 Curl Commands</button>';
+            }
+
+            // YouTube Details tab
+            if (youtubeDetails) {
+                html += '<button class="tab-button" onclick="switchTab(\'youtubeDetails\')">📺 YouTube Details</button>';
             }
             
             html += '</div>'; // End tab-header
@@ -2646,6 +2676,17 @@ Time management content here...`;
                 html += '</div>';
             }
             
+            // YouTube Details Tab
+            if (youtubeDetails) {
+                html += '<div id="youtubeDetailsTab" class="tab-content">';
+                html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">';
+                html += '<h3 style="margin:0;">📺 YouTube Upload Details</h3>';
+                html += '<button onclick="copyYouTubeDetails()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">📋 Copy All</button>';
+                html += '</div>';
+                html += `<div class="markdown-content" id="youtubeDetailsContent"></div>`;
+                html += '</div>';
+            }
+
             html += '</div>'; // End tab-contents
             html += '</div>'; // End tab-container
             
@@ -2947,6 +2988,8 @@ Time management content here...`;
                             const grokVideos = message.grok_videos || null;
                             const brollRows = brollRowsRoot;
                             const brollTable = brollTableRoot;
+                            const youtubeDetails = message.youtube_details || null;
+                            window._currentYoutubeDetails = youtubeDetails;
                             const rowsForSelection = (Array.isArray(brollRows) && brollRows.length > 0)
                                 ? brollRows
                                 : parseBrollRowsFromTable(brollTable);
@@ -2979,7 +3022,8 @@ Time management content here...`;
                                 curlCommands,  // Curl commands if generated
                                 brollImages,  // B-roll images if generated
                                 grokVideos,  // Grok AI videos if generated
-                                brollTable   // B-roll table for Shutterstock links
+                                brollTable,   // B-roll table for Shutterstock links
+                                youtubeDetails
                             );
                             
                             let resultHTML = `
@@ -3002,7 +3046,8 @@ Time management content here...`;
                                 curlCommands: curlCommands,
                                 brollImages: brollImages,
                                 grokVideos: grokVideos,
-                                brollTable: brollTable
+                                brollTable: brollTable,
+                                youtubeDetails: youtubeDetails
                             };
                             
                             resultDiv.innerHTML = resultHTML;
@@ -3022,6 +3067,8 @@ Time management content here...`;
                                 // Auto-switch to thumbnails tab if thumbnails were generated
                                 if (thumbnails && thumbnails.length > 0) {
                                     switchTab('thumbnails');
+                                } else if (youtubeDetails) {
+                                    switchTab('youtubeDetails');
                                 }
                             }, 200);
                             
@@ -3323,6 +3370,8 @@ Time management content here...`;
                         const grokVideos = message.grok_videos || null;
                         const brollRows = message.broll_rows || [];
                         const brollTable = message.broll_table || '';
+                        const youtubeDetails = message.youtube_details || null;
+                        window._currentYoutubeDetails = youtubeDetails;
                         const rowsForSelection = (Array.isArray(brollRows) && brollRows.length > 0)
                             ? brollRows
                             : parseBrollRowsFromTable(brollTable);
@@ -3382,7 +3431,8 @@ Time management content here...`;
                                 curlCommands,
                                 brollImages,
                                 grokVideos,  // Grok AI videos if generated
-                                brollTable   // B-roll table for Shutterstock links
+                                brollTable,   // B-roll table for Shutterstock links
+                                youtubeDetails
                             );
                             
                             let resultHTML = `
@@ -3404,7 +3454,8 @@ Time management content here...`;
                                 curlCommands: curlCommands,
                                 brollImages: brollImages,
                                 grokVideos: grokVideos,
-                                brollTable: brollTable
+                                brollTable: brollTable,
+                                youtubeDetails: youtubeDetails
                             };
                             
                             resultDiv.innerHTML = resultHTML;
@@ -3415,6 +3466,8 @@ Time management content here...`;
                             // Auto-switch to thumbnails tab if thumbnails were generated
                             if (thumbnails && thumbnails.length > 0) {
                                 setTimeout(() => { switchTab('thumbnails'); }, 200);
+                            } else if (youtubeDetails) {
+                                setTimeout(() => { switchTab('youtubeDetails'); }, 200);
                             }
                             
                             resultDiv.className = 'result';
@@ -4036,6 +4089,7 @@ Time management content here...`;
 
         function clearContent() {
             document.getElementById('scriptInput').value = '';
+            switchScriptInputTab('edit'); // reset to Edit tab when clearing
             document.getElementById('createTopic').value = '';
             document.getElementById('createDescription').value = '';
             document.getElementById('result').style.display = 'none';
@@ -4423,7 +4477,10 @@ Time management content here...`;
                         null,
                         null,
                         null,
-                        null
+                        null,
+                        null,  // No grokVideos
+                        null,  // No brollTable
+                        null   // No youtubeDetails
                     );
                     
                     // Display in result div
@@ -4525,6 +4582,54 @@ Thank you for watching!`;
             }
         }
 
+        // ---- Script Input Edit/Preview toggle ----
+        function renderScriptInputPreview() {
+            const ta = document.getElementById('scriptInput');
+            const preview = document.getElementById('scriptInputPreview');
+            if (!ta || !preview || typeof marked === 'undefined') return;
+            let md = ta.value;
+            // Pre-process: handle both raw script format and processed script format
+            md = md
+                // Normalize: insert newlines before section keywords when mid-line
+                .replace(/([^\n])(\s+)(Heading:\s*Chapter\s+\d+)/g, '$1\n$3')
+                .replace(/([^\n])(\s+)(VISUAL CUE:)/g, '$1\n$3')
+                .replace(/([^\n])(\s+)(Host:\s*(?:\n|$))/gm, '$1\n$3')
+                // "Heading: Chapter N - Title" (raw script format) → ## Chapter N - Title
+                .replace(/^\s*Heading:\s*(Chapter\s+\d+[^\n]*)/gm, '## $1')
+                // "Chapter N: Title" plain text → ## heading
+                .replace(/^(?!#+\s)(Chapter\s+\d+[:.][^\n]*)/gm, '## $1')
+                // Plain "Host:" standalone line → ### Host:
+                .replace(/^\s*Host:\s*$/gm, '### Host:')
+                // "**Host:**" bold (processed scripts) → ### Host:
+                .replace(/^\*\*Host:\*\*\s*$/gm, '### Host:')
+                // Plain "VISUAL CUE: text" (possibly leading space) → #### heading
+                .replace(/^\s*VISUAL CUE:\s*(.+)$/gm, '#### 🎬 VISUAL CUE: $1')
+                // "**VISUAL CUE:** text" bold (processed scripts) → #### heading
+                .replace(/^\*\*VISUAL CUE:\*\*\s*(.*)$/gm, '#### 🎬 VISUAL CUE: $1');
+            preview.innerHTML = marked.parse(md);
+        }
+
+        function switchScriptInputTab(tab) {
+            const ta = document.getElementById('scriptInput');
+            const preview = document.getElementById('scriptInputPreview');
+            const editBtn = document.getElementById('scriptTabEdit');
+            const previewBtn = document.getElementById('scriptTabPreview');
+            if (!ta || !preview || !editBtn || !previewBtn) return;
+            if (tab === 'preview') {
+                renderScriptInputPreview();
+                ta.style.display = 'none';
+                preview.style.display = 'block';
+                editBtn.classList.remove('active');
+                previewBtn.classList.add('active');
+            } else {
+                ta.style.display = 'block';
+                preview.style.display = 'none';
+                editBtn.classList.add('active');
+                previewBtn.classList.remove('active');
+            }
+        }
+        // ---- end Script Input toggle ----
+
         async function loadFile(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -4556,7 +4661,8 @@ Thank you for watching!`;
                 }
 
                 refreshOutputDirPreview();
-                // (success confirmation suppressed)
+                // Auto-switch to formatted preview after loading
+                switchScriptInputTab('preview');
             } catch (error) {
                 alert('❌ Error loading file: ' + error.message);
             } finally {

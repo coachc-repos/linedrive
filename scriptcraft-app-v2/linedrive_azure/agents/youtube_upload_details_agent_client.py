@@ -235,6 +235,16 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         - Playlists to link
         - Subscribe button placement
 
+        ## 🤖 PROMPTS MENTIONED IN THIS EPISODE
+        Scan the ENTIRE script for any ChatGPT / AI prompts that are shown,
+        spoken aloud, or described. A prompt is any direct instruction to an
+        AI tool — quoted text, on-screen text, or a line clearly read as a
+        prompt (e.g. "Here's the prompt I used:", "Type this into ChatGPT:").
+        - List EACH prompt on its own numbered line, exactly as written
+        - Preserve the full prompt text — do NOT summarize or shorten
+        - If no explicit prompts are found, write: "No AI prompts identified in this episode."
+        - Do NOT invent or paraphrase prompts that are not in the script
+
         ## 💡 ADDITIONAL NOTES
         Provide upload tips:
         - Best posting times
@@ -253,6 +263,7 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         8. Make the title and thumbnail text work together for CTR
         9. Consider the target audience in all recommendations
         10. Ensure accessibility in formatting and structure
+        11. Extract ALL AI/ChatGPT prompts verbatim for the Prompts section
 
         SEO OPTIMIZATION PRIORITIES:
         - Front-load keywords in title and description

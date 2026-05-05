@@ -198,7 +198,7 @@ Generate an image showing: {search_term} with these specific details: {descripti
                     safe_term = re.sub(r'[-\s]+', '_', safe_term)
                     safe_term = safe_term[:50]  # Limit length
 
-                    filename = f"broll_{index:02d}_v{variation}_{safe_term}.{ext}"
+                    filename = f"broll_{index:02d}_{safe_term}.{ext}"
                     filepath = self.output_dir / filename
 
                     # Save the image
@@ -256,7 +256,7 @@ Generate an image showing: {search_term} with these specific details: {descripti
             }
 
         print(f"📊 Found {len(entries)} B-roll entries")
-        print(f"🎯 Generating 3 variations per entry")
+        print(f"🎯 Generating 1 image per entry")
 
         # Show first few entries for debugging
         print("\n📋 B-roll entries to process:")
@@ -265,42 +265,35 @@ Generate an image showing: {search_term} with these specific details: {descripti
         if len(entries) > 5:
             print(f"   ... and {len(entries) - 5} more entries")
 
-        # Limit number of ENTRIES if specified (each entry gets 3 variations)
+        # Limit number of entries if specified
         if max_images:
-            # max_images now refers to max entries, not total images
             entries = entries[:max_images]
-            total_images = len(entries) * 3
-            print(
-                f"\n🎯 Limited to {len(entries)} entries × 3 = {total_images} total images")
+            print(f"\n🎯 Limited to {len(entries)} images")
         else:
-            total_images = len(entries) * 3
-            print(
-                f"\n🎯 Will generate ALL {len(entries)} entries × 3 = {total_images} total images")
+            print(f"\n🎯 Will generate {len(entries)} images")
 
-        # Generate 3 variations for each entry
+        # Generate one image per entry
         images = []
+        import time
         for idx, entry in enumerate(entries, 1):
-            # Generate 3 variations of this entry
-            for variation in range(1, 4):
-                result = self.generate_broll_image(
-                    search_term=entry['search_term'],
-                    description=entry['description'],
-                    scene_context=entry['scene_context'],
-                    index=idx,
-                    script_title=script_title,
-                    variation=variation
-                )
+            result = self.generate_broll_image(
+                search_term=entry['search_term'],
+                description=entry['description'],
+                scene_context=entry['scene_context'],
+                index=idx,
+                script_title=script_title,
+                variation=1
+            )
 
-                if result and result.get('success'):
-                    images.append(result)
+            if result and result.get('success'):
+                images.append(result)
 
-                # Small delay between generations to avoid rate limiting
-                import time
-                time.sleep(1)
+            # Small delay between generations to avoid rate limiting
+            time.sleep(1)
 
         print(f"\n{'=' * 60}")
         print(
-            f"✅ Generated {len(images)} B-roll images ({len(entries)} entries × 3 variations)")
+            f"✅ Generated {len(images)} B-roll images ({len(entries)} entries × 1)")
         print(f"📁 Saved to: {self.output_dir}")
         print(f"{'=' * 60}")
 
@@ -310,7 +303,7 @@ Generate an image showing: {search_term} with these specific details: {descripti
             'output_dir': str(self.output_dir),
             'total_generated': len(images),
             'total_entries': len(entries),
-            'variations_per_entry': 3
+            'variations_per_entry': 1
         }
 
 
