@@ -868,11 +868,11 @@
             
             <div class="toolbar-section">
                 <span class="toolbar-label">Export</span>
-                <button class="toolbar-btn" onclick="exportToWord()" id="wordBtn" style="display:none;" title="Export to Word">
+                <button class="toolbar-btn" onclick="exportToWord()" id="wordBtn" style="display:none;" title="Download as Word document">
                     <span class="toolbar-icon">📄</span>
                     <span class="toolbar-text">Word</span>
                 </button>
-                <button class="toolbar-btn" onclick="createResolveProject()" id="davinciBtn" style="display:none;" title="Create DaVinci Project">
+                <button class="toolbar-btn" onclick="createResolveProject()" id="davinciBtn" style="display:none !important;" title="DaVinci project creation disabled in cloud build" data-container-disabled="true">
                     <span class="toolbar-icon">🎬</span>
                     <span class="toolbar-text">DaVinci</span>
                 </button>
@@ -902,7 +902,7 @@
                     <span class="toolbar-icon">📁</span>
                     <span class="toolbar-text">Load Script</span>
                 </button>
-                <button class="toolbar-btn" onclick="testThumbnails()" id="testThumbBtn" title="Test Thumbnails">
+                <button class="toolbar-btn" onclick="testThumbnails()" id="testThumbBtn" title="Test Thumbnails" style="display:none !important;" data-container-disabled="true">
                     <span class="toolbar-icon">🖼️</span>
                     <span class="toolbar-text">Thumbnails</span>
                 </button>
@@ -910,32 +910,21 @@
                     <span class="toolbar-icon">🤖</span>
                     <span class="toolbar-text">Grok Test</span>
                 </button>
-                <button class="toolbar-btn" onclick="openResolveInspector()" title="Inspect current DaVinci Resolve timeline">
-                    <span class="toolbar-icon">🔍</span>
-                    <span class="toolbar-text">Inspect Resolve</span>
-                </button>
-                <button class="toolbar-btn" onclick="openRenderAudioModal()" title="Render audio-only WAV from a DaVinci Resolve timeline">
-                    <span class="toolbar-icon">🎵</span>
-                    <span class="toolbar-text">Render Audio</span>
-                </button>
-                <button class="toolbar-btn" onclick="openSwipeTestModal()" title="Create a fresh Resolve timeline with one broll clip and apply the swipe Fusion comp for fast iteration">
-                    <span class="toolbar-icon">🌬️</span>
-                    <span class="toolbar-text">Swipe Test</span>
-                </button>
+                <!-- Container build: DaVinci Resolve buttons (Inspect Resolve, Render Audio, Swipe Test) removed -->
                 <button class="toolbar-btn" onclick="openApiKeysModal()" title="Manage API Keys">
                     <span class="toolbar-icon">🔑</span>
                     <span class="toolbar-text">API Keys</span>
                 </button>
-                <button class="toolbar-btn" onclick="openOutputDirModal()" id="outputDirBtn" title="Set base output directory for saving all generated artifacts">
+                <button class="toolbar-btn" onclick="openOutputDirModal()" id="outputDirBtn" style="display:none !important;" title="Output directory disabled in cloud build" data-container-disabled="true">
                     <span class="toolbar-icon">📁</span>
                     <span class="toolbar-text">Output Dir</span>
                 </button>
-                <button class="toolbar-btn" onclick="saveAllOutputs()" id="saveAllOutputsBtn" title="Save current results (script, images, thumbnails, videos, EDL, curls) to the configured Output Directory" style="display:none;">
+                <button class="toolbar-btn" onclick="saveAllOutputs()" id="saveAllOutputsBtn" title="Save to local disk disabled in cloud build" style="display:none !important;" data-container-disabled="true">
                     <span class="toolbar-icon">💾</span>
                     <span class="toolbar-text">Save All</span>
                 </button>
                 <!-- Test Compare button hidden - not needed for production
-                <button class="toolbar-btn" onclick="testComparisons()" id="testCompBtn" title="Test Comparisons Tab">
+                <button class="toolbar-btn" onclick="testComparisons()" id="testCompBtn" title="Test Comparisons Tab" style="display:none !important;" data-container-disabled="true">
                     <span class="toolbar-icon">📊</span>
                     <span class="toolbar-text">Test Compare</span>
                 </button>

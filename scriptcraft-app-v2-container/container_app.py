@@ -109,7 +109,9 @@ _DISABLED_VIEWS = {
     "download_heygen_video",
     "download_media_zip",
     # Word document export to local disk (heavy, not needed in cloud)
-    "export_word",
+    # NOTE: export_word actually streams the .docx in the HTTP response
+    # (browser save dialog handles the location), so it's safe in container.
+    # "export_word" intentionally NOT disabled.
     "test_word_page",
     # Local debug / capture / SSE test helpers
     "debug_stdout",
