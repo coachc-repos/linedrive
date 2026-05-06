@@ -287,6 +287,10 @@ thumbnail_cancel_events: "dict[str, _threading.Event]" = {}
 grok_video_cancel_events: "dict[str, _threading.Event]" = {}
 grok_video_streams: "dict[str, _queue.Queue]" = {}
 grok_video_results: "dict[str, dict]" = {}
+audio_render_streams: "dict[str, _queue.Queue]" = {}
+audio_render_results: "dict[str, dict]" = {}
+transcribe_streams: "dict[str, _queue.Queue]" = {}
+transcribe_results: "dict[str, dict]" = {}
 
 
 @app.route('/api/proxy')
@@ -2712,9 +2716,8 @@ async def process_existing_script(
             except Exception as e:
                 logger.error(f"❌ Flow analysis error: {e}")
 
-        # Complete
-        streamer.send_update("✅ Script processing complete!", 100)
-
+        # Complete — save files and set result BEFORE sending done=True so the
+        # SSE handler always finds a valid streamer.result when it reads on progress==100.
         saved_markdown_path, saved_docx_path = await _save_script_md_and_docx(
             script_title,
             final_output,
@@ -2740,6 +2743,8 @@ async def process_existing_script(
             "docx_path": saved_docx_path,
         }
         logger.info("✅ Script processing completed successfully")
+        # Send done=True AFTER result is set so the SSE handler always finds a valid result.
+        streamer.send_update("✅ Script processing complete!", 100)
 
     except Exception as e:
         error_msg = f"Error: {str(e)}"
@@ -6359,6 +6364,550 @@ Protect prime hours for your most critical, high-impact work.''',
                            test_mode=True,
                            test_comparisons=mock_comparisons,
                            test_thumbnails=mock_thumbnails)
+
+
+# ── DaVinci Resolve Audio Render ──────────────────────────────────────────────
+
+def _resolve_env_setup():
+    """Set RESOLVE_SCRIPT_API/LIB env vars and ensure Modules path is in sys.path."""
+    resolve_script_api = (
+        "/Library/Application Support/Blackmagic Design/"
+        "DaVinci Resolve/Developer/Scripting"
+    )
+    os.environ["RESOLVE_SCRIPT_API"] = resolve_script_api
+    os.environ["RESOLVE_SCRIPT_LIB"] = (
+        "/Applications/DaVinci Resolve/DaVinci Resolve.app/"
+        "Contents/Libraries/Fusion/fusionscript.so"
+    )
+    modules_path = os.path.join(resolve_script_api, "Modules")
+    if modules_path not in sys.path:
+        sys.path.append(modules_path)
+
+
+@app.route("/api/resolve/list-timelines", methods=["GET"])
+def api_resolve_list_timelines():
+    """Return the current DaVinci Resolve project and its timelines."""
+    try:
+        _resolve_env_setup()
+        import DaVinciResolveScript as dvr_script  # type: ignore
+        resolve = dvr_script.scriptapp("Resolve")
+        if resolve is None:
+            return jsonify({"success": False, "error": "DaVinci Resolve is not running or not reachable."}), 500
+
+        pm = resolve.GetProjectManager()
+        project = pm.GetCurrentProject()
+        if project is None:
+            return jsonify({"success": False, "error": "No project is open in DaVinci Resolve."}), 400
+
+        project_name = project.GetName()
+        timelines = []
+        for i in range(1, project.GetTimelineCount() + 1):
+            tl = project.GetTimelineByIndex(i)
+            if tl:
+                timelines.append(tl.GetName())
+
+        current_tl = project.GetCurrentTimeline()
+        current_tl_name = current_tl.GetName() if current_tl else None
+
+        return jsonify({
+            "success": True,
+            "project": project_name,
+            "timelines": timelines,
+            "current_timeline": current_tl_name,
+        })
+    except Exception as e:
+        logger.error(f"❌ /api/resolve/list-timelines failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _audio_render_worker(session_id: str, timeline_name: str, output_path: str):
+    """Background worker that runs the Resolve audio export and posts progress to the session queue."""
+    q = audio_render_streams.get(session_id)
+    if q is None:
+        return
+
+    def push(msg, progress=None, status="progress", **extra):
+        payload = {"type": status, "message": msg}
+        if progress is not None:
+            payload["progress"] = progress
+        if extra:
+            payload.update(extra)
+        q.put(payload)
+
+    try:
+        push(f"🔌 Connecting to DaVinci Resolve…", 5)
+        _resolve_env_setup()
+        import DaVinciResolveScript as dvr_script  # type: ignore
+        resolve = dvr_script.scriptapp("Resolve")
+        if resolve is None:
+            push("❌ DaVinci Resolve is not running or not reachable.", status="error")
+            audio_render_results[session_id] = {"success": False, "error": "Resolve not running"}
+            return
+
+        pm = resolve.GetProjectManager()
+        project = pm.GetCurrentProject()
+        if project is None:
+            push("❌ No project is open in DaVinci Resolve.", status="error")
+            audio_render_results[session_id] = {"success": False, "error": "No project open"}
+            return
+
+        push(f"🎬 Switching to timeline '{timeline_name}'…", 10)
+
+        # Find and set the timeline
+        tl = None
+        for i in range(1, project.GetTimelineCount() + 1):
+            t = project.GetTimelineByIndex(i)
+            if t and t.GetName() == timeline_name:
+                tl = t
+                break
+        if tl is None:
+            push(f"❌ Timeline '{timeline_name}' not found.", status="error")
+            audio_render_results[session_id] = {"success": False, "error": f"Timeline '{timeline_name}' not found"}
+            return
+        project.SetCurrentTimeline(tl)
+
+        push(f"⚙️ Configuring render settings (WAV / 48 kHz / 24-bit)…", 20)
+        output_dir = str(Path(output_path).parent)
+        # Strip extension from CustomName — Resolve appends it based on format
+        output_filename = Path(output_path).stem
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        # Try the "Audio Only" preset first (most reliable across Resolve versions)
+        try:
+            presets = project.GetRenderPresetList() or []
+        except Exception:
+            presets = []
+        audio_preset = next(
+            (p for p in presets if isinstance(p, str) and p.lower() in ("audio only", "audio_only")),
+            None,
+        )
+        if audio_preset:
+            try:
+                project.LoadRenderPreset(audio_preset)
+                push(f"   • Loaded render preset: {audio_preset}", 22)
+            except Exception:
+                pass
+
+        # Set format+codec BEFORE SetRenderSettings (codec keys depend on format)
+        try:
+            project.SetCurrentRenderFormatAndCodec("wav", "LinearPCM")
+        except Exception as _e:
+            push(f"   • Note: SetCurrentRenderFormatAndCodec raised: {_e}", 22)
+
+        # Minimal settings dict — Resolve rejects the entire dict if any key is
+        # unknown for the current format. Audio-specific keys are already set
+        # by the format/codec selection above.
+        settings = {
+            "SelectAllFrames": True,
+            "TargetDir": output_dir,
+            "CustomName": output_filename,
+            "ExportVideo": False,
+            "ExportAudio": True,
+        }
+        if not project.SetRenderSettings(settings):
+            # Fallback: try without ExportVideo/ExportAudio (some Resolve versions reject these)
+            push("   • Initial SetRenderSettings rejected — retrying with minimal keys…", 23)
+            minimal = {
+                "SelectAllFrames": True,
+                "TargetDir": output_dir,
+                "CustomName": output_filename,
+            }
+            if not project.SetRenderSettings(minimal):
+                push(
+                    "❌ SetRenderSettings failed. Open Resolve → Deliver page, choose 'Audio Only' "
+                    "preset manually once, then retry. Also verify the output directory exists and "
+                    "is writable.",
+                    status="error",
+                )
+                audio_render_results[session_id] = {"success": False, "error": "SetRenderSettings failed"}
+                return
+
+        push(f"📋 Queueing render job…", 30)
+        job_id = project.AddRenderJob()
+        if not job_id:
+            push("❌ AddRenderJob failed. Check the Deliver page in Resolve.", status="error")
+            audio_render_results[session_id] = {"success": False, "error": "AddRenderJob failed"}
+            return
+
+        if not project.StartRendering(job_id):
+            project.DeleteRenderJobList()
+            push("❌ StartRendering failed.", status="error")
+            audio_render_results[session_id] = {"success": False, "error": "StartRendering failed"}
+            return
+
+        push(f"🎵 Render started — polling for completion…", 35)
+        import time as _time
+        deadline = _time.time() + 1800  # 30 min max
+        job_status = ""
+        while _time.time() < deadline:
+            _time.sleep(3)
+            status_info = project.GetRenderJobStatus(job_id) or {}
+            job_status = status_info.get("JobStatus", "")
+            completion_pct = status_info.get("CompletionPercentage", 0)
+            sse_progress = 35 + int(completion_pct * 0.6)  # maps 0-100% → 35-95%
+            push(f"⏳ Rendering… {completion_pct:.0f}% ({job_status})", sse_progress)
+            if job_status in ("Complete", "Cancelled", "Failed"):
+                break
+
+        if job_status != "Complete":
+            push(f"❌ Render ended with status '{job_status}'.", status="error")
+            audio_render_results[session_id] = {"success": False, "error": f"Render status: {job_status}"}
+            return
+
+        # Locate output file (Resolve appends extension; output_filename is stem only)
+        candidates = sorted(Path(output_dir).glob(f"{output_filename}*.wav")) \
+                     or sorted(Path(output_dir).glob(f"{output_filename}*"))
+        actual_file = str(candidates[0]) if candidates else f"{Path(output_dir) / output_filename}.wav"
+        push(f"✅ Audio exported to: {actual_file}", 100, status="done", output_file=actual_file)
+        audio_render_results[session_id] = {"success": True, "output_file": actual_file}
+
+    except Exception as e:
+        logger.error(f"❌ _audio_render_worker failed: {e}", exc_info=True)
+        push(f"❌ Unexpected error: {e}", status="error")
+        audio_render_results[session_id] = {"success": False, "error": str(e)}
+
+
+@app.route("/api/resolve/render-audio", methods=["POST"])
+def api_resolve_render_audio_start():
+    """Start an audio-only render job in DaVinci Resolve.
+
+    Body JSON:
+        {
+            "timeline_name": "My Timeline",   (required)
+            "script_title":  "My Script",     (used for output filename)
+        }
+
+    Returns:
+        {"success": true, "session_id": "...", "stream_url": "..."}
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        timeline_name = (data.get("timeline_name") or "").strip()
+        script_title = (data.get("script_title") or "audio_export").strip() or "audio_export"
+
+        if not timeline_name:
+            return jsonify({"success": False, "error": "timeline_name is required"}), 400
+
+        # Build output path: <output_dir>/<safe_title> (no extension; Resolve adds it)
+        safe_title = re.sub(r'[^A-Za-z0-9._-]+', '_', script_title).strip('_') or "audio"
+        output_parent = _get_output_parent_dir()
+        output_path = str(output_parent / safe_title)
+
+        session_id = str(uuid.uuid4())
+        audio_render_streams[session_id] = _queue.Queue()
+        audio_render_results.pop(session_id, None)
+
+        thread = _threading.Thread(
+            target=_audio_render_worker,
+            args=(session_id, timeline_name, output_path),
+            daemon=True,
+        )
+        thread.start()
+
+        logger.info(f"🎵 Audio render started: session={session_id} timeline='{timeline_name}' output='{output_path}'")
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "output_path": output_path,
+            "stream_url": f"/api/resolve/render-audio/progress/{session_id}",
+        })
+    except Exception as e:
+        logger.error(f"❌ /api/resolve/render-audio failed to start: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/resolve/render-audio/progress/<session_id>")
+def api_resolve_render_audio_progress(session_id):
+    """SSE stream of progress events for an in-flight audio render session."""
+    q = audio_render_streams.get(session_id)
+    if q is None:
+        return "Session not found", 404
+
+    def generate():
+        try:
+            while True:
+                try:
+                    payload = q.get(timeout=60)
+                except _queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"data: {json.dumps(payload)}\n\n"
+                if payload.get("type") in ("done", "error"):
+                    break
+        finally:
+            audio_render_streams.pop(session_id, None)
+
+    return Response(generate(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Whisper transcription
+# ---------------------------------------------------------------------------
+
+# Local openai-whisper CLI (preferred). Falls back to OpenAI Whisper API if
+# the CLI is not installed.
+_WHISPER_CLI_CANDIDATES = [
+    "/Library/Frameworks/Python.framework/Versions/3.14/bin/whisper",
+    "/opt/homebrew/bin/whisper",
+    "whisper",
+]
+
+
+def _find_whisper_cli():
+    import shutil
+    for c in _WHISPER_CLI_CANDIDATES:
+        path = shutil.which(c) or (c if Path(c).is_file() else None)
+        if path:
+            return path
+    return None
+
+
+@app.route("/api/transcribe-audio", methods=["POST"])
+def api_transcribe_audio():
+    """Start a local-whisper transcription in the background.
+
+    Body JSON:
+        { "file_path": "/abs/path/to/audio.wav",
+          "model":     "medium" (optional),
+          "language":  "en"     (optional) }
+
+    Returns: { success, session_id, stream_url }
+    Stream events on /api/transcribe-audio/progress/<session_id>:
+      {type:"progress", message:"...", line:"..."}
+      {type:"segment",  start:"00:00.000", end:"00:05.000", text:"..."}
+      {type:"done",     text:"<full transcript>", model:"medium"}
+      {type:"error",    error:"..."}
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        file_path = (data.get("file_path") or "").strip()
+        model = (data.get("model") or "medium").strip() or "medium"
+        language = (data.get("language") or "").strip()
+
+        if not file_path:
+            return jsonify({"success": False, "error": "file_path is required"}), 400
+
+        src = Path(file_path).expanduser()
+        if not src.exists() or not src.is_file():
+            return jsonify({"success": False, "error": f"File not found: {src}"}), 404
+
+        whisper_bin = _find_whisper_cli()
+        if not whisper_bin:
+            return jsonify({
+                "success": False,
+                "error": "whisper CLI not found. Install with: pip install openai-whisper",
+            }), 500
+
+        session_id = str(uuid.uuid4())
+        transcribe_streams[session_id] = _queue.Queue()
+        transcribe_results.pop(session_id, None)
+
+        thread = _threading.Thread(
+            target=_transcribe_worker,
+            args=(session_id, whisper_bin, str(src), model, language),
+            daemon=True,
+        )
+        thread.start()
+
+        logger.info(f"🎙️ Transcribe started: session={session_id} file='{src.name}' model={model}")
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "stream_url": f"/api/transcribe-audio/progress/{session_id}",
+        })
+    except Exception as e:
+        logger.error(f"❌ /api/transcribe-audio failed to start: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _transcribe_worker(session_id: str, whisper_bin: str, file_path: str,
+                       model: str, language: str):
+    """Run whisper CLI as a subprocess and stream stdout lines as SSE events."""
+    import subprocess
+    import tempfile
+    import shutil as _shutil
+    import re as _re
+    import time as _time
+
+    q = transcribe_streams.get(session_id)
+
+    def push(payload):
+        if q is not None:
+            try:
+                q.put(payload)
+            except Exception:
+                pass
+
+    out_dir = Path(tempfile.mkdtemp(prefix="whisper_out_"))
+    cmd = [
+        whisper_bin,
+        file_path,
+        "--model", model,
+        "--output_format", "txt",
+        "--output_dir", str(out_dir),
+        # --verbose True (default) prints "[mm:ss.xxx --> mm:ss.xxx]  text" per segment
+        "--verbose", "True",
+    ]
+    if language:
+        cmd += ["--language", language]
+
+    push({"type": "progress", "message": f"🎙️ Loading whisper model '{model}' (first run downloads weights)…"})
+    logger.info(f"🎙️ whisper cmd: {' '.join(cmd)}")
+
+    seg_re = _re.compile(r"^\[(\d+:\d+\.\d+)\s*-->\s*(\d+:\d+\.\d+)\]\s*(.*)$")
+
+    def _to_hhmmss(ts: str) -> str:
+        # ts is "MM:SS.mmm" or "HH:MM:SS.mmm" (whisper uses minutes:seconds when <1h)
+        try:
+            base = ts.split(".")[0]
+            parts = base.split(":")
+            if len(parts) == 2:
+                h, m, s = 0, int(parts[0]), int(parts[1])
+            elif len(parts) == 3:
+                h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
+            else:
+                return ts
+            # normalize overflow
+            m += s // 60; s = s % 60
+            h += m // 60; m = m % 60
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        except Exception:
+            return ts
+
+    collected_segments: list = []  # list of (start_hhmmss, text)
+
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=0,  # unbuffered — we'll segment manually on \n and \r
+            env=env,
+        )
+    except Exception as e:
+        push({"type": "error", "error": f"failed to launch whisper: {e}"})
+        _shutil.rmtree(out_dir, ignore_errors=True)
+        return
+
+    # Heartbeat thread — keeps the UI alive while whisper loads the model silently
+    stop_heartbeat = _threading.Event()
+
+    def _heartbeat():
+        secs = 0
+        while not stop_heartbeat.wait(5):
+            secs += 5
+            push({"type": "progress", "message": f"…still working ({secs}s elapsed)"})
+
+    hb_thread = _threading.Thread(target=_heartbeat, daemon=True)
+    hb_thread.start()
+
+    try:
+        assert proc.stdout is not None
+        # Read char-by-char so we capture both \n (segment lines) and \r (tqdm updates)
+        buf = []
+        first_output_seen = False
+        while True:
+            ch = proc.stdout.read(1)
+            if ch == "" and proc.poll() is not None:
+                break
+            if ch in ("\n", "\r"):
+                line = "".join(buf).strip()
+                buf = []
+                if not line:
+                    continue
+                if not first_output_seen:
+                    first_output_seen = True
+                    # First real output — model is loaded
+                    stop_heartbeat.set()
+                m = seg_re.match(line)
+                if m:
+                    start_hms = _to_hhmmss(m.group(1))
+                    end_hms = _to_hhmmss(m.group(2))
+                    seg_text = m.group(3).strip()
+                    collected_segments.append((start_hms, seg_text))
+                    push({
+                        "type": "segment",
+                        "start": start_hms,
+                        "end": end_hms,
+                        "text": seg_text,
+                        "line": line,
+                    })
+                else:
+                    push({"type": "progress", "message": line, "line": line})
+            else:
+                buf.append(ch)
+
+        # Drain any trailing buffered text
+        if buf:
+            tail = "".join(buf).strip()
+            if tail:
+                push({"type": "progress", "message": tail, "line": tail})
+
+        stop_heartbeat.set()
+        rc = proc.wait()
+        if rc != 0:
+            push({"type": "error", "error": f"whisper exited with code {rc}"})
+            _shutil.rmtree(out_dir, ignore_errors=True)
+            return
+
+        txt_files = sorted(out_dir.glob("*.txt"))
+        if not txt_files:
+            push({"type": "error", "error": "whisper produced no .txt output"})
+            _shutil.rmtree(out_dir, ignore_errors=True)
+            return
+
+        plain_text = txt_files[0].read_text(encoding="utf-8", errors="replace").strip()
+        # Build a timestamped transcript in the format the YouTube agent expects:
+        #   [HH:MM:SS] spoken text
+        if collected_segments:
+            text = "\n".join(f"[{ts}] {seg}" for ts, seg in collected_segments if seg).strip()
+        else:
+            text = plain_text
+        transcribe_results[session_id] = {"success": True, "text": text, "model": model}
+        push({"type": "done", "text": text, "model": model, "segments": len(collected_segments)})
+    except Exception as e:
+        logger.error(f"❌ transcribe worker crash: {e}", exc_info=True)
+        push({"type": "error", "error": str(e)})
+    finally:
+        stop_heartbeat.set()
+        _shutil.rmtree(out_dir, ignore_errors=True)
+
+
+@app.route("/api/transcribe-audio/progress/<session_id>")
+def api_transcribe_audio_progress(session_id):
+    """SSE stream of transcription events."""
+    q = transcribe_streams.get(session_id)
+    if q is None:
+        return "Session not found", 404
+
+    def generate():
+        try:
+            while True:
+                try:
+                    payload = q.get(timeout=60)
+                except _queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"data: {json.dumps(payload)}\n\n"
+                if payload.get("type") in ("done", "error"):
+                    break
+        finally:
+            transcribe_streams.pop(session_id, None)
+
+    return Response(generate(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
 
 
 if __name__ == "__main__":

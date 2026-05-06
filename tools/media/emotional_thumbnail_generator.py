@@ -237,6 +237,8 @@ class EmotionalThumbnailGenerator:
         # Check if we have a template image to use as reference
         has_template = self.template_path and Path(self.template_path).exists()
 
+        hook_text = emotion_data.get('thumbnail_text', '').strip()
+
         if has_template:
             template_img = Image.open(self.template_path)
             prompt = f"""You are modifying a YouTube thumbnail template image (1280x720 aspect ratio).
@@ -251,7 +253,14 @@ WHAT TO TRANSFORM:
 Topic: {script_title}
 Emotion: {emotion_data['emotion']}
 
-DO NOT ADD ANY TEXT OR WORDS TO THE IMAGE.
+TEXT REQUIREMENT (MANDATORY):
+- Add this exact headline text in the UPPER LEFT area of the image:
+  "{hook_text}"
+- Style: large bold white letters with thick black drop-shadow/stroke
+- Font size: very large (fills roughly the left 55% of the frame width)
+- Place text starting at the upper-left corner with padding
+- The text must be clearly legible against any background
+
 Keep the person's pose and position. Fill background edge-to-edge (1280x720).
 High resolution, photorealistic, YouTube thumbnail optimized."""
         else:
@@ -269,7 +278,6 @@ BACKGROUND:
 - Topic: {script_title}
 - Specific scene: {emotion_data['background']}
 - Background fills the ENTIRE frame edge-to-edge
-- UPPER LEFT area should be clean/spacious (text overlay will be added later)
 - Vibrant, high-contrast colors for thumbnail visibility
 
 COLOR PALETTE:
@@ -280,8 +288,16 @@ COLOR PALETTE:
 - SKEPTICAL: Cool grays, teals, modern
 - DETERMINED: Deep reds, blacks, powerful
 
+TEXT REQUIREMENT (MANDATORY):
+- Add this exact headline text in the UPPER LEFT area of the image:
+  "{hook_text}"
+- Style: large bold white letters with thick black drop-shadow/stroke
+- Font size: very large (fills roughly the left 55% of the frame width)
+- Place text starting at the upper-left corner with ~50px padding
+- Word-wrap to stay within the left 55% of the frame
+- The text must be clearly legible against the background
+
 CRITICAL RULES:
-- DO NOT ADD ANY TEXT OR WORDS TO THE IMAGE
 - 1280x720 pixels, 16:9 aspect ratio
 - Photorealistic, high resolution
 - High visual impact, professional YouTube thumbnail quality
@@ -316,11 +332,6 @@ CRITICAL RULES:
                         if img.size != (1280, 720):
                             img = img.resize(
                                 (1280, 720), Image.Resampling.LANCZOS)
-
-                        # Overlay hook text on the image
-                        hook_text = emotion_data.get('thumbnail_text', '')
-                        if hook_text:
-                            img = self._render_text_overlay(img, hook_text)
 
                         return img
 

@@ -179,11 +179,19 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         What viewers will learn (use bullet points)
 
         **TIMESTAMPS:**
-        📌 Create chapter markers based on script structure
-        📌 CRITICAL: If script already has timestamps, USE THEM EXACTLY
-        📌 If no timestamps exist, calculate them to match the estimated video duration
-        📌 DO NOT create timestamps that exceed the video length
-        📌 Distribute timestamps evenly across the video
+        📌 Create chapter markers for MAJOR topic shifts only — NOT one per transcript line
+        📌 If the input is a Whisper/Otter timestamped transcript (a timecode every few seconds),
+           those are RAW SEGMENTS, not chapters. Collapse them into a small number of major chapters.
+        📌 STRICT chapter-count limits:
+           - Always start with `0:00 Introduction`
+           - Videos under 20 minutes: target 5–8 chapters total
+           - Videos 20–60 minutes: target 8–12 chapters total
+           - NEVER exceed 12 chapters regardless of length
+           - Each chapter must be at least 60 seconds long; merge adjacent topics if shorter
+        📌 If the script has MANUALLY-AUTHORED timestamps (sparse, one per real chapter), use those exactly.
+           Do NOT apply this rule to dense transcript timecodes.
+        📌 Use only timecodes that appear in the input — never invent or estimate
+        📌 Do NOT create timestamps that exceed the video length
         Format: 0:00 Introduction
                 2:15 Chapter Title
                 5:30 Next Section
@@ -302,11 +310,15 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         )
 
         # Parse the response to extract structured data
-        response_text = result.get("response", "")
+        response_text = result.get("response") or ""
 
         # VALIDATION: Check if agent's timestamps exceed our calculated duration
-        self._validate_timestamps(
-            response_text, estimated_seconds, calculated_duration)
+        if response_text:
+            try:
+                self._validate_timestamps(
+                    response_text, estimated_seconds, calculated_duration)
+            except Exception as _validation_err:
+                print(f"⚠️ Timestamp validation skipped: {_validation_err}")
 
         return {
             "success": result.get("success", False),

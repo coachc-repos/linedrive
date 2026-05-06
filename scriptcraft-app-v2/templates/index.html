@@ -612,8 +612,9 @@
         }
         #scriptInputPreview {
             display: none;
-            min-height: 200px;
-            max-height: 500px;
+            min-height: 100px;
+            height: 400px;
+            max-height: none;
             overflow-y: auto;
             padding: 12px 16px;
             background: #0f172a;
@@ -622,6 +623,8 @@
             color: #e2e8f0;
             font-size: 13px;
             line-height: 1.6;
+            resize: vertical;
+            box-sizing: border-box;
         }
         #scriptInputPreview h1 { font-size: 1.4em; color: #f1f5f9; margin: 1em 0 0.4em; }
         #scriptInputPreview h2 { font-size: 1.2em; color: #7dd3fc; margin: 1em 0 0.3em; border-bottom: 1px solid #1e3a5f; padding-bottom: 4px; }
@@ -911,6 +914,10 @@
                     <span class="toolbar-icon">🔍</span>
                     <span class="toolbar-text">Inspect Resolve</span>
                 </button>
+                <button class="toolbar-btn" onclick="openRenderAudioModal()" title="Render audio-only WAV from a DaVinci Resolve timeline">
+                    <span class="toolbar-icon">🎵</span>
+                    <span class="toolbar-text">Render Audio</span>
+                </button>
                 <button class="toolbar-btn" onclick="openSwipeTestModal()" title="Create a fresh Resolve timeline with one broll clip and apply the swipe Fusion comp for fast iteration">
                     <span class="toolbar-icon">🌬️</span>
                     <span class="toolbar-text">Swipe Test</span>
@@ -1014,6 +1021,68 @@
                             style="padding:8px 16px; background:#1e293b; border:1px solid #334155; color:#cbd5e1; border-radius:6px; cursor:pointer;">Close</button>
                 </div>
                 <div id="swipeTestResult" style="flex:1; overflow:auto; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:10px; color:#cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.78em; white-space:pre-wrap; min-height:120px;">Result will appear here…</div>
+            </div>
+        </div>
+
+        <!-- Render Audio Modal -->
+        <div id="renderAudioModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:10073; align-items:center; justify-content:center;">
+            <div style="background:#0f172a; border:1px solid #334155; border-radius:10px; width:min(680px, 95vw); max-height:90vh; padding:20px 24px; box-shadow:0 20px 50px rgba(0,0,0,0.6); display:flex; flex-direction:column; gap:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2 style="margin:0; color:#e2e8f0; font-size:1.1em;">🎵 Render Audio from DaVinci Resolve</h2>
+                    <button onclick="closeRenderAudioModal()" style="background:transparent; color:#94a3b8; border:none; font-size:1.5em; cursor:pointer; line-height:1;">×</button>
+                </div>
+                <div id="renderAudioInfo" style="color:#94a3b8; font-size:0.82em;">
+                    Loading project and timelines from DaVinci Resolve…
+                </div>
+                <div style="display:flex; flex-direction:column; gap:6px;">
+                    <label style="color:#cbd5e1; font-size:0.85em; font-weight:600;">Timeline to render:</label>
+                    <div id="renderAudioTimelineList" style="display:flex; flex-direction:column; gap:4px; max-height:200px; overflow-y:auto; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:8px;">
+                        <div style="color:#64748b; font-size:0.82em;">Loading…</div>
+                    </div>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <label style="color:#cbd5e1; font-size:0.85em; font-weight:600;">Output filename (no extension):</label>
+                    <input id="renderAudioFilename" type="text" placeholder="e.g. my-script-title"
+                        style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:6px; padding:7px 10px; font-size:0.9em; outline:none;">
+                    <div style="color:#64748b; font-size:0.75em;">Saved as <strong style="color:#94a3b8;">.wav</strong> in the current Output Directory</div>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <button id="renderAudioStartBtn" onclick="startAudioRender()"
+                        style="padding:8px 20px; background:#0ea5e9; border:none; color:#fff; border-radius:6px; cursor:pointer; font-size:0.9em; font-weight:600;">
+                        🎵 Start Render
+                    </button>
+                    <button onclick="refreshRenderAudioTimelines()"
+                        style="padding:8px 14px; background:#1e293b; border:1px solid #334155; color:#94a3b8; border-radius:6px; cursor:pointer; font-size:0.85em;">
+                        🔄 Refresh
+                    </button>
+                    <button onclick="closeRenderAudioModal()"
+                        style="padding:8px 14px; background:#1e293b; border:1px solid #334155; color:#94a3b8; border-radius:6px; cursor:pointer; font-size:0.85em; margin-left:auto;">
+                        Close
+                    </button>
+                </div>
+                <div id="renderAudioLogWrap" style="display:none; flex-direction:column; gap:6px;">
+                    <div style="color:#cbd5e1; font-size:0.82em; font-weight:600;">Progress</div>
+                    <div style="background:#020617; border:1px solid #1e293b; border-radius:6px; height:8px; overflow:hidden;">
+                        <div id="renderAudioProgressBar" style="height:100%; width:0%; background:#0ea5e9; transition:width 0.4s;"></div>
+                    </div>
+                    <div id="renderAudioLog" style="background:#020617; border:1px solid #1e293b; border-radius:6px; padding:10px; color:#94a3b8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.78em; height:160px; overflow-y:auto; white-space:pre-wrap;"></div>
+                    <div id="renderAudioPostActions" style="display:none; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <label style="color:#cbd5e1; font-size:0.8em;">Whisper model:</label>
+                        <select id="whisperModelSelect" style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; padding:4px 8px; font-size:0.82em;">
+                            <option value="tiny">tiny (fastest)</option>
+                            <option value="base">base</option>
+                            <option value="small">small</option>
+                            <option value="medium" selected>medium (balanced)</option>
+                            <option value="large">large (best)</option>
+                        </select>
+                        <button id="transcribeAudioBtn" onclick="transcribeRenderedAudio()"
+                            style="padding:8px 16px; background:linear-gradient(135deg,#a855f7,#7c3aed); border:none; color:#fff; border-radius:6px; cursor:pointer; font-size:0.88em; font-weight:600;">
+                            🎙️ Transcribe to Script
+                        </button>
+                        <span id="transcribeAudioStatus" style="color:#94a3b8; font-size:0.8em;"></span>
+                    </div>
+                    <pre id="transcribeAudioLog" style="display:none; max-height:240px; overflow:auto; margin-top:8px; padding:10px 12px; background:#0b1220; border:1px solid #1e293b; border-radius:6px; color:#cbd5e1; font-family:'SF Mono', Menlo, monospace; font-size:0.78em; white-space:pre-wrap; line-height:1.45;"></pre>
+                </div>
             </div>
         </div>
 
@@ -4935,6 +5004,293 @@ Thank you for watching!`;
             refreshResolveInspector();
         }
 
+        // ── Render Audio Modal ────────────────────────────────────────────
+        let _renderAudioSelectedTimeline = null;
+        let _renderAudioEventSource = null;
+
+        function openRenderAudioModal() {
+            const modal = document.getElementById('renderAudioModal');
+            if (!modal) return;
+            modal.style.display = 'flex';
+            // Pre-fill filename from current script title
+            const fnInput = document.getElementById('renderAudioFilename');
+            if (fnInput && !fnInput.value) {
+                fnInput.value = _safeName(window.currentScriptTitle || '');
+            }
+            refreshRenderAudioTimelines();
+        }
+
+        function closeRenderAudioModal() {
+            const modal = document.getElementById('renderAudioModal');
+            if (modal) modal.style.display = 'none';
+            if (_renderAudioEventSource) {
+                _renderAudioEventSource.close();
+                _renderAudioEventSource = null;
+            }
+        }
+
+        function _safeName(s) {
+            return (s || '').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'audio_export';
+        }
+
+        async function refreshRenderAudioTimelines() {
+            const info = document.getElementById('renderAudioInfo');
+            const list = document.getElementById('renderAudioTimelineList');
+            _renderAudioSelectedTimeline = null;
+            info.textContent = 'Loading project and timelines from DaVinci Resolve…';
+            info.style.color = '#94a3b8';
+            list.innerHTML = '<div style="color:#64748b; font-size:0.82em;">Loading…</div>';
+            try {
+                const res = await fetch('/api/resolve/list-timelines');
+                const data = await res.json();
+                if (!data.success) {
+                    info.textContent = '❌ ' + (data.error || 'Could not connect to DaVinci Resolve');
+                    info.style.color = '#f87171';
+                    list.innerHTML = '';
+                    return;
+                }
+                info.innerHTML = `<strong style="color:#e2e8f0;">${_riEsc(data.project)}</strong> — ${data.timelines.length} timeline(s)`;
+                info.style.color = '#94a3b8';
+                list.innerHTML = '';
+                if (!data.timelines.length) {
+                    list.innerHTML = '<div style="color:#64748b; font-size:0.82em;">No timelines found in this project.</div>';
+                    return;
+                }
+                data.timelines.forEach(name => {
+                    const isCurrent = name === data.current_timeline;
+                    const btn = document.createElement('button');
+                    btn.textContent = name + (isCurrent ? ' (active)' : '');
+                    btn.title = name;
+                    btn.style.cssText = [
+                        'padding:6px 10px; border-radius:5px; cursor:pointer; font-size:0.85em; text-align:left;',
+                        'border:1px solid ' + (isCurrent ? '#0ea5e9' : '#334155') + ';',
+                        'background:' + (isCurrent ? '#0c2d48' : '#1e293b') + ';',
+                        'color:' + (isCurrent ? '#7dd3fc' : '#cbd5e1') + ';',
+                    ].join('');
+                    btn.dataset.tl = name;
+                    btn.onclick = () => {
+                        list.querySelectorAll('button').forEach(b => {
+                            b.style.border = '1px solid #334155';
+                            b.style.background = '#1e293b';
+                            b.style.color = '#cbd5e1';
+                        });
+                        btn.style.border = '1px solid #0ea5e9';
+                        btn.style.background = '#0c4a6e';
+                        btn.style.color = '#bae6fd';
+                        _renderAudioSelectedTimeline = name;
+                        // Auto-fill filename from timeline name if field is empty
+                        const fn = document.getElementById('renderAudioFilename');
+                        if (fn && !fn.value.trim()) {
+                            fn.value = _safeName(window.currentScriptTitle || name);
+                        }
+                    };
+                    list.appendChild(btn);
+                    // Auto-select the current timeline
+                    if (isCurrent) btn.click();
+                });
+            } catch (e) {
+                info.textContent = '❌ Request failed: ' + e.message;
+                info.style.color = '#f87171';
+                list.innerHTML = '';
+            }
+        }
+
+        async function startAudioRender() {
+            if (!_renderAudioSelectedTimeline) {
+                alert('Please select a timeline first.');
+                return;
+            }
+            const filename = document.getElementById('renderAudioFilename').value.trim();
+            if (!filename) {
+                alert('Please enter an output filename.');
+                return;
+            }
+
+            const startBtn = document.getElementById('renderAudioStartBtn');
+            startBtn.disabled = true;
+            startBtn.textContent = '⏳ Starting…';
+
+            // Show log area
+            const logWrap = document.getElementById('renderAudioLogWrap');
+            logWrap.style.display = 'flex';
+            const logEl = document.getElementById('renderAudioLog');
+            const bar = document.getElementById('renderAudioProgressBar');
+            logEl.textContent = '';
+            bar.style.width = '0%';
+            bar.style.background = '#0ea5e9';
+            // Reset post-render actions
+            const post = document.getElementById('renderAudioPostActions');
+            if (post) post.style.display = 'none';
+            window._lastRenderedAudioFile = null;
+
+            function appendLog(msg) {
+                logEl.textContent += msg + '\n';
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+
+            try {
+                const res = await fetch('/api/resolve/render-audio', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        timeline_name: _renderAudioSelectedTimeline,
+                        script_title: filename,
+                    }),
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    appendLog('❌ ' + (data.error || 'Failed to start render'));
+                    startBtn.disabled = false;
+                    startBtn.textContent = '🎵 Start Render';
+                    return;
+                }
+
+                appendLog(`🚀 Render job started (session: ${data.session_id})`);
+                appendLog(`📁 Output path: ${data.output_path}.wav`);
+
+                if (_renderAudioEventSource) _renderAudioEventSource.close();
+                _renderAudioEventSource = new EventSource(data.stream_url);
+
+                _renderAudioEventSource.onmessage = (ev) => {
+                    try {
+                        const msg = JSON.parse(ev.data);
+                        appendLog(msg.message || '');
+                        if (msg.progress !== undefined) {
+                            bar.style.width = Math.min(100, msg.progress) + '%';
+                        }
+                        if (msg.type === 'done') {
+                            bar.style.width = '100%';
+                            bar.style.background = '#22c55e';
+                            startBtn.disabled = false;
+                            startBtn.textContent = '🎵 Start Render';
+                            // Capture output file for transcription
+                            if (msg.output_file) {
+                                window._lastRenderedAudioFile = msg.output_file;
+                                const post = document.getElementById('renderAudioPostActions');
+                                if (post) post.style.display = 'flex';
+                                const status = document.getElementById('transcribeAudioStatus');
+                                if (status) status.textContent = '';
+                                const tBtn = document.getElementById('transcribeAudioBtn');
+                                if (tBtn) { tBtn.disabled = false; tBtn.textContent = '🎙️ Transcribe to Script'; }
+                            }
+                            _renderAudioEventSource.close();
+                            _renderAudioEventSource = null;
+                        } else if (msg.type === 'error') {
+                            bar.style.background = '#ef4444';
+                            startBtn.disabled = false;
+                            startBtn.textContent = '🎵 Start Render';
+                            _renderAudioEventSource.close();
+                            _renderAudioEventSource = null;
+                        }
+                    } catch (_) {}
+                };
+                _renderAudioEventSource.onerror = () => {
+                    appendLog('⚠️ SSE connection closed.');
+                    startBtn.disabled = false;
+                    startBtn.textContent = '🎵 Start Render';
+                    if (_renderAudioEventSource) {
+                        _renderAudioEventSource.close();
+                        _renderAudioEventSource = null;
+                    }
+                };
+            } catch (e) {
+                appendLog('❌ Error: ' + e.message);
+                startBtn.disabled = false;
+                startBtn.textContent = '🎵 Start Render';
+            }
+        }
+
+        async function transcribeRenderedAudio() {
+            const file = window._lastRenderedAudioFile;
+            const btn = document.getElementById('transcribeAudioBtn');
+            const status = document.getElementById('transcribeAudioStatus');
+            const logEl = document.getElementById('transcribeAudioLog');
+            if (!file) {
+                if (status) { status.style.color = '#f87171'; status.textContent = 'No rendered audio file available.'; }
+                return;
+            }
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Transcribing…'; }
+            if (status) { status.style.color = '#94a3b8'; status.textContent = 'Starting local Whisper…'; }
+            if (logEl) { logEl.style.display = 'block'; logEl.textContent = ''; }
+            const model = (document.getElementById('whisperModelSelect')?.value || 'medium');
+
+            const appendLog = (line) => {
+                if (!logEl) return;
+                logEl.textContent += (logEl.textContent ? '\n' : '') + line;
+                logEl.scrollTop = logEl.scrollHeight;
+            };
+
+            try {
+                const startRes = await fetch('/api/transcribe-audio', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_path: file, model: model }),
+                });
+                const startData = await startRes.json();
+                if (!startRes.ok || !startData.success) {
+                    if (status) { status.style.color = '#f87171'; status.textContent = '❌ ' + (startData.error || 'Failed to start'); }
+                    if (btn) { btn.disabled = false; btn.textContent = '🎙️ Transcribe to Script'; }
+                    return;
+                }
+
+                const segments = [];
+                const es = new EventSource(startData.stream_url);
+
+                es.onmessage = (ev) => {
+                    let msg;
+                    try { msg = JSON.parse(ev.data); } catch (_) { return; }
+                    if (msg.type === 'segment') {
+                        const line = `[${msg.start} --> ${msg.end}]  ${msg.text}`;
+                        appendLog(line);
+                        segments.push(msg.text);
+                        if (status) status.textContent = `Transcribing… ${segments.length} segment${segments.length===1?'':'s'} (last: ${msg.end})`;
+                    } else if (msg.type === 'progress') {
+                        const m = msg.message || msg.line || '';
+                        appendLog(m);
+                        if (status && segments.length === 0) status.textContent = m;
+                    } else if (msg.type === 'done') {
+                        es.close();
+                        const text = msg.text || segments.join(' ');
+                        const scriptInput = document.getElementById('scriptInput');
+                        if (scriptInput) {
+                            scriptInput.value = text;
+                            const checkScript = document.getElementById('checkScript');
+                            if (checkScript && checkScript.checked) {
+                                checkScript.checked = false;
+                                if (typeof toggleScriptInput === 'function') toggleScriptInput();
+                            }
+                            scriptInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                        if (status) {
+                            status.style.color = '#34d399';
+                            status.textContent = `✅ Inserted ${text.length.toLocaleString()} chars into script box (model: ${msg.model || model}).`;
+                        }
+                        if (btn) { btn.disabled = false; btn.textContent = '🎙️ Re-transcribe'; }
+                    } else if (msg.type === 'error') {
+                        es.close();
+                        appendLog('❌ ' + (msg.error || 'error'));
+                        if (status) { status.style.color = '#f87171'; status.textContent = '❌ ' + (msg.error || 'Transcription failed'); }
+                        if (btn) { btn.disabled = false; btn.textContent = '🎙️ Transcribe to Script'; }
+                    }
+                };
+
+                es.onerror = () => {
+                    // Browser will auto-retry; if the stream closed cleanly after 'done' this fires too.
+                    // Only treat as failure if we never reached 'done' and button is still disabled.
+                    if (btn && btn.disabled && btn.textContent.includes('Transcribing')) {
+                        es.close();
+                        if (status) { status.style.color = '#f87171'; status.textContent = '❌ Stream connection lost'; }
+                        btn.disabled = false; btn.textContent = '🎙️ Transcribe to Script';
+                    }
+                };
+            } catch (err) {
+                if (status) { status.style.color = '#f87171'; status.textContent = '❌ ' + err.message; }
+                if (btn) { btn.disabled = false; btn.textContent = '🎙️ Transcribe to Script'; }
+            }
+        }
+
+        function _riEsc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
         function closeResolveInspector() {
             const modal = document.getElementById('resolveInspectorModal');
             if (modal) modal.style.display = 'none';
@@ -5375,6 +5731,17 @@ Thank you for watching!`;
         function refreshOutputDirPreview() {
             const strip = document.getElementById('outputDirStrip');
             const display = document.getElementById('outputDirDisplay');
+
+            // If user explicitly saved a path this session, show it directly
+            // (don't auto-append the script title to their chosen directory)
+            if (window._outputDirUserPath) {
+                if (strip) strip.style.display = 'block';
+                if (display) display.textContent = window._outputDirUserPath;
+                window.currentOutputDir = window._outputDirUserPath;
+                window.currentOutputDirBase = window._outputDirUserPath;
+                return;
+            }
+
             const configuredBaseDir = _getOutputDirBase();
             const title = _getOutputDirPreviewTitle();
             const defaultRootPrefix = _getDefaultRootPrefix(configuredBaseDir);
@@ -5388,23 +5755,9 @@ Thank you for watching!`;
 
             if (strip) strip.style.display = 'block';
             if (display) display.textContent = previewDir || '(not set)';
-
-            // Persist preview path for backend processing, but do not create dirs here.
-            if (previewDir) {
-                clearTimeout(_outputDirSaveTimer);
-                _outputDirSaveTimer = setTimeout(async () => {
-                    try {
-                        await fetch('/api/output-dir', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ output_dir: previewDir }),
-                        });
-                        window.currentOutputDirBase = previewDir;
-                    } catch (e) {
-                        // silent — preview remains visible even if save fails
-                    }
-                }, 450);
-            }
+            // NOTE: preview is visual-only. Do NOT auto-POST to /api/output-dir here
+            // — that overwrites the user's explicitly saved path. Persistence happens
+            // only via saveOutputDir(), clearOutputDir(), or dirBrowserSelect().
         }
 
         async function loadOutputDir() {
@@ -5413,6 +5766,9 @@ Thank you for watching!`;
                 const data = await resp.json();
                 const dir = (data && data.success && data.output_dir) ? data.output_dir : '';
                 window.currentOutputDirBase = dir;
+                // Any persisted path is treated as an explicit user choice — lock it
+                // so script-title auto-append doesn't override it on reload.
+                if (dir) window._outputDirUserPath = dir;
                 refreshOutputDirPreview();
             } catch (e) {
                 console.warn('Could not load output dir:', e);
@@ -5459,6 +5815,7 @@ Thank you for watching!`;
                     return;
                 }
                 window.currentOutputDirBase = data.output_dir || '';
+                window._outputDirUserPath = data.output_dir || '';  // lock label to explicit path
                 refreshOutputDirPreview();
                 status.style.color = '#34d399';
                 status.textContent = '✅ Saved: ' + (data.output_dir || '(cleared)');
@@ -5472,6 +5829,7 @@ Thank you for watching!`;
         async function clearOutputDir() {
             const input = document.getElementById('outputDirInput');
             if (input) input.value = '';
+            window._outputDirUserPath = '';  // release lock so auto-preview resumes
             await saveOutputDir();
         }
 
@@ -5535,6 +5893,7 @@ Thank you for watching!`;
             const input = document.getElementById('outputDirInput');
             if (input) input.value = path;
             closeDirBrowser();
+            saveOutputDir();
         }
 
         async function dirBrowserNewFolder() {

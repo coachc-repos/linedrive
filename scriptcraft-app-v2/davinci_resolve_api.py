@@ -3612,6 +3612,151 @@ def create_resolve_project_with_videos(
         }
 
 
+def export_audio_only(output_path: str | None = None, timeline_name: str | None = None,
+                      format_str: str = "wav", codec: str = "LinearPCM",
+                      sample_rate: int = 48000) -> dict:
+    """
+    Render the current (or named) DaVinci Resolve timeline as audio only and
+    save it to *output_path*.
+
+    Args:
+        output_path:   Absolute path for the exported file, WITHOUT extension.
+                       Defaults to ~/Desktop/<project>_audio_<timestamp>
+        timeline_name: Name of the timeline to render. Uses the currently
+                       active timeline if None.
+        format_str:    Resolve render format string.  Common values:
+                           "wav"  – uncompressed PCM (default)
+                           "mp3"  – MPEG Layer 3
+                           "aiff" – AIFF / AIFC
+                           "aac"  – AAC inside an M4A container
+        codec:         Resolve codec string matching the format.
+                           WAV  → "LinearPCM"   (24-bit)
+                           MP3  → "MP3"
+                           AIFF → "AIFF"
+                           AAC  → "AAC"
+        sample_rate:   Sample rate in Hz (48000 or 44100 are most common).
+
+    Returns:
+        dict with keys:
+            success (bool)
+            output_file (str)  – final rendered file path (if success)
+            message  (str)
+            error    (str)     – only present on failure
+    """
+    import time
+
+    try:
+        import DaVinciResolveScript as dvr_script
+        resolve = dvr_script.scriptapp("Resolve")
+        if resolve is None:
+            return {"success": False, "error": "DaVinci Resolve is not running or not reachable."}
+
+        project_manager = resolve.GetProjectManager()
+        project = project_manager.GetCurrentProject()
+        if project is None:
+            return {"success": False, "error": "No project is currently open in DaVinci Resolve."}
+
+        project_name = project.GetName()
+
+        # ── Select timeline ────────────────────────────────────────────────
+        if timeline_name:
+            tl = None
+            for i in range(1, project.GetTimelineCount() + 1):
+                t = project.GetTimelineByIndex(i)
+                if t and t.GetName() == timeline_name:
+                    tl = t
+                    break
+            if tl is None:
+                return {"success": False, "error": f"Timeline '{timeline_name}' not found."}
+            project.SetCurrentTimeline(tl)
+        else:
+            tl = project.GetCurrentTimeline()
+            if tl is None:
+                return {"success": False, "error": "No timeline is active. Open a timeline first."}
+
+        tl_name = tl.GetName()
+        _log(f"🎵 Audio export: project='{project_name}'  timeline='{tl_name}'")
+
+        # ── Build output path ──────────────────────────────────────────────
+        if not output_path:
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            safe_name = re.sub(r'[^\w\-]', '_', project_name)[:40]
+            output_path = str(Path.home() / "Desktop" / f"{safe_name}_audio_{ts}")
+
+        output_path = str(Path(output_path))  # normalise
+        output_dir = str(Path(output_path).parent)
+        output_filename = Path(output_path).name
+
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        _log(f"📁 Output dir: {output_dir}  file: {output_filename}")
+
+        # ── Configure render settings ──────────────────────────────────────
+        # Resolve's SetRenderSettings accepts a flat dict of key/value pairs.
+        settings = {
+            "SelectAllFrames":    True,
+            "TargetDir":          output_dir,
+            "CustomName":         output_filename,
+            "ExportVideo":        False,       # ← audio only
+            "ExportAudio":        True,
+            "AudioCodec":         codec,
+            "AudioSampleRate":    sample_rate,
+            "AudioBitDepth":      24,
+            "FormatWidth":        0,           # ignored for audio-only jobs
+            "FormatHeight":       0,
+        }
+
+        # Switch to the correct render format
+        if not project.SetCurrentRenderFormatAndCodec(format_str, codec):
+            _log(f"⚠️  SetCurrentRenderFormatAndCodec('{format_str}', '{codec}') returned False — "
+                 f"Resolve may still accept the job with a default codec.")
+
+        if not project.SetRenderSettings(settings):
+            return {"success": False,
+                    "error": "SetRenderSettings failed. Check that the format/codec combination is "
+                             "supported by your installed version of DaVinci Resolve."}
+
+        # ── Queue and start render ─────────────────────────────────────────
+        job_id = project.AddRenderJob()
+        if not job_id:
+            return {"success": False, "error": "AddRenderJob failed. Check Render page in Resolve."}
+
+        _log(f"⏳ Render job queued (id={job_id}). Starting …")
+
+        if not project.StartRendering(job_id):
+            project.DeleteRenderJobList()
+            return {"success": False, "error": "StartRendering failed."}
+
+        # Poll until done (max 30 minutes)
+        deadline = time.time() + 1800
+        while time.time() < deadline:
+            time.sleep(3)
+            status = project.GetRenderJobStatus(job_id)
+            job_status = (status or {}).get("JobStatus", "")
+            _log(f"   render status: {job_status}")
+            if job_status in ("Complete", "Cancelled", "Failed"):
+                break
+
+        if job_status != "Complete":
+            return {"success": False,
+                    "error": f"Render ended with status '{job_status}'. Check Resolve's Deliver page."}
+
+        # ── Find actual output file ────────────────────────────────────────
+        # Resolve appends the extension, so locate it.
+        expected = Path(output_dir) / output_filename
+        candidates = list(Path(output_dir).glob(f"{output_filename}*"))
+        actual_file = str(candidates[0]) if candidates else f"{output_path}.{format_str}"
+
+        _log(f"✅ Audio export complete: {actual_file}")
+        return {
+            "success": True,
+            "output_file": actual_file,
+            "message": f"Audio exported from '{tl_name}' → {actual_file}",
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 if __name__ == "__main__":
     # Test the API
     print("🎬 Testing DaVinci Resolve API...")
