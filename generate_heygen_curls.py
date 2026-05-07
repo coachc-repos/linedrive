@@ -73,29 +73,32 @@ def parse_heygen_section(script_path):
 
 
 def generate_curl_command(chapter_title, chapter_content, api_key, template_id):
-    """Generate a curl command for a chapter."""
-    # Escape the content for bash single quotes
-    escaped_content = escape_for_bash_single_quotes(chapter_content)
-    escaped_title = escape_for_bash_single_quotes(chapter_title)
+    """Generate a curl command for a chapter using json.dumps for safe escaping."""
+    import json as _json
 
-    curl_cmd = f"""curl --request POST \\
-     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\
-     --header 'accept: application/json' \\
-     --header 'content-type: application/json' \\
-     --header 'x-api-key: {api_key}' \\
-     --data '{{
-  "caption": false,
-  "title": "{escaped_title}",
-  "variables": {{
-    "script": {{
-      "name": "script",
-      "type": "text",
-      "properties": {{
-        "content": "{escaped_content}"
-      }}
-    }}
-  }}
-}}'"""
+    payload = {
+        "caption": False,
+        "title": chapter_title,
+        "variables": {
+            "script": {
+                "name": "script",
+                "type": "text",
+                "properties": {"content": chapter_content},
+            }
+        },
+    }
+    data_json = _json.dumps(payload, indent=2, ensure_ascii=False)
+    # Escape any single quotes in the JSON for safe inclusion inside bash single quotes
+    data_for_bash = data_json.replace("'", "'\\''")
+
+    curl_cmd = (
+        "curl --request POST \\\n"
+        f"     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\\n"
+        "     --header 'accept: application/json' \\\n"
+        "     --header 'content-type: application/json' \\\n"
+        f"     --header 'x-api-key: {api_key}' \\\n"
+        f"     --data '{data_for_bash}'"
+    )
 
     return curl_cmd
 

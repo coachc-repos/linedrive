@@ -461,7 +461,8 @@ def extract_heygen_host_script(script_content: str) -> str:
         r"^\s*\*\*.*OPENING HOOK.*\*\*\s*$",  # Skip "🎬 OPENING HOOK" heading
         r"^\s*\*\*.*CONCLUSION.*\*\*\s*$",  # Skip "📝 CONCLUSION/SUMMARY" heading
         r"^\s*\*\*.*SUMMARY.*\*\*\s*$",  # Skip summary section headings
-        r"^\s*Heading:",  # Skip "Heading:" lines (before conversion)
+        # NOTE: 'Heading:' lines are intentionally KEPT so the curl generator
+        # can use them as chapter boundaries (one curl per chapter).
     ]
 
     # Sections to completely exclude
@@ -621,25 +622,14 @@ def generate_heygen_curl_commands(
         Formatted string with all curl commands
     """
     import re
+    import json as _json
 
-    def escape_for_json_in_bash(text):
-        """Escape text for JSON content inside bash single-quoted string.
+    def shell_single_quote(text: str) -> str:
+        """Escape a string so it can be safely embedded inside bash single quotes.
 
-        Since we use single quotes around the --data payload, we don't need
-        to escape single quotes for bash - they're literal inside double-quoted
-        JSON strings. We only need to escape for JSON.
+        Replaces every ' with '\\'' which closes, escapes the quote, and reopens.
         """
-        # First escape backslashes (must be first!)
-        text = text.replace('\\', '\\\\')
-        # Escape double quotes for JSON
-        text = text.replace('"', '\\"')
-        # Escape newlines and tabs for JSON
-        text = text.replace('\n', '\\n')
-        text = text.replace('\r', '\\r')
-        text = text.replace('\t', '\\t')
-        # Single quotes are fine - they're inside double-quoted JSON strings
-        # which are inside single-quoted bash strings
-        return text
+        return text.replace("'", "'\\''")
 
     def clean_text(text):
         """Clean up line wrapping and extra whitespace."""
@@ -788,6 +778,12 @@ def generate_heygen_curl_commands(
         title = re.sub(r'\s+', ' ', title).strip()
         # Remove leading/trailing hyphens or spaces
         title = title.strip(' -')
+        # Hard length cap so curl titles stay short and HeyGen-friendly.
+        # Truncate at a word boundary; max ~40 chars.
+        MAX_LEN = 40
+        if len(title) > MAX_LEN:
+            truncated = title[:MAX_LEN].rsplit(' ', 1)[0].strip(' -')
+            title = truncated or title[:MAX_LEN].strip(' -')
         return title
 
     for i, chapter in enumerate(chapters, 1):
@@ -797,52 +793,43 @@ def generate_heygen_curl_commands(
         # Shorten the script title for use in curl commands
         short_title = shorten_title(script_title)
 
-        # Build the variables JSON block
-        # The template's voice is already configured — just pass the script text
-        def build_variables_json(escaped_content):
-            return f"""    "script": {{
-      "name": "script",
-      "type": "text",
-      "properties": {{
-        "content": "{escaped_content}"
-      }}
-    }}"""
-
-        def build_curl(escaped_title, escaped_content):
-            variables_block = build_variables_json(escaped_content)
-            return f"""curl --request POST \\
-     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\
-     --header 'accept: application/json' \\
-     --header 'content-type: application/json' \\
-     --header 'x-api-key: {api_key}' \\
-     --data '{{
-  "caption": false,
-  "title": "{escaped_title}",
-  "variables": {{
-{variables_block}
-  }}
-}}'
-
-"""
+        # Build the curl with json.dumps for bullet-proof JSON escaping,
+        # then shell-escape the resulting payload for bash single quotes.
+        def build_curl(title_text: str, content_text: str) -> str:
+            payload = {
+                "caption": False,
+                "title": title_text,
+                "variables": {
+                    "script": {
+                        "name": "script",
+                        "type": "text",
+                        "properties": {
+                            "content": content_text,
+                        },
+                    }
+                },
+            }
+            data_json = _json.dumps(payload, indent=2, ensure_ascii=False)
+            data_for_bash = shell_single_quote(data_json)
+            return (
+                "curl --request POST \\\n"
+                f"     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\\n"
+                "     --header 'accept: application/json' \\\n"
+                "     --header 'content-type: application/json' \\\n"
+                f"     --header 'x-api-key: {api_key}' \\\n"
+                f"     --data '{data_for_bash}'\n\n"
+            )
 
         # Generate Part 1 curl command
-        # Use shortened title + chapter number
-        escaped_title_part1 = escape_for_json_in_bash(f"{short_title}-Ch{i}p1")
-        escaped_content_part1 = escape_for_json_in_bash(part1)
-
-        curl_commands.append(build_curl(escaped_title_part1, escaped_content_part1))
+        title_part1 = f"{short_title}-Ch{i}p1"
+        curl_commands.append(build_curl(title_part1, part1))
 
         # Generate duplicate of ONLY the first chapter's Part 1 command
         if i == 1:
-            escaped_title_part1b = escape_for_json_in_bash(
-                f"{short_title}-Ch{i}p1b")
-            curl_commands.append(build_curl(escaped_title_part1b, escaped_content_part1))
+            curl_commands.append(build_curl(f"{short_title}-Ch{i}p1b", part1))
 
         # Generate Part 2 curl command
-        escaped_title_part2 = escape_for_json_in_bash(f"{short_title}-Ch{i}p2")
-        escaped_content_part2 = escape_for_json_in_bash(part2)
-
-        curl_commands.append(build_curl(escaped_title_part2, escaped_content_part2))
+        curl_commands.append(build_curl(f"{short_title}-Ch{i}p2", part2))
 
     curl_commands.append("=" * 80)
     curl_commands.append(

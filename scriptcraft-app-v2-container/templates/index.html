@@ -868,11 +868,11 @@
             
             <div class="toolbar-section">
                 <span class="toolbar-label">Export</span>
-                <button class="toolbar-btn" onclick="exportToWord()" id="wordBtn" style="display:none;" title="Download as Word document">
+                <button class="toolbar-btn" onclick="exportToWord()" id="wordBtn" style="display:none;" title="Export to Word">
                     <span class="toolbar-icon">📄</span>
                     <span class="toolbar-text">Word</span>
                 </button>
-                <button class="toolbar-btn" onclick="createResolveProject()" id="davinciBtn" style="display:none !important;" title="DaVinci project creation disabled in cloud build" data-container-disabled="true">
+                <button class="toolbar-btn" onclick="createResolveProject()" id="davinciBtn" style="display:none;" title="Create DaVinci Project">
                     <span class="toolbar-icon">🎬</span>
                     <span class="toolbar-text">DaVinci</span>
                 </button>
@@ -902,7 +902,7 @@
                     <span class="toolbar-icon">📁</span>
                     <span class="toolbar-text">Load Script</span>
                 </button>
-                <button class="toolbar-btn" onclick="testThumbnails()" id="testThumbBtn" title="Test Thumbnails" style="display:none !important;" data-container-disabled="true">
+                <button class="toolbar-btn" onclick="testThumbnails()" id="testThumbBtn" title="Test Thumbnails">
                     <span class="toolbar-icon">🖼️</span>
                     <span class="toolbar-text">Thumbnails</span>
                 </button>
@@ -910,21 +910,32 @@
                     <span class="toolbar-icon">🤖</span>
                     <span class="toolbar-text">Grok Test</span>
                 </button>
-                <!-- Container build: DaVinci Resolve buttons (Inspect Resolve, Render Audio, Swipe Test) removed -->
+                <button class="toolbar-btn" onclick="openResolveInspector()" title="Inspect current DaVinci Resolve timeline">
+                    <span class="toolbar-icon">🔍</span>
+                    <span class="toolbar-text">Inspect Resolve</span>
+                </button>
+                <button class="toolbar-btn" onclick="openRenderAudioModal()" title="Render audio-only WAV from a DaVinci Resolve timeline">
+                    <span class="toolbar-icon">🎵</span>
+                    <span class="toolbar-text">Render Audio</span>
+                </button>
+                <button class="toolbar-btn" onclick="openSwipeTestModal()" title="Create a fresh Resolve timeline with one broll clip and apply the swipe Fusion comp for fast iteration">
+                    <span class="toolbar-icon">🌬️</span>
+                    <span class="toolbar-text">Swipe Test</span>
+                </button>
                 <button class="toolbar-btn" onclick="openApiKeysModal()" title="Manage API Keys">
                     <span class="toolbar-icon">🔑</span>
                     <span class="toolbar-text">API Keys</span>
                 </button>
-                <button class="toolbar-btn" onclick="openOutputDirModal()" id="outputDirBtn" style="display:none !important;" title="Output directory disabled in cloud build" data-container-disabled="true">
+                <button class="toolbar-btn" onclick="openOutputDirModal()" id="outputDirBtn" title="Set base output directory for saving all generated artifacts">
                     <span class="toolbar-icon">📁</span>
                     <span class="toolbar-text">Output Dir</span>
                 </button>
-                <button class="toolbar-btn" onclick="saveAllOutputs()" id="saveAllOutputsBtn" title="Save to local disk disabled in cloud build" style="display:none !important;" data-container-disabled="true">
+                <button class="toolbar-btn" onclick="saveAllOutputs()" id="saveAllOutputsBtn" title="Save current results (script, images, thumbnails, videos, EDL, curls) to the configured Output Directory" style="display:none;">
                     <span class="toolbar-icon">💾</span>
                     <span class="toolbar-text">Save All</span>
                 </button>
                 <!-- Test Compare button hidden - not needed for production
-                <button class="toolbar-btn" onclick="testComparisons()" id="testCompBtn" title="Test Comparisons Tab" style="display:none !important;" data-container-disabled="true">
+                <button class="toolbar-btn" onclick="testComparisons()" id="testCompBtn" title="Test Comparisons Tab">
                     <span class="toolbar-icon">📊</span>
                     <span class="toolbar-text">Test Compare</span>
                 </button>
@@ -4340,7 +4351,9 @@ Time management content here...`;
         
         // Poll video status function
         async function pollVideoStatus(videoId, apiKey, statusCell, index) {
-            const maxPolls = 120; // 10 minutes max (5 sec * 120)
+            const POLL_INTERVAL_MS = 10000; // 10 sec between checks
+            const MAX_WAIT_MS = 45 * 60 * 1000; // 45 minutes
+            const maxPolls = Math.ceil(MAX_WAIT_MS / POLL_INTERVAL_MS); // 270
             let pollCount = 0;
             
             statusCell.innerHTML = '🎬 Checking...';
@@ -4393,7 +4406,10 @@ Time management content here...`;
                             statusCell.title = result.error || 'Video generation failed';
                             
                         } else if (result.status === 'processing' || result.status === 'pending') {
-                            statusCell.innerHTML = `🎬 ${result.status} (${pollCount * 5}s)`;
+                            const elapsedSec = pollCount * (POLL_INTERVAL_MS / 1000);
+                            const mm = Math.floor(elapsedSec / 60);
+                            const ss = String(Math.floor(elapsedSec % 60)).padStart(2, '0');
+                            statusCell.innerHTML = `🎬 ${result.status} (${mm}:${ss})`;
                             statusCell.style.color = '#3b82f6';
                             
                         } else {
@@ -4418,9 +4434,9 @@ Time management content here...`;
                     clearInterval(pollInterval);
                     statusCell.innerHTML = '⏱️ Timeout';
                     statusCell.style.color = '#f59e0b';
-                    statusCell.title = 'Status check timed out after 10 minutes';
+                    statusCell.title = 'Status check timed out after 45 minutes';
                 }
-            }, 5000); // Poll every 5 seconds
+            }, POLL_INTERVAL_MS);
         }
         
         // Download HeyGen video function

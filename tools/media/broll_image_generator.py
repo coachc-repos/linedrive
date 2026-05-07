@@ -226,7 +226,10 @@ Generate an image showing: {search_term} with these specific details: {descripti
         self,
         broll_table: str,
         script_title: str,
-        max_images: int = None
+        max_images: int = None,
+        progress_callback=None,
+        cancel_check=None,
+        output_dir=None,
     ) -> Dict[str, Any]:
         """
         Generate images for all B-roll entries
@@ -235,10 +238,19 @@ Generate an image showing: {search_term} with these specific details: {descripti
             broll_table: Markdown table text with B-roll entries
             script_title: Script title for context
             max_images: Optional limit on number of images to generate
+            progress_callback: Optional callable(message, current, total, image_info=None)
+                invoked after each image attempt so the UI can show live progress.
+            cancel_check: Optional callable() -> bool. When it returns True the loop
+                exits early and returns partial results with cancelled=True.
+            output_dir: Optional Path/str overriding the default output directory.
 
         Returns:
             Dict with success status, images list, and output directory
         """
+        # Allow per-call override of the output directory
+        if output_dir is not None:
+            self.output_dir = Path(output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n🎬 B-ROLL IMAGE GENERATION")
         print("=" * 60)
         print(f"📋 Script: {script_title}")
@@ -274,8 +286,36 @@ Generate an image showing: {search_term} with these specific details: {descripti
 
         # Generate one image per entry
         images = []
+        cancelled = False
+        total = len(entries)
         import time
         for idx, entry in enumerate(entries, 1):
+            if cancel_check is not None:
+                try:
+                    if cancel_check():
+                        cancelled = True
+                        print("🛑 B-roll image generation cancelled by user")
+                        if progress_callback is not None:
+                            try:
+                                progress_callback(
+                                    "🛑 B-roll image generation cancelled",
+                                    idx - 1, total, None,
+                                )
+                            except Exception:
+                                pass
+                        break
+                except Exception:
+                    pass
+
+            if progress_callback is not None:
+                try:
+                    progress_callback(
+                        f"🎨 Generating image {idx}/{total}: {entry['search_term']}",
+                        idx - 1, total, None,
+                    )
+                except Exception:
+                    pass
+
             result = self.generate_broll_image(
                 search_term=entry['search_term'],
                 description=entry['description'],
@@ -288,6 +328,16 @@ Generate an image showing: {search_term} with these specific details: {descripti
             if result and result.get('success'):
                 images.append(result)
 
+            if progress_callback is not None:
+                try:
+                    progress_callback(
+                        f"✅ Image {idx}/{total} complete" if (result and result.get('success'))
+                        else f"⚠️ Image {idx}/{total} failed",
+                        idx, total, result,
+                    )
+                except Exception:
+                    pass
+
             # Small delay between generations to avoid rate limiting
             time.sleep(1)
 
@@ -299,6 +349,7 @@ Generate an image showing: {search_term} with these specific details: {descripti
 
         return {
             'success': True,
+            'cancelled': cancelled,
             'images': images,
             'output_dir': str(self.output_dir),
             'total_generated': len(images),

@@ -4351,7 +4351,9 @@ Time management content here...`;
         
         // Poll video status function
         async function pollVideoStatus(videoId, apiKey, statusCell, index) {
-            const maxPolls = 120; // 10 minutes max (5 sec * 120)
+            const POLL_INTERVAL_MS = 10000; // 10 sec between checks
+            const MAX_WAIT_MS = 45 * 60 * 1000; // 45 minutes
+            const maxPolls = Math.ceil(MAX_WAIT_MS / POLL_INTERVAL_MS); // 270
             let pollCount = 0;
             
             statusCell.innerHTML = '🎬 Checking...';
@@ -4404,7 +4406,10 @@ Time management content here...`;
                             statusCell.title = result.error || 'Video generation failed';
                             
                         } else if (result.status === 'processing' || result.status === 'pending') {
-                            statusCell.innerHTML = `🎬 ${result.status} (${pollCount * 5}s)`;
+                            const elapsedSec = pollCount * (POLL_INTERVAL_MS / 1000);
+                            const mm = Math.floor(elapsedSec / 60);
+                            const ss = String(Math.floor(elapsedSec % 60)).padStart(2, '0');
+                            statusCell.innerHTML = `🎬 ${result.status} (${mm}:${ss})`;
                             statusCell.style.color = '#3b82f6';
                             
                         } else {
@@ -4429,9 +4434,9 @@ Time management content here...`;
                     clearInterval(pollInterval);
                     statusCell.innerHTML = '⏱️ Timeout';
                     statusCell.style.color = '#f59e0b';
-                    statusCell.title = 'Status check timed out after 10 minutes';
+                    statusCell.title = 'Status check timed out after 45 minutes';
                 }
-            }, 5000); // Poll every 5 seconds
+            }, POLL_INTERVAL_MS);
         }
         
         // Download HeyGen video function

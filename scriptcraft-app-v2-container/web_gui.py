@@ -1947,11 +1947,18 @@ async def process_existing_script(
         script_title = "Untitled Script"
         logger.info("📰 Extracting title from script content...")
 
-        # 1) Prefer an explicit "Heading:" line (first one wins)
-        heading_match = re.search(
-            r'^\s*Heading:\s*(.+)$', script_content, re.MULTILINE | re.IGNORECASE)
+        # 1) Prefer an explicit "Heading:" line (first one wins), but skip
+        #    chapter-style headings like "Heading: Chapter 1 - ..." so the
+        #    real script title (top-of-doc) can be used instead.
+        heading_match = None
+        for _hm in re.finditer(r'^\s*Heading:\s*(.+)$', script_content, re.MULTILINE | re.IGNORECASE):
+            _val = _hm.group(1).strip().strip('*').strip()
+            if re.match(r'^chapter\s+\d+\b', _val, re.IGNORECASE):
+                continue
+            heading_match = _hm
+            break
         if heading_match:
-            script_title = heading_match.group(1).strip()
+            script_title = heading_match.group(1).strip().strip('*').strip()
             logger.info(f"📰 ✅ Found 'Heading:' title: '{script_title}'")
         else:
             # 2) Fall back to first markdown H1, but skip known analysis/report headings
@@ -1959,25 +1966,37 @@ async def process_existing_script(
                 'flow analysis', 'flow analysis report', 'analysis report',
                 'hook summary', 'b-roll', 'broll', 'thumbnail', 'demo package',
                 'youtube details', 'heygen', 'curl commands',
+                'opening hook', 'hook options',
             )
-            for m in re.finditer(r'^#\s+(.+)$', script_content, re.MULTILINE):
+            for m in re.finditer(r'^#+\s+(.+)$', script_content, re.MULTILINE):
                 candidate = m.group(1).strip()
                 normalized = re.sub(r'[^a-z0-9 ]+', ' ',
                                     candidate.lower()).strip()
                 if any(p in normalized for p in _SKIP_TITLE_PATTERNS):
+                    continue
+                # Skip chapter headings like 'Chapter 1 - ...' or 'Chapter 2:'
+                if re.match(r'^chapter\s+\d+\b', normalized):
                     continue
                 script_title = candidate
                 logger.info(f"📰 ✅ Found H1 title: '{script_title}'")
                 break
             else:
                 lines = script_content.split('\n')
-                for line in lines[:10]:
+                for raw_line in lines[:15]:
+                    line = raw_line.strip()
+                    # Strip surrounding markdown bold/italic wrappers so a line
+                    # like '**Direct Video - Story Power with AI**' is usable.
+                    line = re.sub(r'^[\*_]+\s*', '', line)
+                    line = re.sub(r'\s*[\*_]+$', '', line)
                     line = line.strip()
-                    if not line or line.startswith(('#', '*', '-', '[')):
+                    if not line or line.startswith(('#', '-', '[')):
                         continue
                     if all(c in '_=-~' for c in line):
                         continue
                     if len(line) > 150:
+                        continue
+                    # Skip chapter headings
+                    if re.match(r'^chapter\s+\d+\b', line, re.IGNORECASE):
                         continue
                     script_title = line
                     logger.info(f"📰 ✅ Using line as title: '{script_title}'")
@@ -2455,7 +2474,11 @@ async def process_existing_script(
             try:
                 from console_ui.text_processing import extract_heygen_host_script
 
-                heygen_script = extract_heygen_host_script(final_output)
+                # Extract from the cleaned source script ONLY (not final_output) so the
+                # HeyGen text never includes the prepended OPENING HOOK OPTIONS block,
+                # the OPTION 1/2/3 "Host:" hooks, the opening statement, or any
+                # generated headers added below.
+                heygen_script = extract_heygen_host_script(cleaned_script)
                 # Fallback: if no Host: markers found, use cleaned script directly
                 if not heygen_script:
                     logger.info("⚠️ No Host: markers found - using full script for HeyGen section")
@@ -2487,7 +2510,7 @@ async def process_existing_script(
                 )
 
                 if not heygen_script:
-                    heygen_script = extract_heygen_host_script(final_output)
+                    heygen_script = extract_heygen_host_script(cleaned_script)
 
                 # Fallback: if no Host: markers found, use the cleaned script directly
                 if not heygen_script:
