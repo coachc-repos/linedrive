@@ -2198,6 +2198,50 @@ Time management content here...`;
             }
         }
 
+        async function saveYouTubeDetailsAsWord() {
+            const content = window._currentYoutubeDetails || '';
+            if (!content) {
+                alert('No YouTube details to save. Process a script with the YouTube checkbox first.');
+                return;
+            }
+            const btn = event.target;
+            const orig = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '⏳ Saving...';
+            try {
+                const response = await fetch('/export_word', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        script_content: content,
+                        title: 'YouTube_Upload_Details'
+                    })
+                });
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'YouTube_Upload_Details.docx';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    btn.textContent = '✅ Saved!';
+                } else {
+                    const err = await response.json().catch(() => ({}));
+                    alert('❌ Failed to save: ' + (err.error || response.statusText));
+                    btn.textContent = orig;
+                }
+            } catch (e) {
+                alert('❌ Error saving Word document: ' + e.message);
+                btn.textContent = orig;
+            } finally {
+                btn.disabled = false;
+                setTimeout(() => { btn.textContent = orig; }, 2000);
+            }
+        }
+
         function copyYouTubeDetails() {
             const content = window._currentYoutubeDetails || '';
             if (!content) return;
@@ -2851,7 +2895,10 @@ Time management content here...`;
                 html += '<div id="youtubeDetailsTab" class="tab-content">';
                 html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">';
                 html += '<h3 style="margin:0;">📺 YouTube Upload Details</h3>';
+                html += '<div style="display:flex; gap:8px;">';
                 html += '<button onclick="copyYouTubeDetails()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">📋 Copy All</button>';
+                html += '<button onclick="saveYouTubeDetailsAsWord()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">💾 Save as Word</button>';
+                html += '</div>';
                 html += '</div>';
                 html += `<div class="markdown-content" id="youtubeDetailsContent"></div>`;
                 html += '</div>';
