@@ -6703,6 +6703,9 @@ def api_transcribe_audio_upload():
     Returns: { success, session_id, stream_url }
     Stream events identical to /api/transcribe-audio/progress/<session_id>.
     """
+    import tempfile
+    import uuid
+    import shutil as _shutil
     try:
         if "file" not in request.files:
             return jsonify({"success": False, "error": "No file uploaded (expected form field 'file')"}), 400
