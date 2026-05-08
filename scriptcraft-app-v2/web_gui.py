@@ -6765,29 +6765,178 @@ def api_transcribe_audio_upload():
 # ---------------------------------------------------------------------------
 # Finished Videos Gallery
 # ---------------------------------------------------------------------------
+# When FINISHED_VIDEOS_BLOB_CONTAINER is set, list/stream from Azure Blob
+# Storage instead of the local iCloud folder. Auth uses DefaultAzureCredential
+# (system-assigned managed identity in Container Apps; az login locally) and
+# returns short-lived user-delegation SAS URLs so the browser streams the
+# video directly from Azure with native HTTP Range support.
 FINISHED_VIDEOS_ROOT = Path(
     os.path.expanduser(
         "~/Library/Mobile Documents/com~apple~CloudDocs/Desktop/Podcast/Videos/Final"
     )
 ).resolve()
+FINISHED_VIDEOS_BLOB_ACCOUNT = os.environ.get(
+    "FINISHED_VIDEOS_BLOB_ACCOUNT", "linedrivestorage"
+)
+FINISHED_VIDEOS_BLOB_CONTAINER = os.environ.get(
+    "FINISHED_VIDEOS_BLOB_CONTAINER", ""
+).strip()
+FINISHED_VIDEOS_SAS_MINUTES = int(
+    os.environ.get("FINISHED_VIDEOS_SAS_MINUTES", "120")
+)
 _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+_MIME_MAP = {
+    ".mp4": "video/mp4",
+    ".m4v": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+}
+# Cached user-delegation key (refreshed ~hourly)
+_udk_cache: "dict[str, object]" = {"key": None, "expires": 0.0}
+
+
+def _finished_videos_blob_service():
+    from azure.identity import DefaultAzureCredential
+    from azure.storage.blob import BlobServiceClient
+    account_url = f"https://{FINISHED_VIDEOS_BLOB_ACCOUNT}.blob.core.windows.net"
+    return BlobServiceClient(account_url=account_url, credential=DefaultAzureCredential())
+
+
+def _get_user_delegation_key():
+    import time as _t
+    now = _t.time()
+    if _udk_cache["key"] and now < float(_udk_cache["expires"]) - 300:
+        return _udk_cache["key"]
+    from datetime import datetime, timedelta, timezone
+    svc = _finished_videos_blob_service()
+    start = datetime.now(timezone.utc) - timedelta(minutes=5)
+    expiry = datetime.now(timezone.utc) + timedelta(hours=2)
+    key = svc.get_user_delegation_key(key_start_time=start, key_expiry_time=expiry)
+    _udk_cache["key"] = key
+    _udk_cache["expires"] = expiry.timestamp()
+    return key
+
+
+def _blob_sas_url(blob_name: str) -> str:
+    from datetime import datetime, timedelta, timezone
+    from urllib.parse import quote as _q
+    from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+    udk = _get_user_delegation_key()
+    expiry = datetime.now(timezone.utc) + timedelta(minutes=FINISHED_VIDEOS_SAS_MINUTES)
+    sas = generate_blob_sas(
+        account_name=FINISHED_VIDEOS_BLOB_ACCOUNT,
+        container_name=FINISHED_VIDEOS_BLOB_CONTAINER,
+        blob_name=blob_name,
+        user_delegation_key=udk,
+        permission=BlobSasPermissions(read=True),
+        expiry=expiry,
+    )
+    encoded = "/".join(_q(seg) for seg in blob_name.split("/"))
+    return (
+        f"https://{FINISHED_VIDEOS_BLOB_ACCOUNT}.blob.core.windows.net/"
+        f"{FINISHED_VIDEOS_BLOB_CONTAINER}/{encoded}?{sas}"
+    )
+
+
+def _list_finished_videos_from_blob():
+    """Returns (items, source_label) by listing blobs in the configured container.
+
+    Groups by the first path segment ('folder'); picks the first video blob in
+    each group. Loose root-level video blobs become their own cards.
+    """
+    svc = _finished_videos_blob_service()
+    container = svc.get_container_client(FINISHED_VIDEOS_BLOB_CONTAINER)
+    folders: "dict[str, list]" = {}
+    loose: list = []
+    for b in container.list_blobs():
+        name = b.name
+        if not name or name.endswith("/"):
+            continue
+        ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+        if ext not in _VIDEO_EXTS:
+            continue
+        if "/" in name:
+            folder = name.split("/", 1)[0]
+            folders.setdefault(folder, []).append(b)
+        else:
+            loose.append(b)
+
+    items = []
+    for folder in sorted(folders.keys(), key=str.lower):
+        blobs = sorted(folders[folder], key=lambda x: x.name.lower())
+        b = blobs[0]
+        size = getattr(b, "size", 0) or 0
+        mtime = 0.0
+        try:
+            if getattr(b, "last_modified", None):
+                mtime = b.last_modified.timestamp()
+        except Exception:  # noqa: BLE001
+            mtime = 0.0
+        ext = b.name.rsplit(".", 1)[-1].lower()
+        items.append({
+            "title": folder,
+            "filename": b.name.rsplit("/", 1)[-1],
+            "rel_path": b.name,
+            "ext": ext,
+            "size": size,
+            "mtime": mtime,
+            "stream_url": _blob_sas_url(b.name),
+        })
+    for b in sorted(loose, key=lambda x: x.name.lower()):
+        size = getattr(b, "size", 0) or 0
+        mtime = 0.0
+        try:
+            if getattr(b, "last_modified", None):
+                mtime = b.last_modified.timestamp()
+        except Exception:  # noqa: BLE001
+            mtime = 0.0
+        ext = b.name.rsplit(".", 1)[-1].lower()
+        stem = b.name.rsplit(".", 1)[0]
+        items.append({
+            "title": stem,
+            "filename": b.name,
+            "rel_path": b.name,
+            "ext": ext,
+            "size": size,
+            "mtime": mtime,
+            "stream_url": _blob_sas_url(b.name),
+        })
+    label = (
+        f"azure://{FINISHED_VIDEOS_BLOB_ACCOUNT}/"
+        f"{FINISHED_VIDEOS_BLOB_CONTAINER}"
+    )
+    return items, label
 
 
 @app.route("/api/finished-videos", methods=["GET"])
 def api_finished_videos():
-    """List subfolders under the Finished Videos root that contain a video.
-
-    Returns one card per immediate subfolder (uses the first video file inside).
-    Loose video files at the root are also returned as their own card.
-    """
+    """List finished videos (Azure Blob if configured, else local iCloud folder)."""
     from urllib.parse import quote
     try:
+        if FINISHED_VIDEOS_BLOB_CONTAINER:
+            try:
+                items, label = _list_finished_videos_from_blob()
+                return jsonify({"success": True, "root": label,
+                                "source": "blob", "videos": items})
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"❌ blob listing failed: {e}", exc_info=True)
+                return jsonify({
+                    "success": False,
+                    "error": f"Azure blob listing failed: {e}",
+                    "root": (f"azure://{FINISHED_VIDEOS_BLOB_ACCOUNT}/"
+                             f"{FINISHED_VIDEOS_BLOB_CONTAINER}"),
+                    "source": "blob",
+                    "videos": [],
+                }), 500
+
         root = FINISHED_VIDEOS_ROOT
         if not root.exists() or not root.is_dir():
             return jsonify({
                 "success": False,
                 "error": f"Finished videos folder not found: {root}",
                 "root": str(root),
+                "source": "local",
                 "videos": [],
             }), 404
 
@@ -6796,7 +6945,6 @@ def api_finished_videos():
             if entry.name.startswith("."):
                 continue
             if entry.is_dir():
-                # First video inside, sorted by name
                 vids = sorted(
                     [p for p in entry.iterdir()
                      if p.is_file() and p.suffix.lower() in _VIDEO_EXTS
@@ -6838,11 +6986,8 @@ def api_finished_videos():
                     "stream_url": f"/api/finished-videos/file?path={quote(rel)}",
                 })
 
-        return jsonify({
-            "success": True,
-            "root": str(root),
-            "videos": items,
-        })
+        return jsonify({"success": True, "root": str(root),
+                        "source": "local", "videos": items})
     except Exception as e:
         logger.error(f"❌ /api/finished-videos failed: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
@@ -6850,13 +6995,12 @@ def api_finished_videos():
 
 @app.route("/api/finished-videos/file", methods=["GET"])
 def api_finished_videos_file():
-    """Stream a video from the Finished Videos root with HTTP Range support."""
+    """Stream a local video file (used in local mode only)."""
     try:
         rel = request.args.get("path", "").strip()
         if not rel:
             return jsonify({"success": False, "error": "Missing 'path' query param"}), 400
         root = FINISHED_VIDEOS_ROOT
-        # Resolve and ensure it stays inside the root (prevents path traversal)
         candidate = (root / rel).resolve()
         try:
             candidate.relative_to(root)
@@ -6866,16 +7010,7 @@ def api_finished_videos_file():
             return jsonify({"success": False, "error": "File not found"}), 404
         if candidate.suffix.lower() not in _VIDEO_EXTS:
             return jsonify({"success": False, "error": "Not a supported video type"}), 400
-
-        mime_map = {
-            ".mp4": "video/mp4",
-            ".m4v": "video/mp4",
-            ".mov": "video/quicktime",
-            ".webm": "video/webm",
-            ".mkv": "video/x-matroska",
-        }
-        mimetype = mime_map.get(candidate.suffix.lower(), "application/octet-stream")
-        # send_file with conditional=True handles Range requests for seeking.
+        mimetype = _MIME_MAP.get(candidate.suffix.lower(), "application/octet-stream")
         return send_file(str(candidate), mimetype=mimetype, conditional=True)
     except Exception as e:
         logger.error(f"❌ /api/finished-videos/file failed: {e}", exc_info=True)
