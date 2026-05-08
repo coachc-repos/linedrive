@@ -260,6 +260,89 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         - Pinned comment suggestions
         - Engagement strategies
 
+        ## 🎬 STUDIO DETAILS (copy-paste ready into YouTube Studio)
+        Emit concrete recommended values for each Studio field, derived from the script.
+        Do NOT write generic instructions — fill in the actual value or recommendation.
+        - Audience — Made for Kids: No / Yes  (REQUIRED — cannot publish without setting this)
+        - Altered content (synthetic media disclosure): Yes — uses AI-generated avatar narration (HeyGen) / No
+          (REQUIRED in Studio. If the script is narrated by a HeyGen avatar, mark Yes.)
+        - Video language: English (United States)
+        - Caption certification: Captions were not substantively edited
+        - Recording date: <today's date if unknown, else date mentioned in script>
+        - Recording location: <city/region if mentioned in script, else leave blank>
+        - License: Standard YouTube License
+        - Allow embedding: Yes
+        - Publish to subscriptions feed and notify subscribers: Yes
+        - Shorts sampling: Allow / Don't allow  (recommend based on whether content has self-contained short clips)
+        - Comments: Allow all / Hold potentially inappropriate for review / Hold all / Disable  (recommend with 1-line reason)
+        - Comment ranking: Top comments
+        - Automatic chapters: OFF  (manual chapters in description take precedence)
+
+        ## 🛡️ AD SUITABILITY SELF-RATING
+        For EACH category below, mark the level (None / Limited) and quote the exact script
+        line that triggered it. If nothing in the script triggers a category, mark "None".
+        - Inappropriate language: None / Limited — "<quote>"
+        - Adult content: None / Limited — "<quote>"
+        - Violence: None / Limited — "<quote>"
+        - Harmful or dangerous acts: None / Limited — "<quote>"
+        - Hateful & derogatory content: None / Limited — "<quote>"
+        - Recreational drugs & drug-related content: None / Limited — "<quote>"
+        - Firearms-related content: None / Limited — "<quote>"
+        - Controversial issues & sensitive events: None / Limited — "<quote>"
+        - Tobacco-related content: None / Limited — "<quote>"
+        Overall expected rating: Suitable for all advertisers / Limited or no ads — <reason>
+
+        ## 💰 MONETIZATION (skip if channel is not in YPP)
+        - Monetization: On / Off (recommend with reason based on content + ad suitability)
+        - Ad formats to enable: Display, Overlay, Skippable video ads, Non-skippable video ads, Bumper, Sponsored cards
+        - Ad formats to disable for this video: <list any that hurt UX for this content, with reason — or "None">
+        - Mid-roll ads: Only applicable if final video length ≥ 8:00.
+          If applicable, recommend specific timestamps that fall on chapter breaks from
+          the TIMESTAMPS section above. Rules:
+            - At least 30 seconds AFTER the intro ends
+            - At least 30 seconds BEFORE the outro / CTA begins
+            - Never mid-sentence — always at a chapter boundary
+            - Maximum 1 mid-roll per ~6 minutes of runtime
+          Format: <mm:ss> (end of "<chapter name>")
+          If video is < 8:00, write: "Not applicable (video under 8:00)."
+
+        ## 🎴 CARDS (Video elements panel)
+        Suggest up to 5 cards. Each card needs a TYPE, TIMESTAMP, and PURPOSE.
+        Card types: Video, Playlist, Channel, Link.
+        Only suggest a card if the script genuinely references something cardable
+        (a tool, a related episode, a channel, etc.). Do not invent links.
+        Format:
+        1. <0:30> Channel — subscribe prompt
+        2. <chapter timestamp> Video — link to <related video name if mentioned, else placeholder>
+        3. <chapter timestamp> Link — link to <tool URL from script>
+        ...
+        If nothing in the script warrants a card beyond #1, write: "Only the subscribe-prompt card recommended."
+
+        ## 👁️ VISIBILITY & SCHEDULING
+        - Privacy: Public / Unlisted / Private  (recommend with 1-line reason)
+        - Schedule: <day of week> <time> <timezone>  (recommend an optimal slot for the target audience timezone)
+        - Premiere: Yes / No  (Yes = good for tutorials, announcements, episodic content;
+          No = evergreen reference content; recommend with 1-line reason)
+        - If Premiere = Yes: countdown 2 minutes, instant Premiere = No
+        - First-comment pin: <suggested pinned comment text drawn from the script's CTA or a key takeaway>
+
+        ## ✅ PRE-PUBLISH CHECKLIST
+        Render as a markdown checklist (use "- [ ]"). Tailor item values to this video.
+        - [ ] Title ≤ 60 chars and primary keyword in first 40
+        - [ ] Description first 150 chars contain primary keyword
+        - [ ] Tags include primary keyword + 5–10 variations
+        - [ ] Thumbnail uploaded (1280×720 min, < 2MB, matches THUMBNAIL TEXT)
+        - [ ] Made for Kids set (REQUIRED)
+        - [ ] Altered content disclosure set (REQUIRED if HeyGen avatar narration)
+        - [ ] Video language set
+        - [ ] Category + playlists set
+        - [ ] End screen + cards configured
+        - [ ] Subtitles uploaded or auto-captions reviewed
+        - [ ] Ad suitability self-rated
+        - [ ] Mid-roll placements set (if ≥ 8:00)
+        - [ ] Visibility + schedule set
+        - [ ] First comment ready to pin after publish
+
         CRITICAL REQUIREMENTS:
         1. Extract ALL tools/resources mentioned in the script with accurate URLs
         2. Create timestamps based on actual chapter structure in the script
@@ -272,6 +355,13 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         9. Consider the target audience in all recommendations
         10. Ensure accessibility in formatting and structure
         11. Extract ALL AI/ChatGPT prompts verbatim for the Prompts section
+        12. STUDIO DETAILS, AD SUITABILITY, MONETIZATION, CARDS, VISIBILITY, and CHECKLIST sections
+            MUST contain concrete recommended values derived from THIS script — not placeholders
+            or generic instructions. Every line should be ready to copy-paste into YouTube Studio.
+        13. If the script clearly indicates HeyGen avatar narration ("**Host:**" sections targeted
+            at an avatar template), set Altered Content disclosure to Yes in STUDIO DETAILS.
+        14. AD SUITABILITY ratings MUST be evidence-based: quote the script line, or mark None.
+        15. Mid-roll ad timestamps MUST come from the TIMESTAMPS section's chapter boundaries.
 
         SEO OPTIMIZATION PRIORITIES:
         - Front-load keywords in title and description
