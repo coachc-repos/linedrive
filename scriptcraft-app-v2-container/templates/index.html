@@ -1272,11 +1272,12 @@
             <div id="scriptInputSection" style="display: none;">
                 <div class="form-group">
                     <label for="scriptInput">📝 Enter Your Script (Required when Script checkbox is unchecked):</label>
+                    <div id="scriptInputDurationBadge" style="margin:6px 0 8px 0; padding:6px 10px; background:#0f172a; border:1px solid #334155; border-left:3px solid #10b981; border-radius:6px; font-size:12px; color:#10b981; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; display:inline-block;" title="Estimated HeyGen avatar render time at 150 wpm — counts only words inside **Host:** sections">⏱ ~0:00 (0 words @ 150 wpm)</div>
                     <div class="script-input-tabs">
                         <button class="script-input-tab active" id="scriptTabEdit" onclick="switchScriptInputTab('edit')">✏️ Edit</button>
                         <button class="script-input-tab" id="scriptTabPreview" onclick="switchScriptInputTab('preview')">👁 Preview</button>
                     </div>
-                    <textarea id="scriptInput" placeholder="Paste or type your script content here, or click 'Load' button above to load a .md or .txt file..."></textarea>
+                    <textarea id="scriptInput" oninput="updateScriptInputDurationBadge()" placeholder="Paste or type your script content here, or click 'Load' button above to load a .md or .txt file..."></textarea>
                     <div id="scriptInputPreview"></div>
                 </div>
             </div>
@@ -2275,9 +2276,11 @@ Time management content here...`;
                 html += `<tbody>`;
                 html += `<tr>`;
                 html += `<td style="padding: 15px; border: 1px solid #334155; vertical-align: top;">`;
+                html += heygenDurationBadge(comp.original, '#38bdf8');
                 html += `<pre style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace; margin: 0; font-size: 13px; line-height: 1.6;">${escapeHtml(comp.original)}</pre>`;
                 html += `</td>`;
                 html += `<td style="padding: 15px; border: 1px solid #334155; vertical-align: top;">`;
+                html += heygenDurationBadge(comp.revised, '#10b981');
                 html += `<pre style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace; margin: 0; font-size: 13px; line-height: 1.6;">${escapeHtml(comp.revised)}</pre>`;
                 html += `</td>`;
                 html += `</tr>`;
@@ -2297,6 +2300,101 @@ Time management content here...`;
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // Estimate HeyGen video duration from script text.
+        // HeyGen avatars speak ~150 wpm by default. Only **Host:** sections are
+        // narrated by the avatar, so we extract just those blocks and ignore
+        // headings, visual cues, stage directions, and any other speaker labels.
+        function estimateHeyGenDuration(text, wpm) {
+            const rate = (typeof wpm === 'number' && wpm > 0) ? wpm : 150;
+            if (!text || typeof text !== 'string') {
+                return { words: 0, minutes: 0, label: '⏱ ~0:00 @ ' + rate + ' wpm' };
+            }
+
+            // Pull out every Host block. Accepts:
+            //   **Host:**      (markdown-bold, original/processed scripts)
+            //   ### Host:      (heading-style)
+            //   Host:          (plain line, e.g. after .docx extraction)
+            // A block runs from the Host marker until the next speaker/section
+            // label (**Xxx:**, ### Xxx:, or a known cue label like Heading:,
+            // Visual Cue:, B-roll:, etc. — or another Host: line).
+            const hostBlocks = [];
+            const hostRe = /(^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*\**\s*/gi;
+            const stopRe = /(^|\n)\s*(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|visual\s+cue\s*:|b-?roll\s*:|on[- ]screen\s*:|graphic\s*:|sfx\s*:|music\s*:|caption\s*:|cut\s+to\s*:|transition\s*:|narrator\s*:|guest\s*:|voiceover\s*:|vo\s*:)/i;
+            let m;
+            while ((m = hostRe.exec(text)) !== null) {
+                const start = m.index + m[0].length;
+                const rest = text.slice(start);
+                const stop = rest.search(stopRe);
+                hostBlocks.push(stop === -1 ? rest : rest.slice(0, stop));
+            }
+
+            // If no explicit Host markers were found, fall back to the entire
+            // text minus obvious non-spoken cues (so the user still sees a
+            // ballpark estimate). Log so we can tune the matcher.
+            let joined;
+            let usedFallback = false;
+            if (hostBlocks.length === 0) {
+                usedFallback = true;
+                joined = text;
+                try { console.warn('[heygenDuration] no Host markers found, using whole-text fallback. Sample:', text.slice(0, 200)); } catch (_) {}
+            } else {
+                joined = hostBlocks.join('\n');
+            }
+
+            // Strip residual markdown, code, links, timecodes, and stage directions
+            // so only spoken words remain.
+            let clean = joined
+                .replace(/```[\s\S]*?```/g, ' ')
+                .replace(/`[^`]*`/g, ' ')
+                .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+                .replace(/\[[^\]]*\]\([^)]*\)/g, ' ')
+                .replace(/\[\d{1,2}:\d{2}(?::\d{2})?\]/g, ' ')
+                .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')
+                .replace(/\[[^\]]*\]/g, ' ')
+                .replace(/^#+\s.*$/gm, ' ')
+                .replace(/^\s*[-*•]\s+/gm, ' ')
+                .replace(/[|*_>#]/g, ' ');
+            const words = clean.split(/\s+/).filter(Boolean).length;
+            const minutes = words / rate;
+            const totalSec = Math.round(minutes * 60);
+            const mm = Math.floor(totalSec / 60);
+            const ss = totalSec % 60;
+            const mmss = mm + ':' + (ss < 10 ? '0' + ss : ss);
+            const suffix = usedFallback ? ' (whole text — no Host: markers)' : '';
+            return {
+                words: words,
+                minutes: minutes,
+                label: '⏱ ~' + mmss + ' (' + words + ' words @ ' + rate + ' wpm)' + suffix
+            };
+        }
+
+        // Build a small inline badge element from estimateHeyGenDuration().
+        function heygenDurationBadge(text, color) {
+            const est = estimateHeyGenDuration(text);
+            const c = color || '#94a3b8';
+            return '<div style="display:inline-block; margin:0 0 8px 0; padding:3px 8px; '
+                + 'background:#0f172a; border:1px solid #334155; border-radius:12px; '
+                + 'font-size:11px; color:' + c + '; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;" '
+                + 'title="Estimated HeyGen avatar render time at 150 words per minute">'
+                + est.label + '</div>';
+        }
+
+        // Refresh the live duration badge above the main scriptInput textarea.
+        // Called from the textarea's oninput and after we programmatically set
+        // its .value (e.g. file load, paste, examples, restore).
+        function updateScriptInputDurationBadge() {
+            const ta = document.getElementById('scriptInput');
+            const badge = document.getElementById('scriptInputDurationBadge');
+            if (!ta || !badge) {
+                console.warn('[heygenDuration] missing element', { ta: !!ta, badge: !!badge });
+                return;
+            }
+            const val = ta.value || '';
+            const est = estimateHeyGenDuration(val);
+            console.log('[heygenDuration] update', { textareaLen: val.length, words: est.words, label: est.label, sample: val.slice(0, 120) });
+            badge.textContent = est.label;
         }
         
         // Function to create tabbed interface
@@ -2569,7 +2667,10 @@ Time management content here...`;
             
             // Main Script Tab
             html += '<div id="mainScriptTab" class="tab-content active">';
-            html += '<h3>✅ Main Script</h3>';
+            html += '<h3 style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">'
+                  + '<span>✅ Main Script</span>'
+                  + heygenDurationBadge(mainScript, '#10b981')
+                  + '</h3>';
             html += `<div class="markdown-content" id="mainScriptContent"></div>`;
             html += '</div>';
             
@@ -2621,14 +2722,14 @@ Time management content here...`;
             if (flowOriginal && flowImproved) {
                 // Original Script Tab
                 html += '<div id="flowOriginalTab" class="tab-content">';
-                html += '<h3>📄 Original Script (Before Flow Analysis)</h3>';
+                html += '<h3>📄 Original Script (Before Flow Analysis) ' + heygenDurationBadge(flowOriginal, '#38bdf8') + '</h3>';
                 html += '<p style="margin-bottom: 10px; color: #94a3b8;">This is the script before flow and repetition improvements</p>';
                 html += `<div class="markdown-content" id="flowOriginalContent"></div>`;
                 html += '</div>';
                 
                 // Improved Script Tab
                 html += '<div id="flowImprovedTab" class="tab-content">';
-                html += '<h3>✨ Revised Script (After Flow Analysis)</h3>';
+                html += '<h3>✨ Revised Script (After Flow Analysis) ' + heygenDurationBadge(flowImproved, '#10b981') + '</h3>';
                 html += '<p style="margin-bottom: 10px; color: #94a3b8;">This is the improved script with repetitions removed and flow enhanced</p>';
                 if (flowAnalysis) {
                     html += `<div class="markdown-content" style="background: #1e293b; padding: 15px; border-radius: 6px; margin-bottom: 20px;">${marked.parse(flowAnalysis)}</div>`;
@@ -4158,6 +4259,7 @@ Time management content here...`;
 
         function clearContent() {
             document.getElementById('scriptInput').value = '';
+            updateScriptInputDurationBadge();
             switchScriptInputTab('edit'); // reset to Edit tab when clearing
             document.getElementById('createTopic').value = '';
             document.getElementById('createDescription').value = '';
@@ -4726,6 +4828,7 @@ Thank you for watching!`;
                     text = await file.text();
                 }
                 document.getElementById('scriptInput').value = text;
+                updateScriptInputDurationBadge();
 
                 // Loading a script means we should process from script input mode.
                 const checkScript = document.getElementById('checkScript');
@@ -4856,6 +4959,7 @@ Thank you for watching!`;
             if (checkScript) checkScript.checked = true;
             if (checkAll) checkAll.checked = false;
             toggleScriptInput(); // Initialize the UI based on Script checkbox state
+            updateScriptInputDurationBadge(); // Initial HeyGen duration estimate
 
             // Load persisted Grok API key
             try {
@@ -4923,10 +5027,19 @@ Thank you for watching!`;
             ];
             
             checkboxes.forEach(id => {
-                document.getElementById(id).addEventListener('change', function() {
+                const el = document.getElementById(id);
+                if (!el) {
+                    console.warn('[init] checkbox not found:', id);
+                    return;
+                }
+                el.addEventListener('change', function() {
                     // Check if all individual boxes are now checked
-                    const allChecked = checkboxes.every(cbId => document.getElementById(cbId).checked);
-                    document.getElementById('checkAll').checked = allChecked;
+                    const allChecked = checkboxes.every(cbId => {
+                        const cb = document.getElementById(cbId);
+                        return cb ? cb.checked : true;
+                    });
+                    const checkAllEl = document.getElementById('checkAll');
+                    if (checkAllEl) checkAllEl.checked = allChecked;
                     
                     // Update script input visibility if Script checkbox changed
                     if (id === 'checkScript') {
