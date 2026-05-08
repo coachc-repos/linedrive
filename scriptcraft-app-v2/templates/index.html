@@ -918,6 +918,10 @@
                     <span class="toolbar-icon">🎵</span>
                     <span class="toolbar-text">Render Audio</span>
                 </button>
+                <button class="toolbar-btn" onclick="openTranscribeAudioModal()" title="Transcribe a local audio or video file using Whisper">
+                    <span class="toolbar-icon">🎙️</span>
+                    <span class="toolbar-text">Transcribe Audio</span>
+                </button>
                 <button class="toolbar-btn" onclick="openSwipeTestModal()" title="Create a fresh Resolve timeline with one broll clip and apply the swipe Fusion comp for fast iteration">
                     <span class="toolbar-icon">🌬️</span>
                     <span class="toolbar-text">Swipe Test</span>
@@ -1083,6 +1087,55 @@
                     </div>
                     <pre id="transcribeAudioLog" style="display:none; max-height:240px; overflow:auto; margin-top:8px; padding:10px 12px; background:#0b1220; border:1px solid #1e293b; border-radius:6px; color:#cbd5e1; font-family:'SF Mono', Menlo, monospace; font-size:0.78em; white-space:pre-wrap; line-height:1.45;"></pre>
                 </div>
+            </div>
+        </div>
+
+        <!-- Transcribe Audio Modal (standalone — browse for any audio/video file) -->
+        <div id="transcribeAudioModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:10074; align-items:center; justify-content:center;">
+            <div style="background:#0f172a; border:1px solid #334155; border-radius:10px; width:min(720px, 95vw); max-height:90vh; padding:20px 24px; box-shadow:0 20px 50px rgba(0,0,0,0.6); display:flex; flex-direction:column; gap:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2 style="margin:0; color:#e2e8f0; font-size:1.1em;">🎙️ Transcribe Audio File</h2>
+                    <button onclick="closeTranscribeAudioModal()" style="background:transparent; color:#94a3b8; border:none; font-size:1.5em; cursor:pointer; line-height:1;">×</button>
+                </div>
+                <div style="color:#94a3b8; font-size:0.82em;">
+                    Browse for any audio or video file (mp3, wav, m4a, mp4, mov, etc.) and transcribe it locally with Whisper. The transcript drops into the Script box.
+                </div>
+                <div style="display:flex; flex-direction:column; gap:6px;">
+                    <label style="color:#cbd5e1; font-size:0.85em; font-weight:600;">Audio / video file:</label>
+                    <input id="transcribeAudioFile" type="file" accept="audio/*,video/*,.wav,.mp3,.m4a,.aac,.ogg,.flac,.mp4,.mov,.mkv,.webm"
+                        style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:6px; padding:7px 10px; font-size:0.85em;">
+                    <div id="transcribeAudioFileInfo" style="color:#64748b; font-size:0.75em;">No file selected.</div>
+                </div>
+                <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <label style="color:#cbd5e1; font-size:0.85em; font-weight:600;">Whisper model:</label>
+                        <select id="transcribeAudioModel" style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; padding:4px 8px; font-size:0.85em;">
+                            <option value="tiny">tiny (fastest)</option>
+                            <option value="base">base</option>
+                            <option value="small">small</option>
+                            <option value="medium" selected>medium (balanced)</option>
+                            <option value="large">large (best)</option>
+                            <option value="turbo">turbo (fast + good)</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <label style="color:#cbd5e1; font-size:0.85em; font-weight:600;">Language (optional):</label>
+                        <input id="transcribeAudioLang" type="text" placeholder="e.g. en (auto-detect if blank)"
+                            style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; padding:5px 8px; font-size:0.85em; width:220px;">
+                    </div>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <button id="transcribeAudioStartBtn" onclick="startTranscribeAudio()"
+                        style="padding:8px 20px; background:linear-gradient(135deg,#a855f7,#7c3aed); border:none; color:#fff; border-radius:6px; cursor:pointer; font-size:0.9em; font-weight:600;">
+                        🎙️ Start Transcription
+                    </button>
+                    <span id="transcribeAudioStatus2" style="color:#94a3b8; font-size:0.8em;"></span>
+                    <button onclick="closeTranscribeAudioModal()"
+                        style="padding:8px 14px; background:#1e293b; border:1px solid #334155; color:#94a3b8; border-radius:6px; cursor:pointer; font-size:0.85em; margin-left:auto;">
+                        Close
+                    </button>
+                </div>
+                <pre id="transcribeAudioLog2" style="display:none; max-height:280px; overflow:auto; margin-top:4px; padding:10px 12px; background:#0b1220; border:1px solid #1e293b; border-radius:6px; color:#cbd5e1; font-family:'SF Mono', Menlo, monospace; font-size:0.78em; white-space:pre-wrap; line-height:1.45;"></pre>
             </div>
         </div>
 
@@ -5362,6 +5415,132 @@ Thank you for watching!`;
                 appendLog('❌ Error: ' + e.message);
                 startBtn.disabled = false;
                 startBtn.textContent = '🎵 Start Render';
+            }
+        }
+
+        function openTranscribeAudioModal() {
+            const modal = document.getElementById('transcribeAudioModal');
+            if (!modal) return;
+            modal.style.display = 'flex';
+            const fileInput = document.getElementById('transcribeAudioFile');
+            const info = document.getElementById('transcribeAudioFileInfo');
+            const status = document.getElementById('transcribeAudioStatus2');
+            const logEl = document.getElementById('transcribeAudioLog2');
+            const btn = document.getElementById('transcribeAudioStartBtn');
+            if (fileInput) {
+                fileInput.value = '';
+                fileInput.onchange = () => {
+                    const f = fileInput.files && fileInput.files[0];
+                    if (info) info.textContent = f
+                        ? `${f.name} — ${(f.size/1024/1024).toFixed(2)} MB`
+                        : 'No file selected.';
+                };
+            }
+            if (info) info.textContent = 'No file selected.';
+            if (status) { status.style.color = '#94a3b8'; status.textContent = ''; }
+            if (logEl) { logEl.style.display = 'none'; logEl.textContent = ''; }
+            if (btn) { btn.disabled = false; btn.textContent = '🎙️ Start Transcription'; }
+        }
+
+        function closeTranscribeAudioModal() {
+            const modal = document.getElementById('transcribeAudioModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function startTranscribeAudio() {
+            const fileInput = document.getElementById('transcribeAudioFile');
+            const btn = document.getElementById('transcribeAudioStartBtn');
+            const status = document.getElementById('transcribeAudioStatus2');
+            const logEl = document.getElementById('transcribeAudioLog2');
+            const model = (document.getElementById('transcribeAudioModel')?.value || 'medium');
+            const language = (document.getElementById('transcribeAudioLang')?.value || '').trim();
+
+            const f = fileInput && fileInput.files && fileInput.files[0];
+            if (!f) {
+                if (status) { status.style.color = '#f87171'; status.textContent = 'Pick an audio or video file first.'; }
+                return;
+            }
+
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Uploading…'; }
+            if (status) { status.style.color = '#94a3b8'; status.textContent = `Uploading ${(f.size/1024/1024).toFixed(2)} MB…`; }
+            if (logEl) { logEl.style.display = 'block'; logEl.textContent = ''; }
+
+            const appendLog = (line) => {
+                if (!logEl) return;
+                logEl.textContent += (logEl.textContent ? '\n' : '') + line;
+                logEl.scrollTop = logEl.scrollHeight;
+            };
+
+            try {
+                const fd = new FormData();
+                fd.append('file', f, f.name);
+                fd.append('model', model);
+                if (language) fd.append('language', language);
+
+                const startRes = await fetch('/api/transcribe-audio/upload', {
+                    method: 'POST',
+                    body: fd,
+                });
+                const startData = await startRes.json().catch(() => ({}));
+                if (!startRes.ok || !startData.success) {
+                    if (status) { status.style.color = '#f87171'; status.textContent = '❌ ' + (startData.error || 'Upload failed'); }
+                    if (btn) { btn.disabled = false; btn.textContent = '🎙️ Start Transcription'; }
+                    return;
+                }
+                if (status) { status.style.color = '#94a3b8'; status.textContent = `Loading model '${model}'…`; }
+                if (btn) btn.textContent = '⏳ Transcribing…';
+
+                const segments = [];
+                const es = new EventSource(startData.stream_url);
+
+                es.onmessage = (ev) => {
+                    let msg;
+                    try { msg = JSON.parse(ev.data); } catch (_) { return; }
+                    if (msg.type === 'segment') {
+                        const line = `[${msg.start} --> ${msg.end}]  ${msg.text}`;
+                        appendLog(line);
+                        segments.push(msg.text);
+                        if (status) status.textContent = `Transcribing… ${segments.length} segment${segments.length===1?'':'s'} (last: ${msg.end})`;
+                    } else if (msg.type === 'progress') {
+                        const m = msg.message || msg.line || '';
+                        appendLog(m);
+                        if (status && segments.length === 0) status.textContent = m;
+                    } else if (msg.type === 'done') {
+                        es.close();
+                        const text = msg.text || segments.join(' ');
+                        const scriptInput = document.getElementById('scriptInput');
+                        if (scriptInput) {
+                            scriptInput.value = text;
+                            const checkScript = document.getElementById('checkScript');
+                            if (checkScript && checkScript.checked) {
+                                checkScript.checked = false;
+                                if (typeof toggleScriptInput === 'function') toggleScriptInput();
+                            }
+                            scriptInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                        if (status) {
+                            status.style.color = '#34d399';
+                            status.textContent = `✅ Inserted ${text.length.toLocaleString()} chars into script box (model: ${msg.model || model}).`;
+                        }
+                        if (btn) { btn.disabled = false; btn.textContent = '🎙️ Re-transcribe'; }
+                    } else if (msg.type === 'error') {
+                        es.close();
+                        appendLog('❌ ' + (msg.error || 'error'));
+                        if (status) { status.style.color = '#f87171'; status.textContent = '❌ ' + (msg.error || 'Transcription failed'); }
+                        if (btn) { btn.disabled = false; btn.textContent = '🎙️ Start Transcription'; }
+                    }
+                };
+
+                es.onerror = () => {
+                    if (btn && btn.disabled && /Transcribing|Uploading/.test(btn.textContent)) {
+                        es.close();
+                        if (status) { status.style.color = '#f87171'; status.textContent = '❌ Stream connection lost'; }
+                        btn.disabled = false; btn.textContent = '🎙️ Start Transcription';
+                    }
+                };
+            } catch (err) {
+                if (status) { status.style.color = '#f87171'; status.textContent = '❌ ' + err.message; }
+                if (btn) { btn.disabled = false; btn.textContent = '🎙️ Start Transcription'; }
             }
         }
 

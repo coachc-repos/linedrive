@@ -276,6 +276,8 @@ def _sync_generated_media_to_project(project_path: Path) -> dict:
 # Import text processing functions
 
 app = Flask(__name__)
+# Allow large audio/video uploads (Whisper transcription, etc.) — 2 GB cap.
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024
 progress_streams = {}
 results = {}
 running_tasks = {}
@@ -6687,6 +6689,74 @@ def _find_whisper_cli():
         if path:
             return path
     return None
+
+
+@app.route("/api/transcribe-audio/upload", methods=["POST"])
+def api_transcribe_audio_upload():
+    """Accept a browser-uploaded audio/video file and start transcription.
+
+    multipart/form-data:
+        file:     the audio/video file (required)
+        model:    whisper model name (optional, default 'medium')
+        language: ISO language code (optional)
+
+    Returns: { success, session_id, stream_url }
+    Stream events identical to /api/transcribe-audio/progress/<session_id>.
+    """
+    try:
+        if "file" not in request.files:
+            return jsonify({"success": False, "error": "No file uploaded (expected form field 'file')"}), 400
+        f = request.files["file"]
+        if not f or not f.filename:
+            return jsonify({"success": False, "error": "Empty file upload"}), 400
+
+        model = (request.form.get("model") or "medium").strip() or "medium"
+        language = (request.form.get("language") or "").strip()
+
+        whisper_bin = _find_whisper_cli()
+        if not whisper_bin:
+            return jsonify({
+                "success": False,
+                "error": "whisper CLI not found. Install with: pip install openai-whisper",
+            }), 500
+
+        # Save upload to a per-session temp dir; cleaned up by the worker’s rmtree of out_dir
+        # is separate — we keep the input file in its own temp dir and let the OS clean tmp.
+        upload_dir = Path(tempfile.mkdtemp(prefix="whisper_in_"))
+        # Preserve a safe filename + original extension
+        safe_name = Path(f.filename).name.replace("/", "_").replace("\\", "_")
+        if not safe_name:
+            safe_name = "upload.bin"
+        src = upload_dir / safe_name
+        f.save(str(src))
+
+        if src.stat().st_size == 0:
+            _shutil.rmtree(upload_dir, ignore_errors=True)
+            return jsonify({"success": False, "error": "Uploaded file is empty"}), 400
+
+        session_id = str(uuid.uuid4())
+        transcribe_streams[session_id] = _queue.Queue()
+        transcribe_results.pop(session_id, None)
+
+        def _worker_then_cleanup():
+            try:
+                _transcribe_worker(session_id, whisper_bin, str(src), model, language)
+            finally:
+                _shutil.rmtree(upload_dir, ignore_errors=True)
+
+        thread = _threading.Thread(target=_worker_then_cleanup, daemon=True)
+        thread.start()
+
+        logger.info(f"🎙️ Transcribe-upload started: session={session_id} file='{src.name}' model={model} size={src.stat().st_size}")
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "stream_url": f"/api/transcribe-audio/progress/{session_id}",
+            "filename": src.name,
+        })
+    except Exception as e:
+        logger.error(f"❌ /api/transcribe-audio/upload failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/transcribe-audio", methods=["POST"])
