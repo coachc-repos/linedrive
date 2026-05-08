@@ -922,6 +922,10 @@
                     <span class="toolbar-icon">🎙️</span>
                     <span class="toolbar-text">Transcribe Audio</span>
                 </button>
+                <button class="toolbar-btn" onclick="openVideoGalleryModal()" title="Browse finished videos from iCloud/Desktop/Podcast/Videos/Final">
+                    <span class="toolbar-icon">🎬</span>
+                    <span class="toolbar-text">Video Gallery</span>
+                </button>
                 <button class="toolbar-btn" onclick="openSwipeTestModal()" title="Create a fresh Resolve timeline with one broll clip and apply the swipe Fusion comp for fast iteration">
                     <span class="toolbar-icon">🌬️</span>
                     <span class="toolbar-text">Swipe Test</span>
@@ -1136,6 +1140,35 @@
                     </button>
                 </div>
                 <pre id="transcribeAudioLog2" style="display:none; max-height:280px; overflow:auto; margin-top:4px; padding:10px 12px; background:#0b1220; border:1px solid #1e293b; border-radius:6px; color:#cbd5e1; font-family:'SF Mono', Menlo, monospace; font-size:0.78em; white-space:pre-wrap; line-height:1.45;"></pre>
+            </div>
+        </div>
+
+        <!-- Finished Videos Gallery Modal -->
+        <div id="videoGalleryModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:10075; align-items:center; justify-content:center;">
+            <div style="background:#0f172a; border:1px solid #334155; border-radius:10px; width:min(1200px, 96vw); height:min(88vh, 900px); padding:18px 22px; box-shadow:0 20px 50px rgba(0,0,0,0.6); display:flex; flex-direction:column;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <div>
+                        <h2 style="margin:0; color:#e2e8f0; font-size:1.1em;">🎬 Finished Videos</h2>
+                        <div id="videoGalleryRoot" style="color:#64748b; font-size:0.72em; margin-top:2px;"></div>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button onclick="loadVideoGallery()" style="padding:6px 12px; background:#1e293b; border:1px solid #334155; color:#cbd5e1; border-radius:6px; cursor:pointer; font-size:0.82em;">↻ Refresh</button>
+                        <button onclick="closeVideoGalleryModal()" style="background:transparent; color:#94a3b8; border:none; font-size:1.5em; cursor:pointer; line-height:1;">×</button>
+                    </div>
+                </div>
+                <div id="videoGalleryStatus" style="color:#94a3b8; font-size:0.85em; margin-bottom:8px;">Loading…</div>
+                <div id="videoGalleryGrid" style="flex:1; overflow:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:14px; padding:4px;"></div>
+            </div>
+        </div>
+
+        <!-- Video Player Modal (used by Gallery) -->
+        <div id="videoPlayerModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:10080; align-items:center; justify-content:center;">
+            <div style="background:#000; border:1px solid #334155; border-radius:10px; width:min(1200px, 96vw); max-height:94vh; padding:14px 16px; box-shadow:0 20px 50px rgba(0,0,0,0.7); display:flex; flex-direction:column;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <h3 id="videoPlayerTitle" style="margin:0; color:#e2e8f0; font-size:0.95em; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Video</h3>
+                    <button onclick="closeVideoPlayer()" style="background:transparent; color:#94a3b8; border:none; font-size:1.5em; cursor:pointer; line-height:1;">×</button>
+                </div>
+                <video id="videoPlayerEl" controls preload="metadata" style="width:100%; max-height:80vh; background:#000; border-radius:6px;"></video>
             </div>
         </div>
 
@@ -5416,6 +5449,117 @@ Thank you for watching!`;
                 startBtn.disabled = false;
                 startBtn.textContent = '🎵 Start Render';
             }
+        }
+
+        function openVideoGalleryModal() {
+            const modal = document.getElementById('videoGalleryModal');
+            if (!modal) return;
+            modal.style.display = 'flex';
+            loadVideoGallery();
+        }
+
+        function closeVideoGalleryModal() {
+            const modal = document.getElementById('videoGalleryModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function _formatBytes(n) {
+            if (!n || n <= 0) return '';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let i = 0;
+            let v = n;
+            while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+            return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+        }
+
+        async function loadVideoGallery() {
+            const grid = document.getElementById('videoGalleryGrid');
+            const status = document.getElementById('videoGalleryStatus');
+            const rootEl = document.getElementById('videoGalleryRoot');
+            if (!grid || !status) return;
+            grid.innerHTML = '';
+            status.style.color = '#94a3b8';
+            status.textContent = 'Loading…';
+
+            try {
+                const res = await fetch('/api/finished-videos');
+                const data = await res.json().catch(() => ({}));
+                if (rootEl) rootEl.textContent = data.root || '';
+                if (!res.ok || !data.success) {
+                    status.style.color = '#f87171';
+                    status.textContent = '❌ ' + (data.error || `HTTP ${res.status}`);
+                    return;
+                }
+                const vids = data.videos || [];
+                if (!vids.length) {
+                    status.textContent = 'No finished videos found.';
+                    return;
+                }
+                status.textContent = `${vids.length} video${vids.length === 1 ? '' : 's'}`;
+                const frag = document.createDocumentFragment();
+                vids.forEach(v => {
+                    const card = document.createElement('div');
+                    card.style.cssText = 'background:#0b1220; border:1px solid #1e293b; border-radius:8px; overflow:hidden; display:flex; flex-direction:column; cursor:pointer; transition:border-color 0.15s, transform 0.1s;';
+                    card.onmouseenter = () => { card.style.borderColor = '#475569'; };
+                    card.onmouseleave = () => { card.style.borderColor = '#1e293b'; };
+                    card.onclick = () => playGalleryVideo(v);
+
+                    const videoEl = document.createElement('video');
+                    videoEl.src = v.stream_url + '#t=1';
+                    videoEl.preload = 'metadata';
+                    videoEl.muted = true;
+                    videoEl.playsInline = true;
+                    videoEl.style.cssText = 'width:100%; aspect-ratio:16/9; object-fit:cover; background:#000; display:block;';
+                    card.appendChild(videoEl);
+
+                    const meta = document.createElement('div');
+                    meta.style.cssText = 'padding:10px 12px; display:flex; flex-direction:column; gap:4px;';
+                    const title = document.createElement('div');
+                    title.textContent = v.title;
+                    title.style.cssText = 'color:#e2e8f0; font-size:0.9em; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+                    title.title = v.title;
+                    const sub = document.createElement('div');
+                    const sizeStr = _formatBytes(v.size);
+                    sub.textContent = `${v.filename}${sizeStr ? ' • ' + sizeStr : ''}`;
+                    sub.style.cssText = 'color:#64748b; font-size:0.72em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+                    sub.title = sub.textContent;
+                    const playRow = document.createElement('div');
+                    playRow.style.cssText = 'margin-top:6px; color:#60a5fa; font-size:0.78em;';
+                    playRow.textContent = '▶ Click to play';
+                    meta.appendChild(title);
+                    meta.appendChild(sub);
+                    meta.appendChild(playRow);
+                    card.appendChild(meta);
+                    frag.appendChild(card);
+                });
+                grid.appendChild(frag);
+            } catch (err) {
+                status.style.color = '#f87171';
+                status.textContent = '❌ ' + err.message;
+            }
+        }
+
+        function playGalleryVideo(v) {
+            const modal = document.getElementById('videoPlayerModal');
+            const titleEl = document.getElementById('videoPlayerTitle');
+            const videoEl = document.getElementById('videoPlayerEl');
+            if (!modal || !videoEl) return;
+            if (titleEl) titleEl.textContent = `${v.title} — ${v.filename}`;
+            videoEl.src = v.stream_url;
+            modal.style.display = 'flex';
+            const tryPlay = videoEl.play();
+            if (tryPlay && tryPlay.catch) tryPlay.catch(() => {});
+        }
+
+        function closeVideoPlayer() {
+            const modal = document.getElementById('videoPlayerModal');
+            const videoEl = document.getElementById('videoPlayerEl');
+            if (videoEl) {
+                try { videoEl.pause(); } catch (_) {}
+                videoEl.removeAttribute('src');
+                videoEl.load();
+            }
+            if (modal) modal.style.display = 'none';
         }
 
         function openTranscribeAudioModal() {

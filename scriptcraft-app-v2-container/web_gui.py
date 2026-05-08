@@ -6759,6 +6759,119 @@ def api_transcribe_audio_upload():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+# Finished Videos Gallery (local-only; iCloud-mounted path)
+# ---------------------------------------------------------------------------
+FINISHED_VIDEOS_ROOT = Path(
+    os.path.expanduser(
+        "~/Library/Mobile Documents/com~apple~CloudDocs/Desktop/Podcast/Videos/Final"
+    )
+).resolve()
+_VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+
+
+@app.route("/api/finished-videos", methods=["GET"])
+def api_finished_videos():
+    """List subfolders under the Finished Videos root that contain a video."""
+    from urllib.parse import quote
+    try:
+        root = FINISHED_VIDEOS_ROOT
+        if not root.exists() or not root.is_dir():
+            return jsonify({
+                "success": False,
+                "error": f"Finished videos folder not found: {root}",
+                "root": str(root),
+                "videos": [],
+            }), 404
+
+        items = []
+        for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                vids = sorted(
+                    [p for p in entry.iterdir()
+                     if p.is_file() and p.suffix.lower() in _VIDEO_EXTS
+                     and not p.name.startswith(".")],
+                    key=lambda p: p.name.lower(),
+                )
+                if not vids:
+                    continue
+                vid = vids[0]
+                rel = vid.relative_to(root).as_posix()
+                try:
+                    size = vid.stat().st_size
+                    mtime = vid.stat().st_mtime
+                except OSError:
+                    size, mtime = 0, 0
+                items.append({
+                    "title": entry.name,
+                    "filename": vid.name,
+                    "rel_path": rel,
+                    "ext": vid.suffix.lower().lstrip("."),
+                    "size": size,
+                    "mtime": mtime,
+                    "stream_url": f"/api/finished-videos/file?path={quote(rel)}",
+                })
+            elif entry.is_file() and entry.suffix.lower() in _VIDEO_EXTS:
+                rel = entry.name
+                try:
+                    size = entry.stat().st_size
+                    mtime = entry.stat().st_mtime
+                except OSError:
+                    size, mtime = 0, 0
+                items.append({
+                    "title": entry.stem,
+                    "filename": entry.name,
+                    "rel_path": rel,
+                    "ext": entry.suffix.lower().lstrip("."),
+                    "size": size,
+                    "mtime": mtime,
+                    "stream_url": f"/api/finished-videos/file?path={quote(rel)}",
+                })
+
+        return jsonify({
+            "success": True,
+            "root": str(root),
+            "videos": items,
+        })
+    except Exception as e:
+        logger.error(f"❌ /api/finished-videos failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/finished-videos/file", methods=["GET"])
+def api_finished_videos_file():
+    """Stream a video from the Finished Videos root with HTTP Range support."""
+    try:
+        rel = request.args.get("path", "").strip()
+        if not rel:
+            return jsonify({"success": False, "error": "Missing 'path' query param"}), 400
+        root = FINISHED_VIDEOS_ROOT
+        candidate = (root / rel).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return jsonify({"success": False, "error": "Path escapes finished-videos root"}), 400
+        if not candidate.is_file():
+            return jsonify({"success": False, "error": "File not found"}), 404
+        if candidate.suffix.lower() not in _VIDEO_EXTS:
+            return jsonify({"success": False, "error": "Not a supported video type"}), 400
+
+        mime_map = {
+            ".mp4": "video/mp4",
+            ".m4v": "video/mp4",
+            ".mov": "video/quicktime",
+            ".webm": "video/webm",
+            ".mkv": "video/x-matroska",
+        }
+        mimetype = mime_map.get(candidate.suffix.lower(), "application/octet-stream")
+        return send_file(str(candidate), mimetype=mimetype, conditional=True)
+    except Exception as e:
+        logger.error(f"❌ /api/finished-videos/file failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/transcribe-audio", methods=["POST"])
 def api_transcribe_audio():
     """Start a local-whisper transcription in the background.
