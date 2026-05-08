@@ -6806,6 +6806,10 @@ def _transcribe_worker(session_id: str, whisper_bin: str, file_path: str,
     env = dict(os.environ)
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
+    # Force UTF-8 locale so the child's stdio encoding (and our pipe decode)
+    # don't fall back to ASCII and crash on tqdm's non-ASCII progress chars.
+    env.setdefault("LC_ALL", "en_US.UTF-8")
+    env.setdefault("LANG", "en_US.UTF-8")
 
     try:
         proc = subprocess.Popen(
@@ -6813,6 +6817,8 @@ def _transcribe_worker(session_id: str, whisper_bin: str, file_path: str,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=0,  # unbuffered — we'll segment manually on \n and \r
             env=env,
         )
