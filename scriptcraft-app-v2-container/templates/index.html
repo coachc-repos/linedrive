@@ -5526,7 +5526,7 @@ Thank you for watching!`;
                     playIcon.innerHTML = '<div style="width:0; height:0; border-left:18px solid #f8fafc; border-top:11px solid transparent; border-bottom:11px solid transparent; margin-left:5px;"></div>';
                     const thumbTitle = document.createElement('div');
                     thumbTitle.textContent = v.title;
-                    thumbTitle.style.cssText = 'color:#fff; font-size:1.05em; font-weight:700; line-height:1.25; text-shadow:0 2px 6px rgba(0,0,0,0.6); max-width:100%; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;';
+                    thumbTitle.style.cssText = 'color:#fff; font-size:1.05em; font-weight:700; line-height:1.25; text-shadow:0 2px 6px rgba(0,0,0,0.6); max-width:100%; word-wrap:break-word; overflow-wrap:break-word;';
                     thumbInner.appendChild(playIcon);
                     thumbInner.appendChild(thumbTitle);
                     thumbBox.appendChild(thumbInner);
