@@ -5504,13 +5504,18 @@ Thank you for watching!`;
                     card.onmouseleave = () => { card.style.borderColor = '#1e293b'; };
                     card.onclick = () => playGalleryVideo(v);
 
+                    const thumbBox = document.createElement('div');
+                    thumbBox.style.cssText = 'position:relative; width:100%; aspect-ratio:16/9; background:#000; overflow:hidden;';
                     const videoEl = document.createElement('video');
                     videoEl.src = v.stream_url + '#t=1';
                     videoEl.preload = 'metadata';
                     videoEl.muted = true;
                     videoEl.playsInline = true;
-                    videoEl.style.cssText = 'width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; display:block;';
-                    card.appendChild(videoEl);
+                    videoEl.setAttribute('playsinline', '');
+                    videoEl.setAttribute('webkit-playsinline', '');
+                    videoEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; object-fit:contain; display:block; background:#000;';
+                    thumbBox.appendChild(videoEl);
+                    card.appendChild(thumbBox);
 
                     const meta = document.createElement('div');
                     meta.style.cssText = 'padding:10px 12px; display:flex; flex-direction:column; gap:4px;';
