@@ -293,6 +293,8 @@ audio_render_streams: "dict[str, _queue.Queue]" = {}
 audio_render_results: "dict[str, dict]" = {}
 transcribe_streams: "dict[str, _queue.Queue]" = {}
 transcribe_results: "dict[str, dict]" = {}
+thumbnail_test_streams: "dict[str, _queue.Queue]" = {}
+thumbnail_test_results: "dict[str, dict]" = {}
 
 
 @app.route('/api/proxy')
@@ -1291,7 +1293,6 @@ async def process_script_creation(session_id, topic, audience, tone,
                         edl_filename = None
                         if parsed_data:
                             try:
-                                import os
                                 import time
 
                                 # Create filename with timestamp
@@ -5191,68 +5192,291 @@ def thumbnail_test():
     return render_template("thumbnail_test.html")
 
 
-@app.route("/generate-test-thumbnails", methods=["POST"])
-def generate_test_thumbnails():
-    """Generate thumbnails for testing the gallery"""
-    try:
-        data = request.json or {}
-        topic = data.get("topic", "AI Testing")
+def _thumbnail_test_worker(session_id, topic, headlines, variations_per_option):
+    """Background worker: generates test thumbnails and streams progress events."""
+    q = thumbnail_test_streams.get(session_id)
 
-        print(f"\n{'='*70}")
-        print(f"🎬 GENERATING TEST THUMBNAILS")
-        print(f"📝 Topic: {topic}")
-        print(f"{'='*70}\n")
+    def _emit(event_type, **kwargs):
+        if q is None:
+            return
+        payload = {"type": event_type, **kwargs, "ts": time.time()}
+        try:
+            q.put(payload)
+        except Exception:
+            pass
+
+    def _log(msg):
+        print(msg)
+        _emit("log", message=str(msg))
+
+    try:
+        _log(f"🎬 Generating thumbnails for: {topic}")
+        if headlines:
+            _log(f"🏷️ Hooks ({len(headlines)}): {headlines}")
+        if variations_per_option:
+            _log(f"🔢 Variations per hook: {variations_per_option}")
 
         from tools.media.emotional_thumbnail_generator import (
             EmotionalThumbnailGenerator,
         )
 
         thumbnail_gen = EmotionalThumbnailGenerator()
-        print(f"✅ Generator initialized")
-        print(f"   Template: {thumbnail_gen.template_path}")
-        print(f"   Output: {thumbnail_gen.output_dir}")
+        _log(f"✅ Generator initialized")
+        _log(f"   Template: {thumbnail_gen.template_path}")
+        _log(f"   Output:   {thumbnail_gen.output_dir}")
+
+        thumb_cancel_evt = _threading.Event()
+        thumbnail_cancel_events[session_id] = thumb_cancel_evt
 
         thumbnail_results = thumbnail_gen.generate_all_thumbnails(
             script_title=topic,
             script_content="Test script content",
-            youtube_upload_details=None
+            youtube_upload_details=None,
+            headline_options=headlines or None,
+            variations_per_option=variations_per_option,
+            progress_callback=_log,
+            cancel_check=thumb_cancel_evt.is_set,
         )
 
         if thumbnail_results and thumbnail_results.get("variations"):
             variations = thumbnail_results["variations"]
-            print(f"\n✅ Generated {len(variations)} thumbnails successfully!")
             output_dir = thumbnail_results.get("output_dir")
+            _log(f"✅ Generated {len(variations)} thumbnails")
             if output_dir:
-                print(f"📁 Thumbnails saved to: {output_dir}")
+                _log(f"📁 Saved to: {output_dir}")
 
-            return jsonify({
+            thumbnail_test_results[session_id] = {
                 "success": True,
                 "thumbnails": variations,
-                "output_dir": thumbnail_results.get("output_dir"),
-                "count": len(variations)
-            })
+                "output_dir": output_dir,
+                "count": len(variations),
+                "topic": topic,
+            }
+            _emit("done", success=True, thumbnails=variations,
+                  output_dir=output_dir, count=len(variations),
+                  download_url=f"/api/thumbnails/download/{session_id}")
         else:
-            print(f"\n⚠️ No thumbnails generated")
+            err = (thumbnail_results or {}).get("error") or "No thumbnails generated"
             output_dir = (thumbnail_results or {}).get("output_dir")
-            if output_dir:
-                print(f"📁 Directory created (no thumbnails): {output_dir}")
-            if (thumbnail_results or {}).get("error"):
-                print(f"❌ Thumbnail API error: {(thumbnail_results or {}).get('error')}")
-            return jsonify({
+            _log(f"❌ {err}")
+            thumbnail_test_results[session_id] = {
                 "success": False,
-                "error": (thumbnail_results or {}).get("error") or "No thumbnails generated",
-                "output_dir": (thumbnail_results or {}).get("output_dir"),
-                "results": thumbnail_results
-            })
+                "error": err,
+                "output_dir": output_dir,
+                "thumbnails": [],
+            }
+            _emit("done", success=False, error=err, output_dir=output_dir, thumbnails=[])
 
     except Exception as e:
-        print(f"\n❌ Error generating test thumbnails: {e}")
+        import traceback
+        tb = traceback.format_exc()
+        _log(f"❌ Thumbnail worker error: {e}")
+        _log(tb)
+        thumbnail_test_results[session_id] = {
+            "success": False,
+            "error": str(e),
+            "thumbnails": [],
+        }
+        _emit("done", success=False, error=str(e), thumbnails=[])
+    finally:
+        thumbnail_cancel_events.pop(session_id, None)
+
+
+@app.route("/generate-test-thumbnails", methods=["POST"])
+def generate_test_thumbnails():
+    """Start a thumbnail-generation session; progress streams via /api/thumbnails/progress/<id>."""
+    try:
+        data = request.json or {}
+        topic = data.get("topic", "AI Testing")
+        raw_headlines = data.get("headlines") or []
+        headlines = [str(h).strip() for h in raw_headlines if str(h or "").strip()][:3]
+        variations_per_option = int(data.get("variations_per_option") or 0) or None
+
+        session_id = str(uuid.uuid4())
+        thumbnail_test_streams[session_id] = _queue.Queue()
+        thumbnail_test_results.pop(session_id, None)
+
+        print(f"\n{'='*70}")
+        print(f"🎬 GENERATING TEST THUMBNAILS (session={session_id})")
+        print(f"📝 Topic: {topic}")
+        if headlines:
+            print(f"🏷️ Headlines: {headlines}")
+        if variations_per_option:
+            print(f"🔢 Variations per headline: {variations_per_option}")
+        print(f"{'='*70}\n")
+
+        thread = _threading.Thread(
+            target=_thumbnail_test_worker,
+            args=(session_id, topic, headlines, variations_per_option),
+            daemon=True,
+        )
+        thread.start()
+
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "stream_url": f"/api/thumbnails/progress/{session_id}",
+            "download_url": f"/api/thumbnails/download/{session_id}",
+        })
+    except Exception as e:
+        print(f"\n❌ Error starting test thumbnails: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
             "success": False,
             "error": str(e)
         }), 500
+
+
+@app.route("/api/thumbnails/progress/<session_id>")
+def thumbnails_progress_stream(session_id):
+    """SSE stream of log/done events for a thumbnail generation session."""
+    q = thumbnail_test_streams.get(session_id)
+    if q is None:
+        return "Session not found", 404
+
+    def generate():
+        try:
+            while True:
+                try:
+                    payload = q.get(timeout=300)
+                except _queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"data: {json.dumps(payload)}\n\n"
+                if payload.get("type") == "done":
+                    break
+        finally:
+            thumbnail_test_streams.pop(session_id, None)
+
+    return Response(generate(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    })
+
+
+@app.route("/api/thumbnails/download/<session_id>")
+def thumbnails_download_zip(session_id):
+    """Download all thumbnails generated for a session as a single ZIP."""
+    info = thumbnail_test_results.get(session_id)
+    if not info or not info.get("thumbnails"):
+        return jsonify({"error": "Session not found or no thumbnails"}), 404
+
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    added = 0
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for var in info["thumbnails"]:
+            fp = var.get("filepath")
+            fn = var.get("filename") or (Path(fp).name if fp else None)
+            if not fp or not fn:
+                continue
+            try:
+                p = Path(fp)
+                if p.exists():
+                    zf.write(p, arcname=fn)
+                    added += 1
+            except Exception as e:
+                logger.warning(f"Skipping thumbnail {fp}: {e}")
+
+    if added == 0:
+        return jsonify({"error": "No thumbnail files found on disk"}), 404
+
+    buf.seek(0)
+    safe_topic = re.sub(r'[^\w\-]+', '_', (info.get("topic") or "thumbnails")).strip('_') or "thumbnails"
+    zip_name = f"{safe_topic}_thumbnails_{session_id[:8]}.zip"
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=zip_name,
+    )
+
+
+@app.route("/videos")
+def public_videos():
+    """Public read-only Video Gallery (finished videos). No toolbar/forms."""
+    html = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>Video Gallery</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:#0b1220; color:#e5e7eb; }
+  header { padding:14px 22px; border-bottom:1px solid #1f2937; display:flex; align-items:center; gap:12px; flex-wrap:wrap; position:sticky; top:0; background:#0b1220; z-index:10; }
+  header h1 { font-size:18px; margin:0; font-weight:600; }
+  header .count { color:#9ca3af; font-size:13px; }
+  main { padding:20px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:18px; }
+  .card { background:#111827; border:1px solid #1f2937; border-radius:10px; overflow:hidden; display:flex; flex-direction:column; }
+  .card video { width:100%; height:auto; display:block; aspect-ratio:16/9; object-fit:cover; background:#000; }
+  .card .body { padding:10px 12px; font-size:13px; }
+  .card .title { font-weight:600; color:#f3f4f6; margin-bottom:6px; line-height:1.3; word-break:break-word; }
+  .card .meta { color:#9ca3af; font-size:12px; }
+  .empty, .err { color:#9ca3af; padding:24px; }
+  .err { color:#fca5a5; }
+  footer { padding:14px 22px; color:#6b7280; font-size:12px; border-top:1px solid #1f2937; }
+</style></head>
+<body>
+  <header>
+    <h1>🎥 Video Gallery</h1>
+    <span id="count" class="count">Loading…</span>
+  </header>
+  <main>
+    <div id="status" class="empty">Loading videos…</div>
+    <div id="grid" class="grid" style="display:none"></div>
+  </main>
+  <footer>Read-only shared gallery.</footer>
+<script>
+(async function(){
+  const grid = document.getElementById('grid');
+  const status = document.getElementById('status');
+  const countEl = document.getElementById('count');
+  function fmtSize(n){ if(!n) return ''; const u=['B','KB','MB','GB']; let i=0; let v=n; while(v>=1024&&i<u.length-1){v/=1024;i++;} return v.toFixed(v>=100?0:1)+' '+u[i]; }
+  function fmtDate(t){ if(!t) return ''; try { return new Date(t*1000).toLocaleDateString(); } catch(e){ return ''; } }
+  try {
+    const r = await fetch('/api/finished-videos');
+    const data = await r.json();
+    if (!data.success) {
+      status.className = 'err';
+      status.textContent = '⚠️ ' + (data.error || 'Failed to load videos');
+      countEl.textContent = '';
+      return;
+    }
+    const videos = data.videos || [];
+    countEl.textContent = videos.length + ' video' + (videos.length===1?'':'s');
+    if (videos.length === 0) {
+      status.textContent = 'No videos available.';
+      return;
+    }
+    status.style.display = 'none';
+    grid.style.display = '';
+    for (const v of videos) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      const title = v.title || v.filename || 'Untitled';
+      const meta = [fmtSize(v.size), fmtDate(v.mtime), (v.ext||'').toUpperCase()].filter(Boolean).join(' · ');
+      card.innerHTML = `
+        <video controls preload="metadata" playsinline src="${v.stream_url}"></video>
+        <div class="body">
+          <div class="title">${title}</div>
+          <div class="meta">${meta}</div>
+        </div>`;
+      grid.appendChild(card);
+    }
+  } catch (e) {
+    status.className = 'err';
+    status.textContent = '⚠️ ' + e.message;
+  }
+})();
+</script>
+</body></html>"""
+    return Response(html, mimetype="text/html")
 
 
 @app.route("/thumbnails/<filename>")

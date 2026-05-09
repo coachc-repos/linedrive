@@ -141,9 +141,14 @@ class BaseAgentClient(ABC):
             self._v2_project = AIProjectClient(
                 endpoint=PROJECT_ENDPOINT, credential=self._credential
             )
-            self._v2_openai = self._v2_project.get_openai_client(
-                api_version=self._get_openai_api_version()
-            )
+            try:
+                self._v2_openai = self._v2_project.get_openai_client(
+                    api_version=self._get_openai_api_version()
+                )
+            except TypeError:
+                # azure-ai-projects >= 2.x returns plain openai.OpenAI which
+                # doesn't accept `api_version`. Call without it.
+                self._v2_openai = self._v2_project.get_openai_client()
         return self._v2_project, self._v2_openai
 
     # ------------------------------------------------------------------ public API

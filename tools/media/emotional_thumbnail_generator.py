@@ -345,7 +345,8 @@ CRITICAL RULES:
 
     def generate_all_thumbnails(self, script_title, script_content=None, youtube_upload_details=None,
                                 headline_text=None, headline_options=None,
-                                progress_callback=None, cancel_check=None):
+                                progress_callback=None, cancel_check=None,
+                                variations_per_option=None):
         """
         Generate all thumbnail variations (6 per headline option).
 
@@ -400,7 +401,8 @@ CRITICAL RULES:
             "cancelled": False,
         }
 
-        total_expected = 6 * len(options_list)
+        per_option = variations_per_option if variations_per_option and variations_per_option > 0 else 6
+        total_expected = per_option * len(options_list)
         generated_count = 0
 
         print(f"\n{'='*70}")
@@ -417,7 +419,7 @@ CRITICAL RULES:
             if base_text:
                 print(f"💬 Option {opt_idx}/{len(options_list)}: {base_text}")
 
-            variations = self.generate_emotional_variations(base_text)
+            variations = self.generate_emotional_variations(base_text)[:per_option]
 
             for i, emotion_data in enumerate(variations, 1):
                 if _is_cancelled():
@@ -425,7 +427,7 @@ CRITICAL RULES:
                     _notify(f"🛑 Thumbnail generation cancelled after {generated_count}/{total_expected}")
                     break
 
-                global_num = (opt_idx - 1) * 6 + i
+                global_num = (opt_idx - 1) * per_option + i
                 results["total_attempted"] += 1
 
                 _notify(f"🎭 Generating thumbnail {global_num}/{total_expected}: {emotion_data['emotion']}")
