@@ -6840,11 +6840,15 @@ def _list_finished_videos_from_blob():
     container = svc.get_container_client(FINISHED_VIDEOS_BLOB_CONTAINER)
     folders: "dict[str, list]" = {}
     loose: list = []
+    poster_stems: set = set()
     for b in container.list_blobs():
         name = b.name
         if not name or name.endswith("/"):
             continue
         ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+        if ext == ".jpg":
+            poster_stems.add(name[:-4])
+            continue
         if ext not in _VIDEO_EXTS:
             continue
         if "/" in name:
@@ -6852,6 +6856,12 @@ def _list_finished_videos_from_blob():
             folders.setdefault(folder, []).append(b)
         else:
             loose.append(b)
+
+    def _poster_for(blob_name: str):
+        stem = blob_name.rsplit(".", 1)[0]
+        if stem in poster_stems:
+            return _blob_sas_url(stem + ".jpg")
+        return None
 
     items = []
     for folder in sorted(folders.keys(), key=str.lower):
@@ -6873,6 +6883,7 @@ def _list_finished_videos_from_blob():
             "size": size,
             "mtime": mtime,
             "stream_url": _blob_sas_url(b.name),
+            "poster_url": _poster_for(b.name),
         })
     for b in sorted(loose, key=lambda x: x.name.lower()):
         size = getattr(b, "size", 0) or 0
@@ -6892,6 +6903,7 @@ def _list_finished_videos_from_blob():
             "size": size,
             "mtime": mtime,
             "stream_url": _blob_sas_url(b.name),
+            "poster_url": _poster_for(b.name),
         })
     label = (
         f"azure://{FINISHED_VIDEOS_BLOB_ACCOUNT}/"
