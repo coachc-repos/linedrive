@@ -5505,7 +5505,7 @@ Thank you for watching!`;
                     card.onclick = () => playGalleryVideo(v);
 
                     const thumbBox = document.createElement('div');
-                    thumbBox.style.cssText = 'position:relative; width:100%; aspect-ratio:16/9; background:#000; overflow:hidden;';
+                    thumbBox.style.cssText = 'position:relative; width:100%; padding-top:56.25%; background:#000; overflow:hidden;';
                     const videoEl = document.createElement('video');
                     videoEl.src = v.stream_url + '#t=1';
                     videoEl.preload = 'metadata';
