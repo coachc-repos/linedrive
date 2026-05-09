@@ -46,6 +46,13 @@ export FOUNDRY_API_MODE="${FOUNDRY_API_MODE:-v2}"
 echo "🔀 Default Foundry agent API mode: $FOUNDRY_API_MODE  (toggle in the UI to switch)"
 echo ""
 
+# Point the Video Gallery at Azure Blob Storage so local + cloud serve the same
+# (already-transcoded) MP4s via short-lived user-delegation SAS URLs.
+export FINISHED_VIDEOS_BLOB_ACCOUNT="${FINISHED_VIDEOS_BLOB_ACCOUNT:-linedrivestorage}"
+export FINISHED_VIDEOS_BLOB_CONTAINER="${FINISHED_VIDEOS_BLOB_CONTAINER:-finished-videos}"
+echo "🎬 Video Gallery source: blob://$FINISHED_VIDEOS_BLOB_ACCOUNT/$FINISHED_VIDEOS_BLOB_CONTAINER"
+echo ""
+
 cd "$SCRIPT_DIR"
 echo "📂 Working directory: $(pwd)"
 echo ""

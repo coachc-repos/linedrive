@@ -5509,7 +5509,7 @@ Thank you for watching!`;
                     videoEl.preload = 'metadata';
                     videoEl.muted = true;
                     videoEl.playsInline = true;
-                    videoEl.style.cssText = 'width:100%; aspect-ratio:16/9; object-fit:cover; background:#000; display:block;';
+                    videoEl.style.cssText = 'width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; display:block;';
                     card.appendChild(videoEl);
 
                     const meta = document.createElement('div');
