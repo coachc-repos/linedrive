@@ -7496,7 +7496,31 @@ def api_finished_videos_upload():
                      finished=time.time())
                 return
 
-            # 3) Upload to blob.
+            # 3) Generate poster (thumbnail) — single frame at ~3s (or 10% in for short clips).
+            poster_path = tmpdir / f"{stem}.jpg"
+            poster_blob = f"{folder}/{stem}.jpg"
+            try:
+                seek = 3.0
+                if duration and duration > 0:
+                    seek = min(3.0, max(0.5, duration * 0.1))
+                pcmd = [
+                    "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+                    "-ss", f"{seek:.2f}", "-i", str(out_path),
+                    "-vframes", "1",
+                    "-vf", "scale='min(1280,iw)':'-2'",
+                    "-q:v", "3",
+                    str(poster_path),
+                ]
+                pres = subprocess.run(pcmd, stdin=subprocess.DEVNULL,
+                                      capture_output=True, timeout=120)
+                if pres.returncode != 0 or not poster_path.exists() or poster_path.stat().st_size == 0:
+                    logger.warning(f"⚠️ [{job_id[:8]}] poster generation failed (rc={pres.returncode}); continuing without thumbnail")
+                    poster_path = None
+            except Exception as pe:
+                logger.warning(f"⚠️ [{job_id[:8]}] poster generation error: {pe}")
+                poster_path = None
+
+            # 4) Upload to blob.
             _set(state="uploading", percent=99)
             svc = _finished_videos_blob_service()
             container = svc.get_container_client(FINISHED_VIDEOS_BLOB_CONTAINER)
@@ -7507,6 +7531,18 @@ def api_finished_videos_upload():
                     overwrite=True,
                     content_settings=ContentSettings(content_type="video/mp4"),
                 )
+            if poster_path is not None:
+                try:
+                    with poster_path.open("rb") as ph:
+                        container.upload_blob(
+                            name=poster_blob,
+                            data=ph,
+                            overwrite=True,
+                            content_settings=ContentSettings(content_type="image/jpeg"),
+                        )
+                    logger.info(f"🖼️ [{job_id[:8]}] uploaded poster {poster_blob}")
+                except Exception as ue:
+                    logger.warning(f"⚠️ [{job_id[:8]}] poster upload failed: {ue}")
             size = out_path.stat().st_size
             logger.info(f"✅ [{job_id[:8]}] uploaded {blob_name} ({size} bytes)")
             _set(
@@ -7520,6 +7556,7 @@ def api_finished_videos_upload():
                     "ext": "mp4",
                     "size": size,
                     "stream_url": _blob_sas_url(blob_name),
+                    "poster_url": _blob_sas_url(poster_blob) if poster_path is not None else None,
                 },
             )
         except Exception as e:
@@ -7544,6 +7581,91 @@ def api_finished_videos_upload_status(job_id: str):
         # Return a shallow copy so the caller doesn't see live mutations.
         snap = dict(job)
     return jsonify({"success": True, "job": snap})
+
+
+@app.route("/api/finished-videos/regenerate-posters", methods=["POST"])
+def api_finished_videos_regenerate_posters():
+    """Backfill poster JPGs for any video blobs that don't already have one.
+
+    Streams the source video into ffmpeg via a temp file, extracts a single
+    frame at ~3s, and uploads as `<stem>.jpg`. Skips blobs whose poster
+    already exists. Returns a summary list.
+    """
+    import subprocess
+    import tempfile
+    import shutil as _shutil
+    from azure.storage.blob import ContentSettings
+
+    if not FINISHED_VIDEOS_BLOB_CONTAINER:
+        return jsonify({"success": False, "error": "Blob container not configured"}), 400
+    if _shutil.which("ffmpeg") is None:
+        return jsonify({"success": False, "error": "ffmpeg not found on PATH"}), 500
+
+    svc = _finished_videos_blob_service()
+    container = svc.get_container_client(FINISHED_VIDEOS_BLOB_CONTAINER)
+    existing_posters: set = set()
+    videos: list = []
+    for b in container.list_blobs():
+        n = b.name or ""
+        if n.endswith(".jpg"):
+            existing_posters.add(n[:-4])
+        else:
+            ext = n.rsplit(".", 1)[-1].lower() if "." in n else ""
+            if ("." + ext) in _VIDEO_EXTS:
+                videos.append(n)
+
+    created, skipped, failed = [], [], []
+    tmp_root = Path(tempfile.mkdtemp(prefix="poster-backfill-"))
+    try:
+        for vname in videos:
+            stem = vname.rsplit(".", 1)[0]
+            if stem in existing_posters:
+                skipped.append(vname)
+                continue
+            local_vid = tmp_root / Path(vname).name
+            try:
+                with local_vid.open("wb") as fh:
+                    container.download_blob(vname).readinto(fh)
+                poster_local = tmp_root / (Path(vname).stem + ".jpg")
+                pcmd = [
+                    "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+                    "-ss", "3", "-i", str(local_vid),
+                    "-vframes", "1",
+                    "-vf", "scale='min(1280,iw)':'-2'",
+                    "-q:v", "3",
+                    str(poster_local),
+                ]
+                pres = subprocess.run(pcmd, stdin=subprocess.DEVNULL,
+                                      capture_output=True, timeout=180)
+                if pres.returncode != 0 or not poster_local.exists() or poster_local.stat().st_size == 0:
+                    failed.append({"blob": vname, "error": "ffmpeg failed"})
+                    continue
+                with poster_local.open("rb") as ph:
+                    container.upload_blob(
+                        name=stem + ".jpg", data=ph, overwrite=True,
+                        content_settings=ContentSettings(content_type="image/jpeg"),
+                    )
+                created.append(stem + ".jpg")
+                logger.info(f"🖼️ backfilled poster for {vname}")
+            except Exception as e:
+                logger.error(f"❌ poster backfill failed for {vname}: {e}", exc_info=True)
+                failed.append({"blob": vname, "error": str(e)})
+            finally:
+                try:
+                    if local_vid.exists():
+                        local_vid.unlink()
+                except Exception:
+                    pass
+    finally:
+        _shutil.rmtree(tmp_root, ignore_errors=True)
+
+    return jsonify({
+        "success": True,
+        "created": created,
+        "skipped": len(skipped),
+        "failed": failed,
+        "total_videos": len(videos),
+    })
 
 
 @app.route("/api/transcribe-audio", methods=["POST"])
