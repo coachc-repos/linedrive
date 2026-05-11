@@ -278,6 +278,97 @@ def _sync_generated_media_to_project(project_path: Path) -> dict:
 app = Flask(__name__)
 # Allow large audio/video uploads (Whisper transcription, etc.) — 2 GB cap.
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024
+
+# ---------------------------------------------------------------------------
+# Optional token-based auth gate.
+#
+# When env APP_AUTH_TOKEN is set, every request OUTSIDE the public allowlist
+# must supply the token via one of:
+#   - X-App-Token: <token>      header
+#   - ?app_token=<token>        query string
+#   - app_token=<token>         cookie  (set by GET /login?token=...)
+#
+# When unset, the app is open (current behavior — used for local dev).
+#
+# Public paths (always allowed) live in PUBLIC_PREFIXES below. The video
+# share page /videos and its read-only API stay public; the upload endpoint
+# is explicitly protected even though it shares the same prefix.
+# ---------------------------------------------------------------------------
+APP_AUTH_TOKEN = os.environ.get("APP_AUTH_TOKEN", "").strip()
+PUBLIC_PREFIXES = (
+    "/videos",
+    "/api/finished-videos",   # GET list (and local-mode file stream)
+    "/static/",
+    "/favicon.ico",
+    "/login",
+    "/healthz",
+)
+PROTECTED_OVERRIDES = ("/api/finished-videos/upload",)
+
+
+def _request_app_token() -> str:
+    return (
+        request.headers.get("X-App-Token", "").strip()
+        or request.args.get("app_token", "").strip()
+        or request.cookies.get("app_token", "").strip()
+    )
+
+
+@app.before_request
+def _enforce_app_auth_token():
+    if not APP_AUTH_TOKEN:
+        return None
+    p = request.path or ""
+    # Protect upload endpoint first (it lives under a public prefix).
+    if any(p.startswith(x) for x in PROTECTED_OVERRIDES):
+        if _request_app_token() != APP_AUTH_TOKEN:
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        return None
+    # Public allowlist.
+    if any(p == x or p.startswith(x) for x in PUBLIC_PREFIXES):
+        return None
+    # Everything else: require the token.
+    if _request_app_token() != APP_AUTH_TOKEN:
+        if p.startswith("/api/"):
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        from flask import redirect as _redirect
+        return _redirect("/login")
+    return None
+
+
+@app.route("/login", methods=["GET"])
+def app_login_page():
+    """Set the app_token cookie via ?token=... and redirect to /."""
+    from flask import redirect as _redirect
+    token = (request.args.get("token") or "").strip()
+    if APP_AUTH_TOKEN and token == APP_AUTH_TOKEN:
+        resp = make_response(_redirect("/"))
+        resp.set_cookie(
+            "app_token", token,
+            max_age=30 * 24 * 3600,
+            httponly=True,
+            samesite="Lax",
+            secure=request.is_secure,
+        )
+        return resp
+    html = """<!doctype html><html><head><meta charset="utf-8"><title>Sign in</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0b1220;color:#e5e7eb;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+form{background:#111827;padding:24px;border-radius:10px;border:1px solid #1f2937;display:flex;gap:8px;flex-direction:column;min-width:300px}
+input,button{padding:8px 10px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e5e7eb;font-size:14px}
+button{cursor:pointer;background:#1d4ed8;border-color:#1d4ed8}
+h1{margin:0 0 6px;font-size:16px}
+.hint{color:#94a3b8;font-size:12px;margin-top:4px}
+</style></head><body>
+<form method="get" action="/login">
+<h1>🔒 Sign in</h1>
+<input type="password" name="token" placeholder="Access token" autofocus />
+<button type="submit">Continue</button>
+<div class="hint">The /videos share page is always public.</div>
+</form></body></html>"""
+    return Response(html, mimetype="text/html")
+
+
 progress_streams = {}
 results = {}
 running_tasks = {}
@@ -7242,6 +7333,104 @@ def api_finished_videos_file():
     except Exception as e:
         logger.error(f"❌ /api/finished-videos/file failed: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/finished-videos/upload", methods=["POST"])
+def api_finished_videos_upload():
+    """Upload a video to the gallery (Azure Blob).
+
+    multipart/form-data fields:
+      - file:   the video file (any common video container)
+      - folder: optional gallery card name (defaults to file stem)
+
+    Always transcodes to web-friendly H.264/AAC MP4 with +faststart so the
+    browser <video> tag can play it inline, then uploads to the
+    finished-videos blob container.
+    """
+    import subprocess
+    import tempfile
+    import shutil
+    import uuid
+    import re as _re
+    from werkzeug.utils import secure_filename
+    from azure.storage.blob import ContentSettings
+
+    if not FINISHED_VIDEOS_BLOB_CONTAINER:
+        return jsonify({
+            "success": False,
+            "error": "Uploads disabled: FINISHED_VIDEOS_BLOB_CONTAINER not set",
+        }), 400
+
+    if shutil.which("ffmpeg") is None:
+        return jsonify({"success": False, "error": "ffmpeg not found on PATH"}), 500
+
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"success": False, "error": "No file uploaded"}), 400
+
+    safe_name = secure_filename(f.filename) or f"upload-{uuid.uuid4().hex}.mp4"
+    stem = Path(safe_name).stem or f"upload-{uuid.uuid4().hex}"
+
+    folder_raw = (request.form.get("folder") or "").strip()
+    if folder_raw:
+        folder = _re.sub(r"[^A-Za-z0-9 ._-]+", "_", folder_raw).strip("/. ") or stem
+    else:
+        folder = stem
+    blob_name = f"{folder}/{stem}.mp4"
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="scriptcraft-upload-"))
+    try:
+        src_path = tmpdir / safe_name
+        f.save(str(src_path))
+
+        out_path = tmpdir / f"{stem}.mp4"
+        ffmpeg_cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(src_path),
+            "-vf", "scale='min(1920,iw)':'-2'",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
+            str(out_path),
+        ]
+        logger.info(f"📼 transcoding upload: {src_path.name} -> {blob_name}")
+        proc = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=3600)
+        if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+            err = (proc.stderr or proc.stdout or "ffmpeg failed").strip()
+            logger.error(f"❌ ffmpeg transcode failed: {err}")
+            return jsonify({"success": False, "error": f"Transcode failed: {err[:500]}"}), 500
+
+        svc = _finished_videos_blob_service()
+        container = svc.get_container_client(FINISHED_VIDEOS_BLOB_CONTAINER)
+        with out_path.open("rb") as fh:
+            container.upload_blob(
+                name=blob_name,
+                data=fh,
+                overwrite=True,
+                content_settings=ContentSettings(content_type="video/mp4"),
+            )
+        size = out_path.stat().st_size
+        logger.info(f"✅ uploaded {blob_name} ({size} bytes)")
+        return jsonify({
+            "success": True,
+            "video": {
+                "title": folder,
+                "filename": f"{stem}.mp4",
+                "rel_path": blob_name,
+                "ext": "mp4",
+                "size": size,
+                "stream_url": _blob_sas_url(blob_name),
+            },
+        })
+    except Exception as e:
+        logger.error(f"❌ /api/finished-videos/upload failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        try:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 @app.route("/api/transcribe-audio", methods=["POST"])

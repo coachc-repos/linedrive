@@ -1250,6 +1250,8 @@
                         <div id="videoGalleryRoot" style="color:#64748b; font-size:0.72em; margin-top:2px;"></div>
                     </div>
                     <div style="display:flex; gap:8px; align-items:center;">
+                        <input type="file" id="videoUploadInput" accept="video/*,.mov,.mp4,.m4v,.webm,.mkv" style="display:none;" onchange="handleVideoUploadSelected(event)" />
+                        <button onclick="document.getElementById('videoUploadInput').click()" style="padding:6px 12px; background:#1d4ed8; border:1px solid #1d4ed8; color:#fff; border-radius:6px; cursor:pointer; font-size:0.82em;">📤 Upload</button>
                         <button onclick="loadVideoGallery()" style="padding:6px 12px; background:#1e293b; border:1px solid #334155; color:#cbd5e1; border-radius:6px; cursor:pointer; font-size:0.82em;">↻ Refresh</button>
                         <button onclick="closeVideoGalleryModal()" style="background:transparent; color:#94a3b8; border:none; font-size:1.5em; cursor:pointer; line-height:1;">×</button>
                     </div>
@@ -5713,6 +5715,54 @@ Thank you for watching!`;
             let v = n;
             while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
             return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+        }
+
+        async function handleVideoUploadSelected(ev) {
+            const input = ev.target;
+            const files = Array.from(input.files || []);
+            input.value = '';
+            if (!files.length) return;
+            const status = document.getElementById('videoGalleryStatus');
+            const total = files.length;
+            let done = 0;
+            let failed = 0;
+            for (const file of files) {
+                const defaultName = file.name.replace(/\.[^.]+$/, '');
+                const folder = (prompt(`Gallery card name for "${file.name}"?`, defaultName) || '').trim();
+                if (!folder) { failed++; continue; }
+                if (status) {
+                    status.style.color = '#94a3b8';
+                    status.textContent = `Uploading ${done + 1}/${total}: ${file.name} (transcoding on server — this can take a while)…`;
+                }
+                try {
+                    const fd = new FormData();
+                    fd.append('file', file);
+                    fd.append('folder', folder);
+                    const res = await fetch('/api/finished-videos/upload', { method: 'POST', body: fd });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || !data.success) {
+                        failed++;
+                        console.error('upload failed', data);
+                        if (status) {
+                            status.style.color = '#f87171';
+                            status.textContent = `❌ Upload failed for ${file.name}: ${data.error || res.status}`;
+                        }
+                    } else {
+                        done++;
+                    }
+                } catch (e) {
+                    failed++;
+                    if (status) {
+                        status.style.color = '#f87171';
+                        status.textContent = `❌ Upload error for ${file.name}: ${e.message}`;
+                    }
+                }
+            }
+            if (status && failed === 0) {
+                status.style.color = '#86efac';
+                status.textContent = `✅ Uploaded ${done}/${total}. Refreshing…`;
+            }
+            await loadVideoGallery();
         }
 
         async function loadVideoGallery() {
