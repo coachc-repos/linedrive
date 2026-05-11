@@ -386,6 +386,10 @@ transcribe_streams: "dict[str, _queue.Queue]" = {}
 transcribe_results: "dict[str, dict]" = {}
 thumbnail_test_streams: "dict[str, _queue.Queue]" = {}
 thumbnail_test_results: "dict[str, dict]" = {}
+# Background video-upload/transcode jobs. Keyed by job_id (uuid4 hex).
+# Shape: {state, percent, duration, out_time, error, video, filename, blob_name, started, finished}
+video_upload_jobs: "dict[str, dict]" = {}
+video_upload_jobs_lock = _threading.Lock()
 
 
 @app.route('/api/proxy')
@@ -7337,21 +7341,22 @@ def api_finished_videos_file():
 
 @app.route("/api/finished-videos/upload", methods=["POST"])
 def api_finished_videos_upload():
-    """Upload a video to the gallery (Azure Blob).
+    """Start a background transcode + upload to the gallery.
 
     multipart/form-data fields:
       - file:   the video file (any common video container)
       - folder: optional gallery card name (defaults to file stem)
 
-    Always transcodes to web-friendly H.264/AAC MP4 with +faststart so the
-    browser <video> tag can play it inline, then uploads to the
-    finished-videos blob container.
+    Returns immediately with {success, job_id}. Poll GET
+    /api/finished-videos/upload/status/<job_id> for progress + final result.
     """
     import subprocess
     import tempfile
     import shutil
     import uuid
     import re as _re
+    import threading
+    import time
     from werkzeug.utils import secure_filename
     from azure.storage.blob import ContentSettings
 
@@ -7379,58 +7384,143 @@ def api_finished_videos_upload():
     blob_name = f"{folder}/{stem}.mp4"
 
     tmpdir = Path(tempfile.mkdtemp(prefix="scriptcraft-upload-"))
-    try:
-        src_path = tmpdir / safe_name
-        f.save(str(src_path))
+    src_path = tmpdir / safe_name
+    f.save(str(src_path))
 
+    job_id = uuid.uuid4().hex
+    with video_upload_jobs_lock:
+        video_upload_jobs[job_id] = {
+            "state": "queued",
+            "percent": 0,
+            "duration": None,
+            "out_time": 0.0,
+            "error": None,
+            "video": None,
+            "filename": safe_name,
+            "blob_name": blob_name,
+            "started": time.time(),
+            "finished": None,
+        }
+
+    def _set(**kw):
+        with video_upload_jobs_lock:
+            video_upload_jobs[job_id].update(kw)
+
+    def _worker():
         out_path = tmpdir / f"{stem}.mp4"
-        ffmpeg_cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-i", str(src_path),
-            "-vf", "scale='min(1920,iw)':'-2'",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k",
-            "-movflags", "+faststart",
-            str(out_path),
-        ]
-        logger.info(f"📼 transcoding upload: {src_path.name} -> {blob_name}")
-        proc = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=3600)
-        if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
-            err = (proc.stderr or proc.stdout or "ffmpeg failed").strip()
-            logger.error(f"❌ ffmpeg transcode failed: {err}")
-            return jsonify({"success": False, "error": f"Transcode failed: {err[:500]}"}), 500
-
-        svc = _finished_videos_blob_service()
-        container = svc.get_container_client(FINISHED_VIDEOS_BLOB_CONTAINER)
-        with out_path.open("rb") as fh:
-            container.upload_blob(
-                name=blob_name,
-                data=fh,
-                overwrite=True,
-                content_settings=ContentSettings(content_type="video/mp4"),
-            )
-        size = out_path.stat().st_size
-        logger.info(f"✅ uploaded {blob_name} ({size} bytes)")
-        return jsonify({
-            "success": True,
-            "video": {
-                "title": folder,
-                "filename": f"{stem}.mp4",
-                "rel_path": blob_name,
-                "ext": "mp4",
-                "size": size,
-                "stream_url": _blob_sas_url(blob_name),
-            },
-        })
-    except Exception as e:
-        logger.error(f"❌ /api/finished-videos/upload failed: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
-    finally:
+        ffmpeg_log = tmpdir / "ffmpeg.log"
         try:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-        except Exception:
-            pass
+            duration = None
+            try:
+                pr = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", str(src_path)],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if pr.returncode == 0 and pr.stdout.strip():
+                    duration = float(pr.stdout.strip())
+                    _set(duration=duration)
+            except Exception as pe:
+                logger.warning(f"ffprobe failed (continuing without %): {pe}")
+
+            ffmpeg_cmd = [
+                "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+                "-i", str(src_path),
+                "-vf", "scale='min(1920,iw)':'-2'",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart",
+                "-progress", "pipe:1", "-nostats",
+                str(out_path),
+            ]
+            logger.info(f"📼 [{job_id[:8]}] transcoding {src_path.name} -> {blob_name} (dur={duration})")
+            _set(state="transcoding")
+            with ffmpeg_log.open("wb") as logf:
+                proc = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=logf,
+                    bufsize=1, text=True,
+                )
+                try:
+                    assert proc.stdout is not None
+                    for line in proc.stdout:
+                        line = line.strip()
+                        if not line or "=" not in line:
+                            continue
+                        k, _, v = line.partition("=")
+                        if k in ("out_time_ms", "out_time_us"):
+                            try:
+                                secs = int(v) / 1_000_000.0
+                                pct = int((secs / duration) * 100) if duration else 0
+                                pct = max(0, min(99, pct))
+                                _set(out_time=secs, percent=pct)
+                            except Exception:
+                                pass
+                        elif k == "progress" and v == "end":
+                            break
+                finally:
+                    rc = proc.wait()
+
+            if rc != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+                try:
+                    tail = ffmpeg_log.read_bytes()[-2000:].decode("utf-8", errors="replace").strip()
+                except Exception:
+                    tail = ""
+                err = tail or f"ffmpeg exited {rc}"
+                logger.error(f"❌ [{job_id[:8]}] transcode failed: {err}")
+                _set(state="error", error=f"Transcode failed: {err[:500]}",
+                     finished=time.time())
+                return
+
+            _set(state="uploading", percent=99)
+            svc = _finished_videos_blob_service()
+            container = svc.get_container_client(FINISHED_VIDEOS_BLOB_CONTAINER)
+            with out_path.open("rb") as fh:
+                container.upload_blob(
+                    name=blob_name,
+                    data=fh,
+                    overwrite=True,
+                    content_settings=ContentSettings(content_type="video/mp4"),
+                )
+            size = out_path.stat().st_size
+            logger.info(f"✅ [{job_id[:8]}] uploaded {blob_name} ({size} bytes)")
+            _set(
+                state="done",
+                percent=100,
+                finished=time.time(),
+                video={
+                    "title": folder,
+                    "filename": f"{stem}.mp4",
+                    "rel_path": blob_name,
+                    "ext": "mp4",
+                    "size": size,
+                    "stream_url": _blob_sas_url(blob_name),
+                },
+            )
+        except Exception as e:
+            logger.error(f"❌ [{job_id[:8]}] upload worker failed: {e}", exc_info=True)
+            _set(state="error", error=str(e), finished=time.time())
+        finally:
+            try:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            except Exception:
+                pass
+
+    threading.Thread(target=_worker, name=f"video-upload-{job_id[:8]}", daemon=True).start()
+    return jsonify({"success": True, "job_id": job_id, "filename": safe_name})
+
+
+@app.route("/api/finished-videos/upload/status/<job_id>", methods=["GET"])
+def api_finished_videos_upload_status(job_id: str):
+    with video_upload_jobs_lock:
+        job = video_upload_jobs.get(job_id)
+        if not job:
+            return jsonify({"success": False, "error": "Unknown job_id"}), 404
+        snap = dict(job)
+    return jsonify({"success": True, "job": snap})
 
 
 @app.route("/api/transcribe-audio", methods=["POST"])

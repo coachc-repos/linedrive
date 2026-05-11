@@ -1257,6 +1257,12 @@
                     </div>
                 </div>
                 <div id="videoGalleryStatus" style="color:#94a3b8; font-size:0.85em; margin-bottom:8px;">Loading…</div>
+                <div id="videoUploadProgress" style="display:none; margin-bottom:10px;">
+                    <div id="videoUploadProgressLabel" style="color:#cbd5e1; font-size:0.78em; margin-bottom:4px;"></div>
+                    <div style="height:10px; background:#0b1220; border:1px solid #1e293b; border-radius:6px; overflow:hidden;">
+                        <div id="videoUploadProgressBar" style="height:100%; width:0%; background:linear-gradient(90deg,#1d4ed8,#2563eb); transition:width 0.3s ease;"></div>
+                    </div>
+                </div>
                 <div id="videoGalleryGrid" style="flex:1; overflow:auto; padding:4px;"></div>
             </div>
         </div>
@@ -5732,6 +5738,81 @@ Thank you for watching!`;
             return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
         }
 
+        function _setUploadProgress(pct, label) {
+            const wrap = document.getElementById('videoUploadProgress');
+            const bar = document.getElementById('videoUploadProgressBar');
+            const lbl = document.getElementById('videoUploadProgressLabel');
+            if (!wrap || !bar || !lbl) return;
+            if (pct === null) { wrap.style.display = 'none'; return; }
+            wrap.style.display = 'block';
+            bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+            lbl.textContent = label || '';
+        }
+
+        function _uploadWithProgress(url, formData, onProgress) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', url);
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable && onProgress) {
+                        onProgress(Math.round((e.loaded / e.total) * 100), e.loaded, e.total);
+                    }
+                };
+                xhr.onload = () => {
+                    let data = {};
+                    try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
+                    resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, data });
+                };
+                xhr.onerror = () => reject(new Error('Network error'));
+                xhr.send(formData);
+            });
+        }
+
+        function _fmtSecs(s) {
+            if (!s || s < 0) return '0:00';
+            const m = Math.floor(s / 60);
+            const r = Math.floor(s % 60);
+            return `${m}:${String(r).padStart(2, '0')}`;
+        }
+
+        async function _pollUploadJob(jobId, fileLabel) {
+            // Poll every 1s until state is done or error.
+            const startedAt = Date.now();
+            while (true) {
+                let snap = null;
+                try {
+                    const r = await fetch(`/api/finished-videos/upload/status/${encodeURIComponent(jobId)}`);
+                    const j = await r.json().catch(() => ({}));
+                    if (r.ok && j.success) snap = j.job;
+                } catch (_) { /* transient — retry */ }
+                if (snap) {
+                    const state = snap.state;
+                    const pct = snap.percent || 0;
+                    if (state === 'queued' || state === 'transcoding') {
+                        const dur = snap.duration;
+                        const out = snap.out_time || 0;
+                        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+                        let etaTxt = '';
+                        if (dur && out > 1) {
+                            const rate = out / Math.max(1, elapsed); // src-secs encoded per real-sec
+                            const remaining = Math.max(0, (dur - out) / Math.max(0.01, rate));
+                            etaTxt = ` · ETA ${_fmtSecs(remaining)}`;
+                        }
+                        const durTxt = dur ? ` of ${_fmtSecs(dur)}` : '';
+                        _setUploadProgress(pct, `${fileLabel} — transcoding ${pct}% (${_fmtSecs(out)}${durTxt})${etaTxt}`);
+                    } else if (state === 'uploading') {
+                        _setUploadProgress(99, `${fileLabel} — uploading to cloud…`);
+                    } else if (state === 'done') {
+                        _setUploadProgress(100, `${fileLabel} — done ✅`);
+                        return { ok: true, video: snap.video };
+                    } else if (state === 'error') {
+                        return { ok: false, error: snap.error || 'Unknown error' };
+                    }
+                }
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
+
         async function handleVideoUploadSelected(ev) {
             const input = ev.target;
             const files = Array.from(input.files || []);
@@ -5741,29 +5822,46 @@ Thank you for watching!`;
             const total = files.length;
             let done = 0;
             let failed = 0;
-            for (const file of files) {
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
                 const defaultName = file.name.replace(/\.[^.]+$/, '');
                 const folder = (prompt(`Gallery card name for "${file.name}"?`, defaultName) || '').trim();
                 if (!folder) { failed++; continue; }
+                const label = `[${i + 1}/${total}] ${file.name}`;
                 if (status) {
                     status.style.color = '#94a3b8';
-                    status.textContent = `Uploading ${done + 1}/${total}: ${file.name} (transcoding on server — this can take a while)…`;
+                    status.textContent = `Uploading ${label}…`;
                 }
+                _setUploadProgress(0, `${label} — uploading 0%`);
                 try {
                     const fd = new FormData();
                     fd.append('file', file);
                     fd.append('folder', folder);
-                    const res = await fetch('/api/finished-videos/upload', { method: 'POST', body: fd });
-                    const data = await res.json().catch(() => ({}));
-                    if (!res.ok || !data.success) {
+                    const res = await _uploadWithProgress(
+                        '/api/finished-videos/upload',
+                        fd,
+                        (pct) => _setUploadProgress(pct, `${label} — uploading ${pct}%`)
+                    );
+                    if (!res.ok || !res.data.success || !res.data.job_id) {
                         failed++;
-                        console.error('upload failed', data);
+                        const err = (res.data && res.data.error) || `HTTP ${res.status}`;
                         if (status) {
                             status.style.color = '#f87171';
-                            status.textContent = `❌ Upload failed for ${file.name}: ${data.error || res.status}`;
+                            status.textContent = `❌ Upload failed for ${file.name}: ${err}`;
                         }
-                    } else {
+                        _setUploadProgress(null);
+                        continue;
+                    }
+                    _setUploadProgress(0, `${label} — queued for transcode…`);
+                    const result = await _pollUploadJob(res.data.job_id, label);
+                    if (result.ok) {
                         done++;
+                    } else {
+                        failed++;
+                        if (status) {
+                            status.style.color = '#f87171';
+                            status.textContent = `❌ Transcode failed for ${file.name}: ${result.error}`;
+                        }
                     }
                 } catch (e) {
                     failed++;
@@ -5773,6 +5871,7 @@ Thank you for watching!`;
                     }
                 }
             }
+            _setUploadProgress(null);
             if (status && failed === 0) {
                 status.style.color = '#86efac';
                 status.textContent = `✅ Uploaded ${done}/${total}. Refreshing…`;
