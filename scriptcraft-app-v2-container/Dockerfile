@@ -15,10 +15,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Minimal system deps (Pillow needs a few libs; curl for healthcheck)
+# Minimal system deps (Pillow needs a few libs; curl for healthcheck; ffmpeg to mute Grok B-roll)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
+        ffmpeg \
         libjpeg62-turbo \
         zlib1g \
     && rm -rf /var/lib/apt/lists/*

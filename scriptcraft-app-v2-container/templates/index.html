@@ -2294,26 +2294,45 @@ Time management content here...`;
             });
             
             if (mainScriptDiv && mainScript) {
-                // Pre-process script text to convert inline labels into proper markdown headings
-                let scriptMd = mainScript
-                    // Normalize: insert newlines before section keywords when mid-line
-                    .replace(/([^\n])(\s+)(Heading:\s*Chapter\s+\d+)/g, '$1\n$3')
-                    .replace(/([^\n])(\s+)(VISUAL CUE:)/g, '$1\n$3')
-                    .replace(/([^\n])(\s+)(Host:\s*(?:\n|$))/gm, '$1\n$3')
-                    // "Heading: Chapter N - Title" (raw script format) → ## Chapter N - Title
-                    .replace(/^\s*Heading:\s*(Chapter\s+\d+[^\n]*)/gm, '## $1')
-                    // "Chapter N: Title" plain text (no # prefix) → ## heading
-                    .replace(/^(?!#+\s)(Chapter\s+\d+[:.][^\n]*)/gm, '## $1')
-                    // Plain "Host:" standalone line → ### Host:
-                    .replace(/^\s*Host:\s*$/gm, '### Host:')
-                    // "**Host:**" bold label (processed scripts) → ### Host:
-                    .replace(/^\*\*Host:\*\*\s*$/gm, '### Host:')
-                    // Plain "VISUAL CUE: text" (possibly leading space) → #### heading
-                    .replace(/^\s*VISUAL CUE:\s*(.+)$/gm, '#### 🎬 VISUAL CUE: $1')
-                    // "**VISUAL CUE:** text" bold (processed scripts) → #### heading
-                    .replace(/^\*\*VISUAL CUE:\*\*\s*(.*)$/gm, '#### 🎬 VISUAL CUE: $1');
-                mainScriptDiv.innerHTML = marked.parse(scriptMd);
-                console.log('Content rendered via marked.parse');
+                const escapeHtml = (s) => s
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
+                const lines = (mainScript || '').replace(/\r\n?/g, '\n').split('\n');
+                const out = [];
+                let para = [];
+                const flushPara = () => {
+                    if (para.length) {
+                        out.push('<p>' + para.map(escapeHtml).join('<br>') + '</p>');
+                        para = [];
+                    }
+                };
+                for (const raw of lines) {
+                    const line = raw.replace(/\s+$/g, '');
+                    const trimmed = line.trim();
+                    if (trimmed === '') { flushPara(); continue; }
+                    if (/^[_\-=]{3,}$/.test(trimmed)) { flushPara(); out.push('<hr>'); continue; }
+                    let m;
+                    if ((m = trimmed.match(/^(?:#+\s*)?(?:Heading:\s*)?(Chapter\s+\d+[\s\S]*)$/i))) {
+                        flushPara();
+                        out.push('<h2>' + escapeHtml(m[1]) + '</h2>');
+                        continue;
+                    }
+                    if (/^(?:\*\*)?Host:(?:\*\*)?\s*$/i.test(trimmed)) {
+                        flushPara();
+                        out.push('<h3>Host:</h3>');
+                        continue;
+                    }
+                    if ((m = trimmed.match(/^(?:\*\*)?VISUAL CUE:(?:\*\*)?\s*(.*)$/i))) {
+                        flushPara();
+                        out.push('<h4>🎬 VISUAL CUE: ' + escapeHtml(m[1]) + '</h4>');
+                        continue;
+                    }
+                    para.push(line);
+                }
+                flushPara();
+                mainScriptDiv.innerHTML = out.join('\n');
+                console.log('Content rendered via custom safe renderer');
             } else {
                 console.error('Failed to render:', { mainScriptDiv: !!mainScriptDiv, mainScript: !!mainScript });
             }
@@ -4519,7 +4538,46 @@ Time management content here...`;
         }
 
         // Execute selected curl commands
+        // Public entry: opens the HeyGen template picker FIRST so the user can
+        // confirm or change the template, then runs the actual execute impl.
         async function executeSelectedCurls() {
+            const checkboxes = document.querySelectorAll('.curl-checkbox');
+            const selectedIndices = [];
+            checkboxes.forEach((cb, index) => { if (cb.checked) selectedIndices.push(index); });
+            if (selectedIndices.length === 0) {
+                alert('⚠️ Please select at least one curl command to execute');
+                return;
+            }
+            window._heygenExecuteAfterPick = true;
+            try { browseHeyGenTemplates(); } catch (e) { console.warn('browseHeyGenTemplates failed', e); }
+            const footer = document.getElementById('heygenTemplateModalFooter');
+            if (footer) footer.style.display = 'flex';
+        }
+
+        function useCurrentTemplateAndExecute() {
+            closeHeyGenModal();
+            window._heygenExecuteAfterPick = false;
+            _executeSelectedCurlsImpl();
+        }
+
+        function applyTemplateIdToCurls(newTemplateId) {
+            if (!newTemplateId) return;
+            const re = /\/v2\/template\/[A-Za-z0-9_-]+\/generate/g;
+            const replacement = '/v2/template/' + newTemplateId + '/generate';
+            const pres = document.querySelectorAll('pre[id^="curlCmd"]');
+            pres.forEach(p => {
+                const original = p.textContent || '';
+                if (re.test(original)) {
+                    re.lastIndex = 0;
+                    p.textContent = original.replace(re, replacement);
+                }
+            });
+            if (typeof window.currentCurlCommands === 'string' && window.currentCurlCommands) {
+                window.currentCurlCommands = window.currentCurlCommands.replace(re, replacement);
+            }
+        }
+
+        async function _executeSelectedCurlsImpl() {
             const checkboxes = document.querySelectorAll('.curl-checkbox');
             const selectedIndices = [];
             
@@ -5056,30 +5114,51 @@ Thank you for watching!`;
         }
 
         // ---- Script Input Edit/Preview toggle ----
+        // Custom line-by-line renderer (NOT marked.js) to guarantee no stray
+        // markdown character (** , __ , ____ separators) can ever bold the
+        // rest of the document. Only explicit section markers are styled.
         function renderScriptInputPreview() {
             const ta = document.getElementById('scriptInput');
             const preview = document.getElementById('scriptInputPreview');
-            if (!ta || !preview || typeof marked === 'undefined') return;
-            let md = ta.value;
-            // Pre-process: handle both raw script format and processed script format
-            md = md
-                // Normalize: insert newlines before section keywords when mid-line
-                .replace(/([^\n])(\s+)(Heading:\s*Chapter\s+\d+)/g, '$1\n$3')
-                .replace(/([^\n])(\s+)(VISUAL CUE:)/g, '$1\n$3')
-                .replace(/([^\n])(\s+)(Host:\s*(?:\n|$))/gm, '$1\n$3')
-                // "Heading: Chapter N - Title" (raw script format) → ## Chapter N - Title
-                .replace(/^\s*Heading:\s*(Chapter\s+\d+[^\n]*)/gm, '## $1')
-                // "Chapter N: Title" plain text → ## heading
-                .replace(/^(?!#+\s)(Chapter\s+\d+[:.][^\n]*)/gm, '## $1')
-                // Plain "Host:" standalone line → ### Host:
-                .replace(/^\s*Host:\s*$/gm, '### Host:')
-                // "**Host:**" bold (processed scripts) → ### Host:
-                .replace(/^\*\*Host:\*\*\s*$/gm, '### Host:')
-                // Plain "VISUAL CUE: text" (possibly leading space) → #### heading
-                .replace(/^\s*VISUAL CUE:\s*(.+)$/gm, '#### 🎬 VISUAL CUE: $1')
-                // "**VISUAL CUE:** text" bold (processed scripts) → #### heading
-                .replace(/^\*\*VISUAL CUE:\*\*\s*(.*)$/gm, '#### 🎬 VISUAL CUE: $1');
-            preview.innerHTML = marked.parse(md);
+            if (!ta || !preview) return;
+            const escapeHtml = (s) => s
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+            const lines = (ta.value || '').replace(/\r\n?/g, '\n').split('\n');
+            const out = [];
+            let para = [];
+            const flushPara = () => {
+                if (para.length) {
+                    out.push('<p>' + para.map(escapeHtml).join('<br>') + '</p>');
+                    para = [];
+                }
+            };
+            for (const raw of lines) {
+                const line = raw.replace(/\s+$/g, '');
+                const trimmed = line.trim();
+                if (trimmed === '') { flushPara(); continue; }
+                if (/^[_\-=]{3,}$/.test(trimmed)) { flushPara(); out.push('<hr>'); continue; }
+                let m;
+                if ((m = trimmed.match(/^(?:#+\s*)?(?:Heading:\s*)?(Chapter\s+\d+[\s\S]*)$/i))) {
+                    flushPara();
+                    out.push('<h2>' + escapeHtml(m[1]) + '</h2>');
+                    continue;
+                }
+                if (/^(?:\*\*)?Host:(?:\*\*)?\s*$/i.test(trimmed)) {
+                    flushPara();
+                    out.push('<h3>Host:</h3>');
+                    continue;
+                }
+                if ((m = trimmed.match(/^(?:\*\*)?VISUAL CUE:(?:\*\*)?\s*(.*)$/i))) {
+                    flushPara();
+                    out.push('<h4>🎬 VISUAL CUE: ' + escapeHtml(m[1]) + '</h4>');
+                    continue;
+                }
+                para.push(line);
+            }
+            flushPara();
+            preview.innerHTML = out.join('\n');
         }
 
         function switchScriptInputTab(tab) {
@@ -6668,6 +6747,10 @@ Thank you for watching!`;
             <div id="heygenTemplateList" style="padding:16px 20px; overflow-y:auto; flex:1;">
                 <div style="text-align:center; color:#94a3b8; padding:30px;">Loading templates...</div>
             </div>
+            <div id="heygenTemplateModalFooter" style="display:none; padding:12px 20px; border-top:1px solid #334155; gap:8px; justify-content:flex-end;">
+                <button onclick="closeHeyGenModal()" style="padding:8px 14px; background:#334155; color:#e2e8f0; border:none; border-radius:6px; cursor:pointer; font-size:0.85em;">Cancel</button>
+                <button onclick="useCurrentTemplateAndExecute()" style="padding:8px 14px; background:linear-gradient(135deg,#10b981,#059669); color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:0.85em; font-weight:600;">▶️ Use Current Template &amp; Execute</button>
+            </div>
         </div>
     </div>
 
@@ -6724,11 +6807,19 @@ Thank you for watching!`;
 
     function selectHeyGenTemplate(tid) {
         document.getElementById('heygenTemplateId').value = tid;
+        try { applyTemplateIdToCurls(tid); } catch (e) { console.warn('applyTemplateIdToCurls failed', e); }
+        const shouldExecute = !!window._heygenExecuteAfterPick;
         closeHeyGenModal();
+        if (shouldExecute) {
+            try { _executeSelectedCurlsImpl(); } catch (e) { console.error('execute impl failed', e); }
+        }
     }
 
     function closeHeyGenModal() {
         document.getElementById('heygenTemplateModal').style.display = 'none';
+        const footer = document.getElementById('heygenTemplateModalFooter');
+        if (footer) footer.style.display = 'none';
+        window._heygenExecuteAfterPick = false;
     }
 
     // Close modal on backdrop click

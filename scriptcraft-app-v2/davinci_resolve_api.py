@@ -165,6 +165,7 @@ def _setup_video_tracks(timeline):
         V2 = adjustment  (Lime)
         V3 = broll       (Teal)
         V4 = animations  (Pink)
+        V5 = temp clips  (Violet)
     Adds tracks if missing, renames and colors each one.
     Returns a dict {track_index: track_name} for what was set.
     """
@@ -173,6 +174,7 @@ def _setup_video_tracks(timeline):
         (2, "adjustment", "Lime"),
         (3, "broll", "Teal"),
         (4, "animations", "Pink"),
+        (5, "temp clips", "Violet"),
     ]
     if not timeline:
         return {}
@@ -189,8 +191,8 @@ def _setup_video_tracks(timeline):
     except Exception:
         current_count = 1
 
-    # Add any missing tracks up to V4.
-    while current_count < 4:
+    # Add any missing tracks up to V5.
+    while current_count < 5:
         try:
             timeline.AddTrack("video")
             current_count += 1
@@ -3446,7 +3448,7 @@ def create_resolve_project_with_videos(
                 timeline = new_timeline
                 project.SetCurrentTimeline(timeline)
 
-                # Configure track layout: V1=aroll, V2=adjustment, V3=broll, V4=animations
+                # Configure track layout: V1=aroll, V2=adjustment, V3=broll, V4=animations, V5=temp clips
                 print("\n🛤️  Configuring video track layout...")
                 track_layout = _setup_video_tracks(timeline)
                 base_result["video_track_layout"] = track_layout
