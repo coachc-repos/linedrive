@@ -59,7 +59,8 @@ V1_TO_V2_AGENT_NAME: Dict[str, str] = {
 }
 
 # Lower-cased lookup for robustness against minor casing differences.
-_V1_TO_V2_LOWER: Dict[str, str] = {k.lower(): v for k, v in V1_TO_V2_AGENT_NAME.items()}
+_V1_TO_V2_LOWER: Dict[str, str] = {
+    k.lower(): v for k, v in V1_TO_V2_AGENT_NAME.items()}
 
 
 def _resolve_v2_name(v1_name: str) -> str:
@@ -185,7 +186,8 @@ class BaseAgentClient(ABC):
                     self._v2_project = None
                     self._v2_openai = None
                     _time.sleep(1.5 * (attempt + 1))
-            fallback_msg = str(last_err).lower() if last_err is not None else ""
+            fallback_msg = str(last_err).lower(
+            ) if last_err is not None else ""
             if "404" in fallback_msg or "resource not found" in fallback_msg:
                 print(
                     "⚠️ v2 conversation endpoint unavailable for this project; falling back to v1 agent threads"
@@ -247,7 +249,8 @@ class BaseAgentClient(ABC):
                     timeout=timeout,
                 )
                 elapsed = time.time() - t0
-                print(f"✅ [v2] {self.v2_agent_name} completed in {elapsed:.1f}s")
+                print(
+                    f"✅ [v2] {self.v2_agent_name} completed in {elapsed:.1f}s")
 
                 text_parts: List[str] = []
                 for item in getattr(response, "output", []) or []:
@@ -375,7 +378,8 @@ class BaseAgentClient(ABC):
                     )
 
                     while True:
-                        run = client.runs.get(thread_id=thread_id, run_id=run.id)
+                        run = client.runs.get(
+                            thread_id=thread_id, run_id=run.id)
                         current_time = time.time()
 
                         if current_time - last_status_time >= 30:
@@ -419,7 +423,8 @@ class BaseAgentClient(ABC):
                                     ]:
                                         break
                             except Exception as cancel_error:
-                                print(f"⚠️ Error during cancellation: {cancel_error}")
+                                print(
+                                    f"⚠️ Error during cancellation: {cancel_error}")
                             raise Exception(
                                 f"Agent run timed out after {timeout} seconds"
                             )
@@ -481,7 +486,8 @@ class BaseAgentClient(ABC):
 
                     if run:
                         try:
-                            client.runs.cancel(thread_id=thread_id, run_id=run.id)
+                            client.runs.cancel(
+                                thread_id=thread_id, run_id=run.id)
                             time.sleep(2)
                         except Exception:
                             pass
@@ -494,7 +500,8 @@ class BaseAgentClient(ABC):
                     ):
                         if retry_count < max_retries:
                             delay = base_delay * (2**retry_count)
-                            print(f"⏳ Rate limit. Waiting {delay}s before retry...")
+                            print(
+                                f"⏳ Rate limit. Waiting {delay}s before retry...")
                             time.sleep(delay)
                             retry_count += 1
                             continue
@@ -512,7 +519,8 @@ class BaseAgentClient(ABC):
                     if message.role == "assistant" and message.text_messages:
                         response_text = message.text_messages[-1].text.value
                         sources = (
-                            self._extract_sources(message) if show_sources else []
+                            self._extract_sources(
+                                message) if show_sources else []
                         )
                         return {
                             "success": True,
@@ -664,4 +672,5 @@ def _legacy_project_property(self):
     return _LegacyProjectShim(self)
 
 
-BaseAgentClient.project = property(_legacy_project_property)  # type: ignore[attr-defined]
+BaseAgentClient.project = property(
+    _legacy_project_property)  # type: ignore[attr-defined]

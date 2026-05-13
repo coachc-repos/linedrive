@@ -383,7 +383,8 @@ CRITICAL RULES:
         elif headline_text:
             options_list = [headline_text]
         elif youtube_upload_details:
-            extracted = self.extract_thumbnail_text_from_upload_details(youtube_upload_details)
+            extracted = self.extract_thumbnail_text_from_upload_details(
+                youtube_upload_details)
             options_list = [extracted] if extracted else [None]
         else:
             options_list = [None]
@@ -406,36 +407,43 @@ CRITICAL RULES:
         generated_count = 0
 
         print(f"\n{'='*70}")
-        print(f"🎬 Generating {total_expected} Emotional Thumbnails: '{script_title}'")
-        print(f"📸 Template: {self.template_path or 'None (generating from scratch)'}")
+        print(
+            f"🎬 Generating {total_expected} Emotional Thumbnails: '{script_title}'")
+        print(
+            f"📸 Template: {self.template_path or 'None (generating from scratch)'}")
         print(f"{'='*70}\n")
 
         for opt_idx, base_text in enumerate(options_list, 1):
             if _is_cancelled():
                 results["cancelled"] = True
-                _notify(f"🛑 Thumbnail generation cancelled after {generated_count}/{total_expected}")
+                _notify(
+                    f"🛑 Thumbnail generation cancelled after {generated_count}/{total_expected}")
                 break
 
             if base_text:
                 print(f"💬 Option {opt_idx}/{len(options_list)}: {base_text}")
 
-            variations = self.generate_emotional_variations(base_text)[:per_option]
+            variations = self.generate_emotional_variations(base_text)[
+                :per_option]
 
             for i, emotion_data in enumerate(variations, 1):
                 if _is_cancelled():
                     results["cancelled"] = True
-                    _notify(f"🛑 Thumbnail generation cancelled after {generated_count}/{total_expected}")
+                    _notify(
+                        f"🛑 Thumbnail generation cancelled after {generated_count}/{total_expected}")
                     break
 
                 global_num = (opt_idx - 1) * per_option + i
                 results["total_attempted"] += 1
 
-                _notify(f"🎭 Generating thumbnail {global_num}/{total_expected}: {emotion_data['emotion']}")
+                _notify(
+                    f"🎭 Generating thumbnail {global_num}/{total_expected}: {emotion_data['emotion']}")
                 print(f"{'─'*70}")
                 print(f"🎭 Variation #{global_num} — {emotion_data['emotion']}")
                 print(f"   Text: {emotion_data['thumbnail_text']}")
 
-                img = self.generate_thumbnail_variation(script_title, emotion_data, global_num)
+                img = self.generate_thumbnail_variation(
+                    script_title, emotion_data, global_num)
 
                 if img:
                     filename = f"{safe_title}_opt{opt_idx}_v{i}_{timestamp}.png"
