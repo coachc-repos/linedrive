@@ -416,21 +416,46 @@
         @media (max-width: 768px) {
             .toolbar {
                 justify-content: center;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                gap: 4px;
+                padding: 4px;
             }
-            
+
             .toolbar-divider {
                 display: none;
             }
-            
+
             .toolbar-section {
-                flex-wrap: wrap;
+                flex-wrap: nowrap;
                 justify-content: center;
+                gap: 4px;
             }
-            
+
             .toolbar-label {
                 width: 100%;
                 text-align: center;
                 margin-bottom: 5px;
+            }
+
+            /* Compact toolbar buttons so they fit on a single row without wrapping */
+            .toolbar-btn {
+                min-width: 0;
+                padding: 4px 6px;
+                gap: 1px;
+                flex: 0 0 auto;
+            }
+            .toolbar-icon {
+                font-size: 1em;
+            }
+            .toolbar-text {
+                font-size: 0.55em;
+            }
+
+            /* v2-only on mobile: hide the Agent API selector entirely */
+            #agentModeToggle {
+                display: none !important;
             }
         }
         
