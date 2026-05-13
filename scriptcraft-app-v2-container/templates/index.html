@@ -6890,13 +6890,13 @@ Thank you for watching!`;
         <div style="background:#1e293b; border:1px solid #334155; border-radius:12px; width:650px; max-height:80vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.6);">
             <div style="padding:16px 20px; border-bottom:1px solid #334155; display:flex; justify-content:space-between; align-items:center;">
                 <h3 style="margin:0; color:#e2e8f0; font-size:1.1em;">📋 HeyGen Templates</h3>
-                <button onclick="closeHeyGenModal()" style="background:none; border:none; color:#94a3b8; font-size:1.3em; cursor:pointer; padding:4px 8px;">&times;</button>
+                <button type="button" onclick="closeHeyGenModal()" title="Close (Esc)" style="background:#334155; border:1px solid #475569; color:#e2e8f0; font-size:1em; line-height:1; cursor:pointer; padding:6px 12px; border-radius:6px;">✕ Close</button>
             </div>
             <div id="heygenTemplateList" style="padding:16px 20px; overflow-y:auto; flex:1;">
                 <div style="text-align:center; color:#94a3b8; padding:30px;">Loading templates...</div>
             </div>
-            <div id="heygenTemplateModalFooter" style="display:none; padding:12px 20px; border-top:1px solid #334155; gap:8px; justify-content:flex-end;">
-                <button onclick="closeHeyGenModal()" style="padding:8px 14px; background:#334155; color:#e2e8f0; border:none; border-radius:6px; cursor:pointer; font-size:0.85em;">Cancel</button>
+            <div id="heygenTemplateModalFooter" style="display:flex; padding:12px 20px; border-top:1px solid #334155; gap:8px; justify-content:flex-end;">
+                <button type="button" onclick="closeHeyGenModal()" style="padding:8px 14px; background:#334155; color:#e2e8f0; border:none; border-radius:6px; cursor:pointer; font-size:0.85em;">Cancel</button>
                 <button onclick="useCurrentTemplateAndExecute()" style="padding:8px 14px; background:linear-gradient(135deg,#10b981,#059669); color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:0.85em; font-weight:600;">▶️ Use Current Template &amp; Execute</button>
             </div>
         </div>
@@ -6964,9 +6964,9 @@ Thank you for watching!`;
     }
 
     function closeHeyGenModal() {
-        document.getElementById('heygenTemplateModal').style.display = 'none';
-        const footer = document.getElementById('heygenTemplateModalFooter');
-        if (footer) footer.style.display = 'none';
+        const m = document.getElementById('heygenTemplateModal');
+        if (m) m.style.display = 'none';
+        // Cancel / X / backdrop / Esc all cancel execute-after-pick.
         window._heygenExecuteAfterPick = false;
     }
 
@@ -6976,6 +6976,20 @@ Thank you for watching!`;
     });
     document.getElementById('heygenDetailModal').addEventListener('click', function(e) {
         if (e.target === this) closeHeyGenDetailModal();
+    });
+
+    // Esc closes the HeyGen template picker (or details modal) when open.
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Escape') return;
+        const m = document.getElementById('heygenTemplateModal');
+        if (m && m.style.display && m.style.display !== 'none') {
+            closeHeyGenModal();
+            return;
+        }
+        const d = document.getElementById('heygenDetailModal');
+        if (d && d.style.display && d.style.display !== 'none') {
+            try { closeHeyGenDetailModal(); } catch (_) { d.style.display = 'none'; }
+        }
     });
 
     function viewHeyGenTemplateDetails() {
