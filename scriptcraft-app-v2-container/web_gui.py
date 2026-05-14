@@ -1403,6 +1403,32 @@ async def process_script_creation(session_id, topic, audience, tone,
                         final_script_with_tools += broll_section
                         print("✅ B-roll table appended to script")
 
+                        # Persist the B-roll table next to the generated B-roll
+                        # videos so it lives alongside the media (per user request).
+                        try:
+                            broll_dir = run_output_dir / "broll"
+                            broll_dir.mkdir(parents=True, exist_ok=True)
+                            broll_md_path = broll_dir / "broll_table.md"
+                            broll_md_path.write_text(
+                                broll_table, encoding="utf-8")
+                            print(
+                                f"💾 Saved B-roll table → {broll_md_path}")
+                            try:
+                                streamer.send_update(
+                                    f"💾 Saved B-roll table → {broll_md_path}", 98.6)
+                            except Exception:
+                                pass
+                            # Also save a Word (.docx) copy with a real table.
+                            try:
+                                broll_docx_path = broll_dir / "broll_table.docx"
+                                _save_broll_table_as_docx(broll_table, broll_docx_path)
+                                print(f"💾 Saved B-roll table (Word) → {broll_docx_path}")
+                            except Exception as docx_err:
+                                print(f"⚠️ Failed to save broll_table.docx: {docx_err}")
+                        except Exception as save_tbl_err:
+                            print(
+                                f"⚠️ Failed to save broll_table.md: {save_tbl_err}")
+
                         # Generate EDL file for DaVinci Resolve
                         edl_content = None
                         edl_filename = None
@@ -1579,6 +1605,26 @@ async def process_script_creation(session_id, topic, audience, tone,
                         f"⏸️ Select B-roll rows for Grok generation ({total_rows} available)",
                         99
                     )
+                    # Persist a copy of the table next to broll videos.
+                    try:
+                        broll_dir = run_output_dir / "broll"
+                        broll_dir.mkdir(parents=True, exist_ok=True)
+                        broll_md_path = broll_dir / "broll_table.md"
+                        if not broll_md_path.exists():
+                            broll_md_path.write_text(
+                                broll_table, encoding="utf-8")
+                            print(
+                                f"💾 Saved B-roll table → {broll_md_path}")
+                        broll_docx_path = broll_dir / "broll_table.docx"
+                        if not broll_docx_path.exists():
+                            try:
+                                _save_broll_table_as_docx(broll_table, broll_docx_path)
+                                print(f"💾 Saved B-roll table (Word) → {broll_docx_path}")
+                            except Exception as docx_err:
+                                print(f"⚠️ Failed to save broll_table.docx (grok path): {docx_err}")
+                    except Exception as save_tbl_err:
+                        print(
+                            f"⚠️ Failed to save broll_table.md (grok path): {save_tbl_err}")
 
             # NEW: Generate HeyGen Ready Section (only if checkbox checked)
             if checkboxes.get("heygen", False):
@@ -5331,6 +5377,20 @@ def export_word():
 
             if not temp_file.exists():
                 return jsonify({"success": False, "error": "Failed to create Word document"})
+
+            # Optionally save a server-side copy to {output_dir}/broll/
+            try:
+                if data.get("save_to_broll_dir"):
+                    script_title_for_dir = data.get("script_title") or title or "Untitled_Script"
+                    run_dir = _get_run_output_dir(script_title_for_dir, create=True)
+                    broll_dir = Path(run_dir) / "broll"
+                    broll_dir.mkdir(parents=True, exist_ok=True)
+                    server_copy = broll_dir / f"{title}.docx"
+                    import shutil as _shutil
+                    _shutil.copy2(str(temp_file), str(server_copy))
+                    logger.info(f"💾 Saved B-roll Word copy → {server_copy}")
+            except Exception as save_err:
+                logger.error(f"⚠️ Failed to save server-side broll .docx: {save_err}")
 
             # Read the file and return as binary response
             with open(temp_file, 'rb') as f:

@@ -149,6 +149,121 @@ def _get_run_output_dir(script_title: str, create: bool = True) -> Path:
     return run_dir
 
 
+def _save_broll_table_as_docx(broll_table_md: str, out_path: Path) -> bool:
+    """Render a B-roll markdown table to a Word document at out_path.
+
+    Strips ``` fences, finds the pipe-table block, builds a styled docx.
+    Any non-table preamble/tail (e.g. **Stock Footage Search String:** ...)
+    is added as bold/plain paragraphs. Returns True on success.
+    """
+    try:
+        from docx import Document
+        from docx.shared import Pt
+    except ImportError as e:
+        logger.error(f"❌ python-docx not available for broll docx: {e}")
+        return False
+
+    if not broll_table_md or not broll_table_md.strip():
+        logger.warning("⚠️ Empty broll table, skipping docx save")
+        return False
+
+    text = re.sub(r'^[ \t]*```[\w-]*[ \t]*$', '',
+                  broll_table_md, flags=re.MULTILINE)
+    lines = [ln.rstrip() for ln in text.replace('\r\n', '\n').split('\n')]
+
+    # Locate header + separator (any two consecutive lines starting with |
+    # where the second is a separator row).
+    header_idx = -1
+    for i in range(len(lines) - 1):
+        a = lines[i].strip()
+        b = lines[i + 1].strip()
+        if (a.startswith('|') and b.startswith('|')
+                and set(b.replace('|', '').strip()) <= set('-: ')):
+            header_idx = i
+            break
+
+    doc = Document()
+
+    def _add_paragraph(raw: str) -> None:
+        if not raw.strip():
+            return
+        p = doc.add_paragraph()
+        # Render **bold** spans inline.
+        parts = raw.split('**')
+        for idx, part in enumerate(parts):
+            if not part:
+                continue
+            run = p.add_run(part)
+            if idx % 2 == 1:
+                run.bold = True
+
+    if header_idx < 0:
+        # No table detected — just dump the text.
+        for ln in lines:
+            _add_paragraph(ln)
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            doc.save(str(out_path))
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to save broll docx: {e}")
+            return False
+
+    # Preamble (everything before the header)
+    for ln in lines[:header_idx]:
+        _add_paragraph(ln)
+
+    def _split_row(row: str):
+        cells = [c.strip() for c in row.split('|')]
+        if cells and not cells[0]:
+            cells = cells[1:]
+        if cells and not cells[-1]:
+            cells = cells[:-1]
+        return cells
+
+    headers = _split_row(lines[header_idx])
+    body_rows = []
+    j = header_idx + 2
+    while j < len(lines):
+        ln = lines[j].strip()
+        if not ln.startswith('|'):
+            break
+        cells = _split_row(ln)
+        if cells:
+            body_rows.append(cells)
+        j += 1
+
+    if headers and body_rows:
+        table = doc.add_table(rows=1 + len(body_rows), cols=len(headers))
+        try:
+            table.style = 'Light Grid Accent 1'
+        except Exception:
+            pass
+        for c, h in enumerate(headers):
+            cell = table.rows[0].cells[c]
+            cell.text = h
+            for para in cell.paragraphs:
+                for run in para.runs:
+                    run.bold = True
+        for r, row in enumerate(body_rows, start=1):
+            for c, val in enumerate(row):
+                if c < len(headers):
+                    table.rows[r].cells[c].text = val
+        doc.add_paragraph()
+
+    # Tail (everything after the table)
+    for ln in lines[j:]:
+        _add_paragraph(ln)
+
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(out_path))
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to save broll docx: {e}")
+        return False
+
+
 def _copy_to_output_subfolder(src, subfolder: str, script_title: Optional[str] = None) -> Optional[Path]:
     """Copy a source file into {output_base}/{subfolder}/ if a base dir is configured.
 
@@ -1393,6 +1508,23 @@ async def process_script_creation(session_id, topic, audience, tone,
                             f"✅ B-roll table generated ({len(broll_table)} characters, {len(parsed_data)} entries)")
                         streamer.send_update(
                             "✅ B-roll table generated", 98.5)
+
+                        # Persist the raw broll table (md + docx) to {run}/broll/
+                        try:
+                            broll_dir = run_output_dir / "broll"
+                            broll_dir.mkdir(parents=True, exist_ok=True)
+                            broll_md_path = broll_dir / "broll_table.md"
+                            broll_md_path.write_text(
+                                broll_table, encoding="utf-8")
+                            print(
+                                f"💾 Saved broll table md → {broll_md_path}")
+                            broll_docx_path = broll_dir / "broll_table.docx"
+                            if _save_broll_table_as_docx(broll_table, broll_docx_path):
+                                print(
+                                    f"💾 Saved broll table docx → {broll_docx_path}")
+                        except Exception as save_err:
+                            print(
+                                f"⚠️ Failed to save broll table files: {save_err}")
 
                         # Append B-roll table to script
                         broll_section = f"\n\n{'=' * 80}\n"
@@ -5332,6 +5464,24 @@ def export_word():
             if not temp_file.exists():
                 return jsonify({"success": False, "error": "Failed to create Word document"})
 
+            # Optionally also copy into the run's broll/ folder so the user has
+            # a per-project archived copy of the B-roll table docx.
+            if data.get("save_to_broll_dir"):
+                try:
+                    archive_title = data.get("script_title") or title
+                    archive_root = _get_run_output_dir(
+                        archive_title, create=True)
+                    archive_dir = archive_root / "broll"
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    archive_path = archive_dir / f"{title}.docx"
+                    import shutil
+                    shutil.copy2(str(temp_file), str(archive_path))
+                    logger.info(
+                        f"💾 Archived broll docx → {archive_path}")
+                except Exception as arc_err:
+                    logger.warning(
+                        f"⚠️ Could not archive broll docx: {arc_err}")
+
             # Read the file and return as binary response
             with open(temp_file, 'rb') as f:
                 file_content = f.read()
@@ -6198,15 +6348,17 @@ def create_resolve_with_videos():
         def parse_chapter_info(filename):
             """Extract chapter and part numbers from filename.
 
-            Matches any filename containing Ch{N} and p{N}, e.g.:
+            Matches any filename containing Ch{N} and p{N}, with any
+            non-alphanumeric separators in between (or none):
               Ch1p1, Ch1p2, Ch6p1         (no separator)
               Ch1-Pt1, Ch1-pt1, Ch2-p2   (dash + optional 't')
-              Ch1_Pt1                     (underscore)
+              Ch1_Pt1, Ch_1_p_1, Ch1.p1  (underscore / dot)
               Title-Ch3p2.mp4            (title prefix, any separator)
               heygen_...-Ch1p1_id.mp4    (heygen with ID suffix)
               Ch1p1b                     (b-duplicate sorts after Ch1p1)
 
             'AI with Roz' intro files always sort first.
+            'AI with Roz Exit' files always sort last.
             Unknown files sort to the end.
             """
             import re
@@ -6217,21 +6369,37 @@ def create_resolve_with_videos():
             if re.search(r'AI\s+with\s+Roz.*Exit', name, re.IGNORECASE):
                 return (99999, 0)
 
-            # Other "AI with Roz" intro clips always go first
-            if re.search(r'AI\s+with\s+Roz', name, re.IGNORECASE):
-                return (0, 0)
-
-            # Universal pattern: Ch{X} then optional separator then p/P then optional t/T then {Y} then optional b
-            # Covers: Ch1p1, Ch1-p1, Ch1-Pt1, Ch1-pt1, Ch1_Pt1, Ch6p1, Ch2-p2, etc.
-            match = re.search(r'Ch(\d+)[-_]?[Pp][Tt]?(\d+)(b?)', name)
-            if match:
-                chapter_num = int(match.group(1))
-                part_num = int(match.group(2))
+            # Detect chapter pattern first — a chapter clip wins even if its
+            # title contains "AI with Roz" (e.g.
+            # "AI with Roz  AI ZERO Knowledge of AI-Ch1p1_xxx.mp4").
+            # Permissive pattern: Ch [sep] {X} [sep] p [t]? [sep] {Y} [b]?
+            # where [sep] is any run of non-alphanumeric characters (or empty).
+            chapter_match = re.search(
+                r'Ch[^A-Za-z0-9]*?(\d+)[^A-Za-z0-9]*?[Pp][Tt]?[^A-Za-z0-9]*?(\d+)(b?)',
+                name
+            )
+            if chapter_match:
+                chapter_num = int(chapter_match.group(1))
+                part_num = int(chapter_match.group(2))
                 # 'b' duplicate sorts just after the main part
-                part_frac = 0.5 if match.group(3).lower() == 'b' else 0
+                part_frac = 0.5 if chapter_match.group(
+                    3).lower() == 'b' else 0
+                logger.info(
+                    f"   🔢 parse_chapter_info: {name} → (Ch{chapter_num}, P{part_num}{'b' if part_frac else ''})"
+                )
                 return (chapter_num, part_num + part_frac)
 
+            # Only treat as intro when there is NO chapter marker. This keeps
+            # the standalone "AI with Roz v2.mov" intro at position 0 without
+            # collapsing every chapter clip to (0, 0).
+            if re.search(r'AI\s+with\s+Roz', name, re.IGNORECASE):
+                logger.info(f"   🔢 parse_chapter_info: {name} → INTRO (0, 0)")
+                return (0, 0)
+
             # Default to end of list
+            logger.warning(
+                f"   ⚠️ parse_chapter_info: NO chapter marker found in {name} → (999, 999)"
+            )
             return (999, 999)
 
         # Sort videos by chapter order

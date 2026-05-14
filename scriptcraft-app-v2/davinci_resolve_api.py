@@ -82,7 +82,14 @@ def _import_media_to_bin(resolve, media_pool, bin_mapping, bin_name, file_paths)
 
 
 def _generate_subtitles_from_audio(timeline):
-    """Try to generate subtitles from timeline audio via Resolve scripting API."""
+    """Try to generate subtitles from timeline audio via Resolve scripting API.
+
+    Resolve Studio's `Timeline:CreateSubtitlesFromAudio()` requires:
+      - DaVinci Resolve **Studio** (not Free).
+      - The Edit (or Cut) page to be active.
+      - The project to be saved at least once.
+      - The timeline to have audio on at least one track.
+    """
     if not timeline:
         return {
             "attempted": True,
@@ -90,41 +97,129 @@ def _generate_subtitles_from_audio(timeline):
             "message": "No active timeline available for subtitle generation",
         }
 
-    # Try multiple known/possible API signatures for compatibility across versions.
-    attempts = [
-        ("CreateSubtitlesFromAudio({})", lambda: timeline.CreateSubtitlesFromAudio({})),
-        ("CreateSubtitlesFromAudio()", lambda: timeline.CreateSubtitlesFromAudio()),
-        ("GenerateSubtitlesFromAudio({})", lambda: timeline.GenerateSubtitlesFromAudio({})),
-        ("GenerateSubtitlesFromAudio()", lambda: timeline.GenerateSubtitlesFromAudio()),
-    ]
+    # Try to put Resolve in a state where the AI Tools API will accept the call.
+    try:
+        import DaVinciResolveScript as _dvr
+        _resolve = _dvr.scriptapp("Resolve")
+        if _resolve is not None:
+            try:
+                _resolve.OpenPage("edit")
+            except Exception:
+                pass
+            try:
+                _pm = _resolve.GetProjectManager()
+                _proj = _pm.GetCurrentProject() if _pm else None
+                if _proj is not None:
+                    try:
+                        _proj.SetCurrentTimeline(timeline)
+                    except Exception:
+                        pass
+                    try:
+                        _proj.SaveProject()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    except Exception:
+        pass
 
+    settings_variants = (
+        {"language": "en-US", "captionPreset": "subtitle_default"},
+        {"language": "en-US"},
+        {},
+    )
+
+    # Resolve's CreateSubtitlesFromAudio transcribes the *mixed* output of
+    # ALL non-muted audio tracks. When the background music on A2 (and any
+    # SFX on A3+) is loud relative to the dialog on A1, the speech-to-text
+    # engine degrades into placeholder strings like "Mumbling". To get a
+    # clean transcription, mute every non-dialog audio track for the
+    # duration of the call and restore their original mute state afterward.
+    muted_tracks = []  # list of (track_index, original_mute_state)
+    try:
+        audio_track_count = int(timeline.GetTrackCount("audio") or 0)
+    except Exception:
+        audio_track_count = 0
+    for ti in range(2, audio_track_count + 1):
+        try:
+            was_muted = bool(timeline.GetIsTrackEnabled("audio", ti)) is False
+        except Exception:
+            was_muted = False
+        try:
+            # SetTrackEnable(False) = mute that track for playback/render,
+            # which is what the AI subtitle engine sees.
+            ok = timeline.SetTrackEnable("audio", ti, False)
+            muted_tracks.append((ti, was_muted))
+            if ok:
+                print(f"   🔇 Muted A{ti} for subtitle transcription")
+        except Exception as mute_err:
+            print(f"   ⚠️ Could not mute A{ti} for subtitles: {mute_err}")
+
+    # Try multiple known/possible API signatures for compatibility across versions.
+    attempts = []
+    for s in settings_variants:
+        attempts.append(
+            (f"CreateSubtitlesFromAudio({s})",
+             lambda s=s: timeline.CreateSubtitlesFromAudio(s)))
+    attempts.append(
+        ("CreateSubtitlesFromAudio()", lambda: timeline.CreateSubtitlesFromAudio()))
+    for s in settings_variants:
+        attempts.append(
+            (f"GenerateSubtitlesFromAudio({s})",
+             lambda s=s: timeline.GenerateSubtitlesFromAudio(s)))
+    attempts.append(
+        ("GenerateSubtitlesFromAudio()", lambda: timeline.GenerateSubtitlesFromAudio()))
+
+    last_error = None
+    sub_result = None
     for label, fn in attempts:
         try:
             result = fn()
             if result is None:
+                last_error = f"{label} returned None"
                 continue
             if isinstance(result, bool):
                 if result:
-                    return {
+                    sub_result = {
                         "attempted": True,
                         "success": True,
                         "message": f"Subtitles generated via {label}",
                     }
+                    break
+                last_error = f"{label} returned False"
                 continue
-            return {
+            sub_result = {
                 "attempted": True,
                 "success": True,
                 "message": f"Subtitles generated via {label}",
             }
-        except Exception:
+            break
+        except AttributeError as ae:
+            last_error = f"{label}: AttributeError {ae}"
+            continue
+        except Exception as e:
+            last_error = f"{label}: {type(e).__name__} {e}"
             continue
 
+    # Restore the original enabled state for every track we touched.
+    for ti, was_muted in muted_tracks:
+        try:
+            timeline.SetTrackEnable("audio", ti, not was_muted)
+        except Exception:
+            pass
+
+    if sub_result is not None:
+        return sub_result
+
+    detail = f" Last error: {last_error}" if last_error else ""
     return {
         "attempted": True,
         "success": False,
         "message": (
             "Could not auto-generate subtitles via scripting API. "
-            "Your Resolve version may require manual Timeline > AI Tools > Create Subtitles from Audio."
+            "Requires Resolve Studio with Edit page active and a saved project. "
+            "Fallback: Timeline > Create Subtitles from Audio."
+            f"{detail}"
         ),
     }
 
@@ -469,12 +564,26 @@ def _add_background_audio_clips(media_pool, timeline, audio_bin):
     """
     Place background music clips on audio track A2 ('background sound') in
     a fixed order:
-        1. AI with Roz Build Up.wav
-        2. AI with Roz Main Background.wav (repeated once per aRoll clip on V1)
+        1. AI with Roz Build Up.wav  (intro sting, once at the very start)
+        2. 'Designed, Riser, Epic Sunrise Riser SND64445.wav'  (riser into the bed)
+        3. 'Musical, Loop, Serious News Loop, Bass Octave Up Down,
+            Stutter Chord SND84939.wav'  (repeated 2x per aRoll clip on V1)
+        4. 'Designed, Riser, Epic Sunrise Riser SND64445.wav'  (riser tail)
     Sequenced back-to-back starting at the timeline start frame.
+
+    Also places a one-shot SFX on A3 ('sound effects') at the timeline
+    start: 'Computers, Keyboard   Mouse, Classic Keyboard Typing SND81694.wav'.
     """
     build_up_name = "AI with Roz Build Up.wav"
-    main_bg_name = "AI with Roz Main Background.wav"
+    riser_name = "Designed, Riser, Epic Sunrise Riser SND64445.wav"
+    main_bg_name = (
+        "Musical, Loop, Serious News Loop, Bass Octave Up Down, "
+        "Stutter Chord SND84939.wav"
+    )
+    sfx_intro_name = (
+        "Computers, Keyboard   Mouse, Classic Keyboard Typing SND81694.wav"
+    )
+    main_bg_per_aroll = 2
 
     if not audio_bin:
         return {
@@ -573,9 +682,15 @@ def _add_background_audio_clips(media_pool, timeline, audio_bin):
         aroll_count = 0
     if aroll_count <= 0:
         aroll_count = 1
-    print(f"   🔁 Repeating '{main_bg_name}' {aroll_count}x (one per aRoll clip on V1)")
+    print(f"   🔁 Repeating '{main_bg_name}' {aroll_count * main_bg_per_aroll}x "
+          f"({main_bg_per_aroll} per aRoll clip on V1, {aroll_count} aRoll clips)")
 
-    desired_order = [build_up_name] + [main_bg_name] * aroll_count
+    desired_order = (
+        [build_up_name]
+        + [riser_name]
+        + [main_bg_name] * (aroll_count * main_bg_per_aroll)
+        + [riser_name]
+    )
 
     for target in desired_order:
         clip = by_name.get(target.lower())
@@ -610,6 +725,49 @@ def _add_background_audio_clips(media_pool, timeline, audio_bin):
             cursor += duration if duration > 0 else 24
         else:
             print(f"   ⚠️ AppendToTimeline returned empty for {target} @ frame {cursor}")
+
+    # Place a one-shot keyboard-typing SFX on A3 at the timeline start.
+    sfx_clip = by_name.get(sfx_intro_name.lower())
+    if not sfx_clip:
+        sfx_base = sfx_intro_name.rsplit(".", 1)[0].lower()
+        for k, v in by_name.items():
+            if k.rsplit(".", 1)[0] == sfx_base:
+                sfx_clip = v
+                break
+    if sfx_clip:
+        # Ensure A3 exists.
+        try:
+            cur_audio = int(timeline.GetTrackCount("audio") or 1)
+        except Exception:
+            cur_audio = 1
+        while cur_audio < 3:
+            try:
+                timeline.AddTrack("audio")
+                cur_audio += 1
+                print(f"   ➕ Added audio track A{cur_audio} (fallback for SFX)")
+            except Exception as add_err:
+                print(f"   ⚠️ Could not add audio track A{cur_audio + 1}: {add_err}")
+                break
+        sfx_info = {
+            "mediaPoolItem": sfx_clip,
+            "trackIndex": 3,
+            "mediaType": 2,
+            "recordFrame": start_frame,
+        }
+        try:
+            sfx_result = media_pool.AppendToTimeline([sfx_info])
+        except Exception as sfx_err:
+            sfx_result = None
+            print(f"   ❌ AppendToTimeline failed for SFX {sfx_intro_name}: {sfx_err}")
+        if sfx_result:
+            appended.append(sfx_intro_name)
+            print(f"   ✅ A3 @ frame {start_frame}: {sfx_intro_name}")
+        else:
+            print(f"   ⚠️ AppendToTimeline returned empty for SFX {sfx_intro_name}")
+    else:
+        print(f"   ⚠️ SFX not found in audio bin: {sfx_intro_name}")
+        if sfx_intro_name not in missing:
+            missing.append(sfx_intro_name)
 
     if appended:
         return {
@@ -2736,6 +2894,57 @@ def _add_broll_clips_above_aroll(media_pool, timeline, broll_bin):
             "clips": [],
         }
 
+    # Dedupe clips that refer to the same underlying broll video. The broll
+    # bin commonly accumulates 2–4 copies of every clip because the same
+    # filename is imported from multiple locations:
+    #   • ~/Dev/Davinci/Template/broll/*
+    #   • {project}/bRoll/*  (and nested subdirs picked up by rglob)
+    #   • case variations (broll vs bRoll) on APFS
+    # All of those have different absolute paths but identical *basenames*,
+    # so we dedupe by basename (case-insensitive). Among duplicates, prefer
+    # the clip whose source path lives under the project's broll folder over
+    # the template, so we use the project-generated copy when both exist.
+    def _clip_basename(c):
+        for prop in ("File Path", "Resolved File Path"):
+            try:
+                val = c.GetClipProperty(prop)
+            except Exception:
+                val = None
+            if val:
+                return os.path.basename(str(val)).lower()
+        try:
+            return (c.GetName() or "").lower()
+        except Exception:
+            return str(id(c))
+
+    def _clip_is_template(c):
+        for prop in ("File Path", "Resolved File Path"):
+            try:
+                val = c.GetClipProperty(prop)
+            except Exception:
+                val = None
+            if val:
+                p = str(val).lower()
+                return ("/davinci/template/" in p) or ("/template/broll/" in p)
+        return False
+
+    by_name = {}
+    for c in broll_clips:
+        key = _clip_basename(c)
+        if not key:
+            continue
+        existing = by_name.get(key)
+        if existing is None:
+            by_name[key] = c
+        else:
+            # Prefer the non-template copy if we have a choice.
+            if _clip_is_template(existing) and not _clip_is_template(c):
+                print(f"   ♻️  Replacing template duplicate with project copy: {c.GetName()}")
+                by_name[key] = c
+            else:
+                print(f"   ⚠️ Skipping duplicate bRoll clip: {c.GetName()}")
+    broll_clips = list(by_name.values())
+
     # Sort by index in the Grok filename so timeline order == broll table order.
     sorted_clips = sorted(broll_clips, key=lambda c: _broll_sort_key(c.GetName()))
     ordered_names = [c.GetName() for c in sorted_clips]
@@ -3031,6 +3240,33 @@ def create_resolve_project(script_title, edl_filename=None, broll_folder=None, i
             images_folder,
             extensions={'.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff'}
         )
+
+        # Skip supplemental broll files whose basename was already imported
+        # from the template (~/Dev/Davinci/Template/broll/*). Without this
+        # filter the broll bin ends up with 2 copies of every clip that
+        # exists in both folders — which is the common case because the
+        # project's broll folder typically mirrors the template plus any
+        # newly-generated Grok clips.
+        try:
+            template_broll_dir = Path.home() / "Dev" / "Davinci" / "Template" / "broll"
+            template_broll_basenames = set()
+            if template_broll_dir.exists():
+                for p in template_broll_dir.iterdir():
+                    if p.is_file():
+                        template_broll_basenames.add(p.name.lower())
+            if template_broll_basenames and broll_paths:
+                filtered = []
+                skipped = 0
+                for p in broll_paths:
+                    if os.path.basename(p).lower() in template_broll_basenames:
+                        skipped += 1
+                        continue
+                    filtered.append(p)
+                if skipped:
+                    print(f"   ♻️ Skipping {skipped} supplemental broll file(s) already imported from template")
+                broll_paths = filtered
+        except Exception as dedupe_err:
+            print(f"   ⚠️ Could not dedupe broll vs template: {dedupe_err}")
 
         broll_count = _import_media_to_bin(resolve, media_pool, bin_mapping, 'broll', broll_paths)
         images_count = _import_media_to_bin(resolve, media_pool, bin_mapping, 'images', images_paths)
