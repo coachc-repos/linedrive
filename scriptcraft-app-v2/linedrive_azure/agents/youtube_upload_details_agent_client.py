@@ -164,7 +164,8 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         ## 🎬 VIDEO TITLE
         Create an engaging, optimized title:
         - Include primary keywords naturally
-        - Maximum 60 characters (avoid truncation)
+        - TARGET ≤ 60 characters so the title displays cleanly without truncation
+        - HARD LIMIT 100 characters (YouTube's max) — only exceed 60 if the extra words materially help SEO/CTR
         - Use power words and numbers when appropriate
         - Create curiosity and promise value
         - Examples: "10 AI Tools That Will 10X Your Productivity in 2025"
@@ -220,11 +221,22 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         - Format tags (e.g., "tutorial", "guide")
         - Mix of broad and specific tags
 
-        ## 🖼️ THUMBNAIL TEXT
-        Suggest bold thumbnail text (3-7 words max):
-        - Attention-grabbing phrases
-        - High contrast text recommendations
+        ## 🖼️ THUMBNAIL
+        Specify both the image spec AND the text overlay so the editor can build the asset:
+
+        **Image spec (required for upload):**
+        - 1280×720 (16:9), under 2 MB
+        - High contrast, subject/face clearly visible at small sizes
+        - PNG or JPG
+        - Should visually pair with the title for CTR
+
+        **Text overlay (3–7 words max):**
+        - Bold, attention-grabbing phrase
+        - High contrast against background
         - Examples: "10 AI TOOLS", "GAME CHANGER"
+
+        **Suggested thumbnail concept (1–2 sentences):**
+        Describe the visual (subject, expression, background, text placement) tailored to THIS script.
 
         ## 📂 CATEGORY
         Recommend the best YouTube category:
@@ -238,10 +250,14 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         - Help with channel structure
 
         ## 🎯 END SCREEN RECOMMENDATIONS
-        Suggest end screen content:
-        - Related videos to promote
-        - Playlists to link
-        - Subscribe button placement
+        YouTube end screens have 4 slots. Recommend a value for each, marking any
+        slot OPTIONAL when we may not have the link yet (e.g. "best video" if no
+        evergreen pick exists). Format each on its own line:
+        - Slot 1 — Subscribe button (always required)
+        - Slot 2 — Latest video: <auto = "Most recent upload"> (no link needed)
+        - Slot 3 — Best video (OPTIONAL): <suggested topic/title if known, else "TBD — leave blank if no evergreen pick">
+        - Slot 4 — Playlist (OPTIONAL): <suggested playlist name from the PLAYLIST SUGGESTIONS section, else "TBD">
+        Note: Slots 3 and 4 can be left empty in YouTube Studio if a link isn't ready yet.
 
         ## 🤖 PROMPTS MENTIONED IN THIS EPISODE
         Scan the ENTIRE script for any ChatGPT / AI prompts that are shown,
@@ -253,10 +269,18 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         - If no explicit prompts are found, write: "No AI prompts identified in this episode."
         - Do NOT invent or paraphrase prompts that are not in the script
 
+        ## � COMMUNITY POST (day-of-publish)
+        Write a ready-to-paste Community tab post (NOT just ideas). Should be:
+        - 1–3 short sentences
+        - Teases the value of the video without spoiling the payoff
+        - Ends with a question or CTA to drive comments
+        - Includes 1–2 hashtags from the description's HASHTAGS section
+        - Optional: mention if there's a poll worth attaching (e.g. "Which tool do you use?")
+        Provide the post text inside a fenced code block so it's easy to copy.
+
         ## 💡 ADDITIONAL NOTES
         Provide upload tips:
         - Best posting times
-        - Community post ideas
         - Pinned comment suggestions
         - Engagement strategies
 
@@ -267,6 +291,10 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         - Altered content (synthetic media disclosure): Yes — uses AI-generated avatar narration (HeyGen) / No
           (REQUIRED in Studio. If the script is narrated by a HeyGen avatar, mark Yes.)
         - Video language: English (United States)
+        - Captions: Upload `.srt` if available (OPTIONAL — leave auto-captions on if no SRT yet).
+          When auto-captions are used, REVIEW them for proper nouns and technical terms
+          (e.g. "Azure AI Foundry", "MAI-1-Preview", model names, tool names from this script)
+          before going public.
         - Caption certification: Captions were not substantively edited
         - Recording date: <today's date if unknown, else date mentioned in script>
         - Recording location: <city/region if mentioned in script, else leave blank>
@@ -319,8 +347,12 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
         If nothing in the script warrants a card beyond #1, write: "Only the subscribe-prompt card recommended."
 
         ## 👁️ VISIBILITY & SCHEDULING
-        - Privacy: Public / Unlisted / Private  (recommend with 1-line reason)
-        - Schedule: <day of week> <time> <timezone>  (recommend an optimal slot for the target audience timezone)
+        IMPORTANT: This pipeline NEVER publishes to Public from the app. The video is
+        uploaded as Private or Unlisted, and the user toggles it to Public manually in
+        YouTube Studio after review. Therefore:
+        - Privacy: Private (recommended for first review) / Unlisted / Scheduled
+          (do NOT recommend "Public" here — public is a manual Studio action)
+        - Schedule: <day of week> <time> <timezone>  (recommend an optimal slot for the target audience timezone, only if Privacy = Scheduled)
         - Premiere: Yes / No  (Yes = good for tutorials, announcements, episodic content;
           No = evergreen reference content; recommend with 1-line reason)
         - If Premiere = Yes: countdown 2 minutes, instant Premiere = No
@@ -328,19 +360,21 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
 
         ## ✅ PRE-PUBLISH CHECKLIST
         Render as a markdown checklist (use "- [ ]"). Tailor item values to this video.
-        - [ ] Title ≤ 60 chars and primary keyword in first 40
+        - [ ] Title ≤ 60 chars (or ≤ 100 hard limit) and primary keyword in first 40
         - [ ] Description first 150 chars contain primary keyword
         - [ ] Tags include primary keyword + 5–10 variations
-        - [ ] Thumbnail uploaded (1280×720 min, < 2MB, matches THUMBNAIL TEXT)
+        - [ ] Thumbnail uploaded (1280×720, < 2 MB, high contrast, matches THUMBNAIL section)
         - [ ] Made for Kids set (REQUIRED)
         - [ ] Altered content disclosure set (REQUIRED if HeyGen avatar narration)
         - [ ] Video language set
+        - [ ] Captions reviewed (auto-caps OK; upload `.srt` if available — proper nouns checked)
         - [ ] Category + playlists set
-        - [ ] End screen + cards configured
-        - [ ] Subtitles uploaded or auto-captions reviewed
+        - [ ] End screen — Subscribe + Latest video set; Best video & Playlist optional
+        - [ ] Cards configured (at minimum: subscribe-prompt card)
         - [ ] Ad suitability self-rated
         - [ ] Mid-roll placements set (if ≥ 8:00)
-        - [ ] Visibility + schedule set
+        - [ ] Visibility = Private/Unlisted (Public toggle is done in YouTube Studio)
+        - [ ] Community post ready to publish day-of
         - [ ] First comment ready to pin after publish
 
         CRITICAL REQUIREMENTS:

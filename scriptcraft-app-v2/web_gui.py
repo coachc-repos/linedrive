@@ -16,6 +16,7 @@ import uuid
 import asyncio
 import threading
 import logging
+import urllib.parse
 from datetime import datetime
 from io import BytesIO
 from flask import Flask, render_template, request, jsonify, Response, make_response, send_file, stream_with_context
@@ -400,8 +401,22 @@ def _sync_generated_media_to_project(project_path: Path) -> dict:
 # Import text processing functions
 
 app = Flask(__name__)
-# Allow large audio/video uploads (Whisper transcription, etc.) — 2 GB cap.
-app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024
+# Allow large audio/video uploads (Whisper transcription, gallery uploads, etc.)
+# — 16 GiB cap. Override with MAX_UPLOAD_GB env var if you need more/less.
+_max_upload_gb = int(os.environ.get("MAX_UPLOAD_GB", "16"))
+app.config["MAX_CONTENT_LENGTH"] = _max_upload_gb * 1024 * 1024 * 1024
+
+
+@app.errorhandler(413)
+def _too_large(_e):
+    """Return a JSON error for oversize uploads so the frontend can show it
+    instead of a silent HTML 413 page."""
+    from flask import jsonify as _jsonify
+    return _jsonify({
+        "success": False,
+        "error": (f"File exceeds the server upload limit of "
+                  f"{_max_upload_gb} GiB. Set MAX_UPLOAD_GB or compress the file."),
+    }), 413
 
 # ---------------------------------------------------------------------------
 # Optional token-based auth gate.
@@ -2173,9 +2188,16 @@ async def process_script_creation(session_id, topic, audience, tone,
 async def process_existing_script(
     session_id, script_content, audience, tone,
     video_length, checkboxes, heygen_template_id="",
-    heygen_api_key="", heygen_voice_id="", grok_api_key=""
+    heygen_api_key="", heygen_voice_id="", grok_api_key="",
+    youtube_details_override: Optional[str] = None,
+    broll_table_override: Optional[str] = None,
 ):
-    """Process existing script with progress updates"""
+    """Process existing script with progress updates.
+
+    youtube_details_override / broll_table_override let the caller pass
+    pre-loaded artifacts (e.g. from a .docx loaded into the bottom tabs)
+    so the corresponding agents are skipped entirely.
+    """
     import re
 
     logger.info(f"📝 SCRIPT PROCESSING STARTED: session={session_id}")
@@ -2491,114 +2513,149 @@ async def process_existing_script(
         youtube_details = None
         if checkboxes.get("youtube_details", False):
             current_progress = 15 + (completed_steps * progress_per_step)
-            streamer.send_update("📺 Generating YouTube Upload Details...",
-                                 int(current_progress))
-            try:
-                from linedrive_azure.agents import YouTubeUploadDetailsAgentClient
-
-                youtube_agent = YouTubeUploadDetailsAgentClient()
-                youtube_result = youtube_agent.generate_upload_details(
-                    script_content=cleaned_script,
-                    script_title=script_title,
-                    target_audience=audience,
-                    video_length=video_length,
-                    timeout=180
+            if youtube_details_override:
+                # Skip the agent: user loaded an existing YouTube details doc.
+                youtube_details = youtube_details_override
+                youtube_section = f"\n\n{'=' * 80}\n"
+                youtube_section += "# 📺 YOUTUBE UPLOAD DETAILS\n"
+                youtube_section += f"{'=' * 80}\n\n{youtube_details}"
+                final_output += youtube_section
+                completed_steps += 1
+                progress = 15 + (completed_steps * progress_per_step)
+                streamer.send_update(
+                    f"✅ Using loaded YouTube details ({len(youtube_details)} chars) — agent skipped",
+                    int(progress)
                 )
+            else:
+                streamer.send_update("📺 Generating YouTube Upload Details...",
+                                     int(current_progress))
+                try:
+                    from linedrive_azure.agents import YouTubeUploadDetailsAgentClient
 
-                if youtube_result.get("success", False):
-                    youtube_details = youtube_result.get("upload_details", "")
-                    youtube_section = f"\n\n{'=' * 80}\n"
-                    youtube_section += "# 📺 YOUTUBE UPLOAD DETAILS\n"
-                    youtube_section += f"{'=' * 80}\n\n{youtube_details}"
-                    final_output += youtube_section
-                    completed_steps += 1
-                    progress = 15 + (completed_steps * progress_per_step)
-                    streamer.send_update(
-                        f"✅ YouTube details generated ({len(youtube_details)} chars)",
-                        int(progress)
+                    youtube_agent = YouTubeUploadDetailsAgentClient()
+                    youtube_result = youtube_agent.generate_upload_details(
+                        script_content=cleaned_script,
+                        script_title=script_title,
+                        target_audience=audience,
+                        video_length=video_length,
+                        timeout=180
                     )
-            except Exception as e:
-                logger.error(f"❌ YouTube details error: {e}")
+
+                    if youtube_result.get("success", False):
+                        youtube_details = youtube_result.get("upload_details", "")
+                        youtube_section = f"\n\n{'=' * 80}\n"
+                        youtube_section += "# 📺 YOUTUBE UPLOAD DETAILS\n"
+                        youtube_section += f"{'=' * 80}\n\n{youtube_details}"
+                        final_output += youtube_section
+                        completed_steps += 1
+                        progress = 15 + (completed_steps * progress_per_step)
+                        streamer.send_update(
+                            f"✅ YouTube details generated ({len(youtube_details)} chars)",
+                            int(progress)
+                        )
+                except Exception as e:
+                    logger.error(f"❌ YouTube details error: {e}")
 
         # Generate B-roll Table if requested
         broll_table = None
         broll_rows = []
+        # If user pre-loaded a B-roll table doc, prime it now so that BOTH
+        # the explicit "broll" checkbox and downstream consumers (broll_images,
+        # grok_videos) can use it without re-running the agent.
+        if broll_table_override:
+            broll_table = broll_table_override
+            broll_rows = []
+            logger.info(
+                f"📋 Using loaded B-roll table override ({len(broll_table)} chars)")
         if checkboxes.get("broll", False):
             current_progress = 15 + (completed_steps * progress_per_step)
-            streamer.send_update("📊 Generating B-roll Search Terms Table...",
-                                 int(current_progress))
-            try:
-                from linedrive_azure.agents import ScriptBRollAgentClient
-
-                broll_agent = ScriptBRollAgentClient()
-                broll_result = broll_agent.generate_broll_table_with_timecodes(
-                    script_content=cleaned_script,
-                    script_title=script_title,
-                    words_per_minute=150,
-                    # Increased to 5 minutes for larger tables (40-60+ rows)
-                    timeout=300
-                )
-
-                if broll_result.get("success", False):
-                    broll_table = broll_result.get("table", "")
-                    parsed_data = broll_result.get("parsed_data", [])
-                    broll_rows = parsed_data
-
-                    broll_section = f"\n\n{'=' * 80}\n"
-                    broll_section += "# 📊 B-ROLL SEARCH TERMS TABLE\n"
-                    broll_section += f"{'=' * 80}\n\n{broll_table}"
-                    final_output += broll_section
-
-                    # Generate EDL file
-                    if parsed_data:
-                        try:
-                            import time
-                            timestamp = time.strftime("%Y%m%d_%H%M%S")
-                            edl_filename = f"broll_markers_{timestamp}.edl"
-                            edl_dir = run_output_dir / "MDL"
-                            edl_dir.mkdir(parents=True, exist_ok=True)
-                            edl_path = edl_dir / edl_filename
-
-                            edl_result = broll_agent.create_edl_markers(
-                                broll_data=parsed_data,
-                                output_file=str(edl_path),
-                                frame_rate='24'
-                            )
-
-                            if edl_result.get("success"):
-                                # Read EDL content for frontend display
-                                try:
-                                    with open(edl_path, 'r', encoding='utf-8') as f:
-                                        edl_content = f.read()
-                                    logger.info(
-                                        f"✅ EDL content read ({len(edl_content)} bytes)")
-                                except Exception as read_error:
-                                    logger.error(
-                                        f"⚠️ Could not read EDL file: {read_error}")
-
-                                edl_info = f"\n\n**EDL File:** `{edl_filename}`"
-                                edl_info += f" ({edl_result.get('marker_count')}"
-                                edl_info += " markers)\n"
-                                final_output += edl_info
-                        except Exception as edl_error:
-                            logger.error(f"❌ EDL error: {edl_error}")
-
-                    completed_steps += 1
-                    progress = 15 + (completed_steps * progress_per_step)
-                    streamer.send_update(
-                        f"✅ B-roll table generated ({len(broll_table)} chars)",
-                        int(progress)
-                    )
-                else:
-                    logger.warning(f"⚠️ B-roll agent returned success=False")
-                    streamer.send_update(
-                        "⚠️ B-roll table generation failed", int(current_progress))
-            except Exception as e:
-                logger.error(f"❌ B-roll table error: {e}")
-                import traceback
-                traceback.print_exc()
+            if broll_table_override:
+                # Skip the agent entirely.
+                broll_section = f"\n\n{'=' * 80}\n"
+                broll_section += "# 📊 B-ROLL SEARCH TERMS TABLE\n"
+                broll_section += f"{'=' * 80}\n\n{broll_table}"
+                final_output += broll_section
+                completed_steps += 1
+                progress = 15 + (completed_steps * progress_per_step)
                 streamer.send_update(
-                    f"❌ B-roll table error: {str(e)}", int(current_progress))
+                    f"✅ Using loaded B-roll table ({len(broll_table)} chars) — agent skipped",
+                    int(progress)
+                )
+            else:
+                streamer.send_update("📊 Generating B-roll Search Terms Table...",
+                                     int(current_progress))
+                try:
+                    from linedrive_azure.agents import ScriptBRollAgentClient
+
+                    broll_agent = ScriptBRollAgentClient()
+                    broll_result = broll_agent.generate_broll_table_with_timecodes(
+                        script_content=cleaned_script,
+                        script_title=script_title,
+                        words_per_minute=150,
+                        # Increased to 5 minutes for larger tables (40-60+ rows)
+                        timeout=300
+                    )
+
+                    if broll_result.get("success", False):
+                        broll_table = broll_result.get("table", "")
+                        parsed_data = broll_result.get("parsed_data", [])
+                        broll_rows = parsed_data
+
+                        broll_section = f"\n\n{'=' * 80}\n"
+                        broll_section += "# 📊 B-ROLL SEARCH TERMS TABLE\n"
+                        broll_section += f"{'=' * 80}\n\n{broll_table}"
+                        final_output += broll_section
+
+                        # Generate EDL file
+                        if parsed_data:
+                            try:
+                                import time
+                                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                                edl_filename = f"broll_markers_{timestamp}.edl"
+                                edl_dir = run_output_dir / "MDL"
+                                edl_dir.mkdir(parents=True, exist_ok=True)
+                                edl_path = edl_dir / edl_filename
+
+                                edl_result = broll_agent.create_edl_markers(
+                                    broll_data=parsed_data,
+                                    output_file=str(edl_path),
+                                    frame_rate='24'
+                                )
+
+                                if edl_result.get("success"):
+                                    # Read EDL content for frontend display
+                                    try:
+                                        with open(edl_path, 'r', encoding='utf-8') as f:
+                                            edl_content = f.read()
+                                        logger.info(
+                                            f"✅ EDL content read ({len(edl_content)} bytes)")
+                                    except Exception as read_error:
+                                        logger.error(
+                                            f"⚠️ Could not read EDL file: {read_error}")
+
+                                    edl_info = f"\n\n**EDL File:** `{edl_filename}`"
+                                    edl_info += f" ({edl_result.get('marker_count')}"
+                                    edl_info += " markers)\n"
+                                    final_output += edl_info
+                            except Exception as edl_error:
+                                logger.error(f"❌ EDL error: {edl_error}")
+
+                        completed_steps += 1
+                        progress = 15 + (completed_steps * progress_per_step)
+                        streamer.send_update(
+                            f"✅ B-roll table generated ({len(broll_table)} chars)",
+                            int(progress)
+                        )
+                    else:
+                        logger.warning(f"⚠️ B-roll agent returned success=False")
+                        streamer.send_update(
+                            "⚠️ B-roll table generation failed", int(current_progress))
+                except Exception as e:
+                    logger.error(f"❌ B-roll table error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    streamer.send_update(
+                        f"❌ B-roll table error: {str(e)}", int(current_progress))
 
         # Generate B-roll Images using Gemini (ONLY if broll_images checkbox checked AND broll_table was successfully generated)
         broll_images = None
@@ -3857,6 +3914,12 @@ def process_script():
         heygen_api_key = data.get("heygen_api_key", "")
         heygen_voice_id = data.get("heygen_voice_id", "")
         grok_api_key = data.get("grok_api_key", "")
+        # Optional pre-loaded artifacts that let the workflow skip the
+        # corresponding agents (Feature: Load existing YouTube details / B-roll table).
+        youtube_details_override = (
+            data.get("youtube_details_override") or "").strip() or None
+        broll_table_override = (
+            data.get("broll_table_override") or "").strip() or None
 
         if not script_content.strip():
             logger.warning("❌ Empty script received")
@@ -3880,7 +3943,9 @@ def process_script():
                 asyncio.run(process_existing_script(
                     session_id, script_content, audience, tone,
                     video_length, checkboxes, heygen_template_id,
-                    heygen_api_key, heygen_voice_id, grok_api_key
+                    heygen_api_key, heygen_voice_id, grok_api_key,
+                    youtube_details_override=youtube_details_override,
+                    broll_table_override=broll_table_override,
                 ))
             except Exception as e:
                 logger.error(f"❌ Script processing error: {e}")
@@ -5505,6 +5570,593 @@ def export_word():
         error_msg = f"Export to Word failed: {str(e)}"
         logger.error(f"❌ {error_msg}")
         return jsonify({"success": False, "error": error_msg})
+
+
+# ---------------------------------------------------------------------------
+# YouTube Publishing (AI for Roz channel)
+# ---------------------------------------------------------------------------
+
+def _yt_uploads_dir() -> Path:
+    """Working directory for browser-uploaded videos and thumbnails."""
+    base = Path.home() / ".scriptcraft" / "youtube_uploads"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _osascript_pick_file(prompt: str, types_clause: str = "") -> dict:
+    """Show a macOS native file-open dialog and return the chosen path.
+
+    ``types_clause`` is the literal AppleScript clause appended to the
+    ``choose file`` command (e.g. ``of type {"mp4","mov"}``)."""
+    import subprocess
+    if sys.platform != "darwin":
+        return {"success": False,
+                "error": "Native file picker is only supported on macOS."}
+    script = (
+        'try\n'
+        f'  set theFile to POSIX path of (choose file with prompt "{prompt}" {types_clause})\n'
+        '  return theFile\n'
+        'on error number -128\n'
+        '  return "__CANCELLED__"\n'
+        'end try'
+    )
+    try:
+        out = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=300, check=False
+        )
+    except Exception as ex:
+        return {"success": False, "error": f"osascript failed: {ex}"}
+    if out.returncode != 0:
+        return {"success": False,
+                "error": (out.stderr or "osascript error").strip()}
+    path = (out.stdout or "").strip()
+    if not path or path == "__CANCELLED__":
+        return {"success": False, "cancelled": True}
+    return {"success": True, "path": path}
+
+
+@app.route("/api/youtube/pick-video-path", methods=["GET"])
+def youtube_pick_video_path():
+    """Open a native OS file dialog and return the selected video path
+    without uploading anything. The video must remain on the local disk
+    where the YouTube uploader can read it directly."""
+    res = _osascript_pick_file(
+        "Choose the finished video to publish to YouTube",
+        'of type {"mp4","mov","m4v","mkv","webm"}'
+    )
+    if not res.get("success"):
+        return jsonify(res), (200 if res.get("cancelled") else 500)
+    p = Path(res["path"])
+    if not p.exists() or not p.is_file():
+        return jsonify({"success": False,
+                        "error": f"Selected file not found: {p}"}), 400
+    return jsonify({
+        "success": True,
+        "path": str(p),
+        "filename": p.name,
+        "size_bytes": p.stat().st_size,
+    })
+
+
+@app.route("/api/youtube/pick-thumbnail-path", methods=["GET"])
+def youtube_pick_thumbnail_path():
+    """Open a native OS file dialog and return the selected thumbnail
+    path. We validate extension and 2 MB YouTube limit here."""
+    res = _osascript_pick_file(
+        "Choose a thumbnail image (PNG or JPG, under 2 MB)",
+        'of type {"png","jpg","jpeg"}'
+    )
+    if not res.get("success"):
+        return jsonify(res), (200 if res.get("cancelled") else 500)
+    p = Path(res["path"])
+    if not p.exists() or not p.is_file():
+        return jsonify({"success": False,
+                        "error": f"Selected file not found: {p}"}), 400
+    if p.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+        return jsonify({"success": False,
+                        "error": f"Unsupported extension {p.suffix}"}), 400
+    size = p.stat().st_size
+    if size > 2 * 1024 * 1024:
+        return jsonify({"success": False,
+                        "error": "Thumbnail exceeds YouTube's 2 MB limit."
+                        }), 400
+    return jsonify({
+        "success": True,
+        "path": str(p),
+        "filename": p.name,
+        "size_bytes": size,
+    })
+
+
+@app.route("/api/youtube/upload-video-file", methods=["POST"])
+def youtube_upload_video_file():
+    """Receive a video file from the browser and save it to a working
+    directory so the publisher can upload it by path."""
+    try:
+        from werkzeug.utils import secure_filename
+        f = request.files.get("file")
+        if not f:
+            return jsonify({"success": False, "error": "no file"}), 400
+        safe_name = secure_filename(f.filename or "video.mp4") or "video.mp4"
+        target = _yt_uploads_dir() / safe_name
+        f.save(str(target))
+        return jsonify({
+            "success": True,
+            "path": str(target),
+            "filename": safe_name,
+            "size_bytes": target.stat().st_size,
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_upload_video_file error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/upload-thumbnail", methods=["POST"])
+def youtube_upload_thumbnail():
+    """Receive a thumbnail image from the browser and save it locally."""
+    try:
+        from werkzeug.utils import secure_filename
+        f = request.files.get("file")
+        if not f:
+            return jsonify({"success": False, "error": "no file"}), 400
+        safe_name = secure_filename(f.filename or "thumbnail.png") \
+            or "thumbnail.png"
+        ext = Path(safe_name).suffix.lower()
+        if ext not in {".png", ".jpg", ".jpeg"}:
+            return jsonify({"success": False,
+                            "error": f"unsupported extension {ext}"}), 400
+        target = _yt_uploads_dir() / safe_name
+        f.save(str(target))
+        if target.stat().st_size > 2 * 1024 * 1024:
+            target.unlink(missing_ok=True)
+            return jsonify({"success": False,
+                            "error": "Thumbnail exceeds YouTube's 2 MB limit."
+                            }), 400
+        return jsonify({
+            "success": True,
+            "path": str(target),
+            "filename": safe_name,
+            "size_bytes": target.stat().st_size,
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_upload_thumbnail error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/auth-status", methods=["GET"])
+def youtube_auth_status():
+    try:
+        import youtube_publisher as yp
+        return jsonify({
+            "success": True,
+            "has_client_secret": yp.has_client_secret(),
+            "is_authorized": yp.is_authorized(),
+            "client_secret_path": str(yp.CLIENT_SECRET_PATH),
+            "token_path": str(yp.TOKEN_PATH),
+            "default_video_dir": str(yp.DEFAULT_VIDEO_DIR),
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_auth_status error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/recent-videos", methods=["GET"])
+def youtube_recent_videos():
+    """List recently-modified video files in the configured Final dir."""
+    try:
+        import youtube_publisher as yp
+        directory = request.args.get("dir") or None
+        base = Path(directory).expanduser() if directory else None
+        videos = yp.list_recent_videos(directory=base)
+        return jsonify({
+            "success": True,
+            "videos": videos,
+            "directory": str(base or yp.DEFAULT_VIDEO_DIR),
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_recent_videos error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/thumbnails", methods=["GET"])
+def youtube_thumbnails():
+    """List thumbnail images in the ``thumbnails`` folder next to a
+    selected video (e.g. ~/Dev/Videos/Edited/Final/projectX/thumbnails)."""
+    try:
+        import youtube_publisher as yp
+        video_path = (request.args.get("video_path") or "").strip()
+        if not video_path:
+            return jsonify({"success": False,
+                            "error": "video_path is required"}), 400
+        thumbs = yp.list_thumbnails_for_video(video_path)
+        # Build serving URLs the UI can drop straight into <img src>.
+        for t in thumbs:
+            t["url"] = ("/api/youtube/thumbnail-image?path="
+                        + urllib.parse.quote(t["path"], safe=""))
+        return jsonify({
+            "success": True,
+            "thumbnails": thumbs,
+            "directory": str(Path(video_path).expanduser().parent
+                              / "thumbnails"),
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_thumbnails error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/thumbnail-image", methods=["GET"])
+def youtube_thumbnail_image():
+    """Serve a thumbnail image file from disk. Restricted to images that
+    live inside a ``thumbnails`` directory under the configured Final
+    video root, so this cannot be used to read arbitrary files."""
+    try:
+        import youtube_publisher as yp
+        raw = request.args.get("path", "")
+        if not raw:
+            return jsonify({"success": False,
+                            "error": "path is required"}), 400
+        target = Path(raw).expanduser().resolve()
+        if not target.exists() or not target.is_file():
+            return jsonify({"success": False,
+                            "error": "file not found"}), 404
+        if target.suffix.lower() not in yp.THUMBNAIL_EXTS:
+            return jsonify({"success": False,
+                            "error": "unsupported file type"}), 400
+        # Containment check: must live under DEFAULT_VIDEO_DIR and inside
+        # a directory literally named "thumbnails".
+        root = yp.DEFAULT_VIDEO_DIR.expanduser().resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            return jsonify({"success": False,
+                            "error": "path outside allowed root"}), 403
+        if "thumbnails" not in {p.name for p in target.parents}:
+            return jsonify({"success": False,
+                            "error": "path is not in a thumbnails dir"}), 403
+        return send_file(str(target), mimetype=None, conditional=True)
+    except Exception as e:
+        logger.error(f"❌ youtube_thumbnail_image error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/local-preview", methods=["GET"])
+def youtube_local_preview():
+    """Serve any image or video file from the user's home directory so
+    the publish modal can preview the selected video and thumbnail.
+    Restricted to $HOME and to known media extensions to prevent
+    arbitrary disk reads."""
+    try:
+        raw = request.args.get("path", "")
+        if not raw:
+            return jsonify({"success": False,
+                            "error": "path is required"}), 400
+        target = Path(raw).expanduser().resolve()
+        if not target.exists() or not target.is_file():
+            return jsonify({"success": False,
+                            "error": "file not found"}), 404
+        # Containment: must live somewhere under the user's home dir.
+        home = Path.home().resolve()
+        try:
+            target.relative_to(home)
+        except ValueError:
+            return jsonify({"success": False,
+                            "error": "path outside home directory"}), 403
+        ext = target.suffix.lower()
+        media_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif",
+                      ".mp4", ".mov", ".m4v", ".mkv", ".webm"}
+        if ext not in media_exts:
+            return jsonify({"success": False,
+                            "error": f"unsupported file type {ext}"}), 400
+        mimetype = None
+        if ext in {".mp4", ".m4v"}:
+            mimetype = "video/mp4"
+        elif ext == ".mov":
+            mimetype = "video/quicktime"
+        elif ext == ".webm":
+            mimetype = "video/webm"
+        elif ext == ".mkv":
+            mimetype = "video/x-matroska"
+        elif ext in {".jpg", ".jpeg"}:
+            mimetype = "image/jpeg"
+        elif ext == ".png":
+            mimetype = "image/png"
+        elif ext == ".webp":
+            mimetype = "image/webp"
+        elif ext == ".gif":
+            mimetype = "image/gif"
+        return send_file(str(target), mimetype=mimetype, conditional=True)
+    except Exception as e:
+        logger.error(f"❌ youtube_local_preview error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/preview-metadata", methods=["POST"])
+def youtube_preview_metadata():
+    """Parse the YouTube details markdown and return the metadata that
+    will be sent to YouTube — lets the UI show a final review."""
+    try:
+        import youtube_publisher as yp
+        data = request.get_json(silent=True) or {}
+        md = data.get("youtube_details_md", "")
+        if not md.strip():
+            return jsonify({"success": False,
+                            "error": "youtube_details_md is required"}), 400
+        meta = yp.parse_youtube_details_markdown(md)
+        return jsonify({
+            "success": True,
+            "metadata": {
+                "title": meta.title,
+                "description": meta.description,
+                "tags": meta.tags,
+                "category_id": meta.category_id,
+                "made_for_kids": meta.made_for_kids,
+            },
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_preview_metadata error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/reveal-path", methods=["POST"])
+def youtube_reveal_path():
+    """Open Finder with the given file selected so the user can drag
+    the SRT into the YouTube Studio captions uploader."""
+    try:
+        data = request.get_json(silent=True) or {}
+        p = (data.get("path") or "").strip()
+        if not p:
+            return jsonify({"success": False, "error": "path required"}), 400
+        target = Path(p).expanduser()
+        if not target.exists():
+            return jsonify({"success": False,
+                            "error": f"Not found: {target}"}), 400
+        import subprocess
+        subprocess.Popen(["open", "-R", str(target)])
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/generate-srt", methods=["POST"])
+def youtube_generate_srt():
+    """Run whisper on the chosen video file and produce a .srt subtitle
+    file the user can upload to YouTube. Does NOT touch the DaVinci
+    timeline. Returns the absolute path of the .srt and a sibling URL
+    the browser can use to download it."""
+    try:
+        data = request.get_json(silent=True) or {}
+        video_path = (data.get("video_path") or "").strip()
+        model = (data.get("model") or "medium").strip()
+        language = (data.get("language") or "en").strip()
+        if not video_path:
+            return jsonify({"success": False,
+                            "error": "video_path is required"}), 400
+        src = Path(video_path).expanduser()
+        if not src.exists() or not src.is_file():
+            return jsonify({"success": False,
+                            "error": f"Video file not found: {src}"}), 400
+
+        whisper_bin = _find_whisper_cli()
+        if not whisper_bin:
+            return jsonify({
+                "success": False,
+                "error": "whisper CLI not found. Install with: "
+                         "pip install openai-whisper",
+            }), 500
+
+        out_dir = src.parent / "captions"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        import subprocess
+        cmd = [
+            whisper_bin, str(src),
+            "--model", model,
+            "--output_format", "srt",
+            "--output_dir", str(out_dir),
+            "--task", "transcribe",
+            "--verbose", "False",
+        ]
+        if language:
+            cmd += ["--language", language]
+        logger.info(f"🎙️ Generating SRT: {' '.join(cmd)}")
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=60 * 60)
+        if proc.returncode != 0:
+            logger.error(f"❌ whisper SRT failed: {proc.stderr[:2000]}")
+            return jsonify({"success": False,
+                            "error": "whisper failed: "
+                                     + (proc.stderr or proc.stdout)[-500:]}), 500
+
+        srt_path = out_dir / (src.stem + ".srt")
+        if not srt_path.exists():
+            # Whisper may name it differently; pick newest .srt in out_dir.
+            srts = sorted(out_dir.glob("*.srt"),
+                          key=lambda p: p.stat().st_mtime, reverse=True)
+            if srts:
+                srt_path = srts[0]
+        if not srt_path.exists():
+            return jsonify({"success": False,
+                            "error": "SRT file was not produced"}), 500
+        return jsonify({
+            "success": True,
+            "srt_path": str(srt_path),
+            "filename": srt_path.name,
+            "size_bytes": srt_path.stat().st_size,
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_generate_srt error: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/publish", methods=["POST"])
+def youtube_publish():
+    """Publish a finished video to YouTube. Returns immediately with
+    an upload_id; poll /api/youtube/publish/status/<id> for progress."""
+    try:
+        import youtube_publisher as yp
+        data = request.get_json(silent=True) or {}
+        video_path = (data.get("video_path") or "").strip()
+        md = data.get("youtube_details_md", "")
+        privacy = (data.get("privacy_status") or "private").lower()
+        notify = bool(data.get("notify_subscribers", True))
+        # Optional manual overrides from the review modal.
+        overrides = data.get("overrides") or {}
+
+        if not video_path:
+            return jsonify({"success": False,
+                            "error": "video_path is required"}), 400
+        if not md.strip() and not overrides.get("title"):
+            return jsonify({"success": False,
+                            "error": "youtube_details_md or overrides.title required"}), 400
+        # We never publish publicly from this app — going public must be a
+        # manual action in YouTube Studio.
+        ALLOWED_PRIVACY = {"private", "unlisted"}
+        if privacy not in ALLOWED_PRIVACY:
+            return jsonify({"success": False,
+                            "error": f"privacy_status must be one of {sorted(ALLOWED_PRIVACY)} "
+                                     f"(public uploads must be toggled in YouTube Studio)"}), 400
+
+        path = Path(video_path).expanduser()
+        if not path.exists() or not path.is_file():
+            return jsonify({"success": False,
+                            "error": f"Video file not found: {path}"}), 400
+
+        if not yp.has_client_secret():
+            return jsonify({
+                "success": False,
+                "error": "Missing OAuth client secret",
+                "setup_required": True,
+                "client_secret_path": str(yp.CLIENT_SECRET_PATH),
+            }), 400
+
+        meta = yp.parse_youtube_details_markdown(md) if md.strip() else \
+            yp.YouTubeMetadata(title=overrides.get("title", "Untitled"),
+                               description=overrides.get("description", ""))
+        # Apply overrides from the review modal (if user edited fields).
+        if overrides.get("title"):
+            meta.title = overrides["title"]
+        if overrides.get("description"):
+            meta.description = overrides["description"]
+        if "tags" in overrides and isinstance(overrides["tags"], list):
+            meta.tags = [str(t).strip() for t in overrides["tags"] if str(t).strip()]
+        if "hashtags" in overrides and isinstance(overrides["hashtags"], list):
+            meta.hashtags = [str(h).strip() for h in overrides["hashtags"] if str(h).strip()]
+        if overrides.get("category_id"):
+            meta.category_id = str(overrides["category_id"])
+        if "made_for_kids" in overrides:
+            meta.made_for_kids = bool(overrides["made_for_kids"])
+        # Newer fields (synthetic media, language, recording date, embed).
+        if "contains_synthetic_media" in overrides:
+            meta.contains_synthetic_media = bool(
+                overrides["contains_synthetic_media"])
+        if overrides.get("default_language"):
+            meta.default_language = str(overrides["default_language"])
+        if overrides.get("default_audio_language"):
+            meta.default_audio_language = str(overrides["default_audio_language"])
+        if overrides.get("recording_date"):
+            meta.recording_date = str(overrides["recording_date"])
+        if "embeddable" in overrides:
+            meta.embeddable = bool(overrides["embeddable"])
+        meta.privacy_status = privacy
+
+        # Optional thumbnail.
+        thumbnail_path = (data.get("thumbnail_path") or "").strip() or None
+        if thumbnail_path:
+            tp = Path(thumbnail_path).expanduser()
+            if not tp.exists() or not tp.is_file():
+                return jsonify({"success": False,
+                                "error": f"Thumbnail file not found: {tp}"}), 400
+            if tp.suffix.lower() not in yp.THUMBNAIL_EXTS:
+                return jsonify({
+                    "success": False,
+                    "error": f"Unsupported thumbnail extension {tp.suffix}. "
+                             f"Allowed: {sorted(yp.THUMBNAIL_EXTS)}"
+                }), 400
+            if tp.stat().st_size > yp.MAX_THUMBNAIL_BYTES:
+                return jsonify({
+                    "success": False,
+                    "error": f"Thumbnail is larger than YouTube's 2 MB limit: {tp}"
+                }), 400
+            thumbnail_path = str(tp)
+
+        # Optional playlists to add the video to after upload.
+        raw_pls = data.get("playlist_ids") or []
+        if not isinstance(raw_pls, list):
+            return jsonify({"success": False,
+                            "error": "playlist_ids must be a list"}), 400
+        playlist_ids = [str(p).strip() for p in raw_pls if str(p).strip()]
+
+        upload_id = str(uuid.uuid4())
+
+        def _worker():
+            try:
+                yp.upload_video(str(path), meta, upload_id,
+                                notify_subscribers=notify,
+                                thumbnail_path=thumbnail_path,
+                                playlist_ids=playlist_ids)
+            except Exception as ex:
+                logger.error(f"❌ YouTube upload failed: {ex}")
+                # The publisher already records error state, but ensure
+                # we have a final status entry even for setup errors.
+                from youtube_publisher import _set_state
+                _set_state(upload_id, status="error", error=str(ex))
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+        return jsonify({
+            "success": True,
+            "upload_id": upload_id,
+            "video_path": str(path),
+            "filesize_bytes": path.stat().st_size,
+            "metadata_preview": {
+                "title": meta.title,
+                "tags_count": len(meta.tags),
+                "hashtags_count": len(meta.hashtags),
+                "category_id": meta.category_id,
+                "privacy_status": meta.privacy_status,
+                "made_for_kids": meta.made_for_kids,
+                "thumbnail_path": thumbnail_path,
+            },
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_publish error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/playlists", methods=["GET"])
+def youtube_list_playlists():
+    """Return all playlists owned by the authorized channel so the UI
+    can render a picker. Triggers OAuth on first call (same as publish)."""
+    try:
+        import youtube_publisher as yp
+        if not yp.has_client_secret():
+            return jsonify({
+                "success": False,
+                "error": "Missing OAuth client secret",
+                "setup_required": True,
+                "client_secret_path": str(yp.CLIENT_SECRET_PATH),
+            }), 400
+        playlists = yp.list_my_playlists()
+        return jsonify({"success": True, "playlists": playlists})
+    except Exception as e:
+        logger.error(f"❌ youtube_list_playlists error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/publish/status/<upload_id>", methods=["GET"])
+def youtube_publish_status(upload_id):
+    """Poll endpoint for upload progress."""
+    try:
+        import youtube_publisher as yp
+        state = yp.get_upload_status(upload_id)
+        if state is None:
+            return jsonify({"success": False,
+                            "error": "Unknown upload_id"}), 404
+        return jsonify({"success": True, "state": state})
+    except Exception as e:
+        logger.error(f"❌ youtube_publish_status error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/test-thumbnails")
@@ -8222,10 +8874,76 @@ def _transcribe_worker(session_id: str, whisper_bin: str, file_path: str,
                              seg in collected_segments if seg).strip()
         else:
             text = plain_text
+
+        # Auto-save the transcript to <output_dir>/transcript/<project>_transcript.{md,docx}
+        saved_md_path: Optional[str] = None
+        saved_docx_path: Optional[str] = None
+        save_error: Optional[str] = None
+        try:
+            out_parent = _get_output_parent_dir()
+            transcript_dir = out_parent / "transcript"
+            transcript_dir.mkdir(parents=True, exist_ok=True)
+            project_name = _safe_title_for_paths(out_parent.name) or "project"
+            src_path = Path(file_path)
+            generated_at = _time.strftime("%Y-%m-%d %H:%M:%S")
+            md_body = (
+                f"# Transcript: {project_name}\n\n"
+                f"- **Source:** `{src_path}`\n"
+                f"- **Model:** {model}\n"
+                f"- **Language:** {language or 'auto'}\n"
+                f"- **Generated:** {generated_at}\n"
+                f"- **Segments:** {len(collected_segments)}\n\n"
+                f"---\n\n"
+                f"{text}\n"
+            )
+            md_path = transcript_dir / f"{project_name}_transcript.md"
+            md_path.write_text(md_body, encoding="utf-8")
+            saved_md_path = str(md_path)
+            logger.info(f"📝 Transcript .md saved: {md_path}")
+
+            docx_path = transcript_dir / f"{project_name}_transcript.docx"
+            try:
+                from docx import Document  # python-docx
+                doc = Document()
+                doc.add_heading(f"Transcript: {project_name}", level=1)
+                meta = doc.add_paragraph()
+                meta.add_run(f"Source: {src_path}\n").italic = True
+                meta.add_run(f"Model: {model}    ").italic = True
+                meta.add_run(f"Language: {language or 'auto'}\n").italic = True
+                meta.add_run(f"Generated: {generated_at}    ").italic = True
+                meta.add_run(
+                    f"Segments: {len(collected_segments)}").italic = True
+                doc.add_paragraph("")
+                for line in text.splitlines():
+                    doc.add_paragraph(line)
+                doc.save(str(docx_path))
+                saved_docx_path = str(docx_path)
+                logger.info(f"📝 Transcript .docx saved: {docx_path}")
+            except Exception as docx_exc:
+                logger.warning(
+                    f"⚠️ Could not save transcript .docx (md saved ok): {docx_exc}")
+
+            saved_msg = f"📝 Transcript saved to {md_path}"
+            if saved_docx_path:
+                saved_msg += f" (+ .docx)"
+            push({"type": "progress", "message": saved_msg})
+        except Exception as save_exc:
+            save_error = str(save_exc)
+            logger.error(
+                f"⚠️ Failed to save transcript: {save_exc}", exc_info=True)
+            push({"type": "progress",
+                  "message": f"⚠️ Failed to save transcript: {save_exc}"})
+
         transcribe_results[session_id] = {
-            "success": True, "text": text, "model": model}
+            "success": True, "text": text, "model": model,
+            "saved_md_path": saved_md_path,
+            "saved_docx_path": saved_docx_path,
+            "save_error": save_error}
         push({"type": "done", "text": text, "model": model,
-             "segments": len(collected_segments)})
+             "segments": len(collected_segments),
+             "saved_md_path": saved_md_path,
+             "saved_docx_path": saved_docx_path,
+             "save_error": save_error})
     except Exception as e:
         logger.error(f"❌ transcribe worker crash: {e}", exc_info=True)
         push({"type": "error", "error": str(e)})

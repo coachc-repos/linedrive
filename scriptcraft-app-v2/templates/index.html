@@ -1427,7 +1427,9 @@
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkYouTubeDetails" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">📺 YouTube</span>
+                        <span style="font-size: 0.8em !important;">📺 ytube</span>
+                        <button type="button" onclick="event.preventDefault(); event.stopPropagation(); loadYouTubeDetailsFromFile();" title="Load existing YouTube details .docx/.md (skips the agent)" style="margin-left:6px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:0 6px; border-radius:3px; font-size:0.85em; cursor:pointer;">📂</button>
+                        <span id="ytLoadedBadge" style="display:none; margin-left:4px; color:#10b981; font-size:0.75em;" title="YouTube details pre-loaded">●</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkHeyGenReady" style="width: auto; margin-right: 4px;">
@@ -1436,6 +1438,8 @@
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkBRollTable" style="width: auto; margin-right: 4px;">
                         <span style="font-size: 0.8em !important;">🎥 B-Roll</span>
+                        <button type="button" onclick="event.preventDefault(); event.stopPropagation(); loadBrollTableFromFile();" title="Load existing B-Roll table .docx/.md (skips the agent)" style="margin-left:6px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:0 6px; border-radius:3px; font-size:0.85em; cursor:pointer;">📂</button>
+                        <span id="brollLoadedBadge" style="display:none; margin-left:4px; color:#10b981; font-size:0.75em;" title="B-Roll table pre-loaded">●</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkBRollImages" style="width: auto; margin-right: 4px;">
@@ -2648,6 +2652,151 @@ Time management content here...`;
                 document.body.removeChild(ta);
             });
         }
+
+        // -- Load existing YouTube details / B-Roll table from a .docx or .md file
+        //    so the user doesn't have to re-run the corresponding agent. The loaded
+        //    text is stored in window._currentYoutubeDetails / window._currentBrollTable
+        //    and is automatically passed as an override to /process-script.
+
+        async function _readMarkdownOrDocx(file) {
+            const name = (file.name || '').toLowerCase();
+            const isDocx = name.endsWith('.docx') || name.endsWith('.doc')
+                || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+            if (isDocx) {
+                const fd = new FormData();
+                fd.append('file', file);
+                const r = await fetch('/api/extract-docx', { method: 'POST', body: fd });
+                const j = await r.json();
+                if (!j || !j.success) throw new Error((j && j.error) || 'Failed to extract .docx');
+                return j.text || '';
+            }
+            return await file.text();
+        }
+
+        function _ensureHiddenLoader(id) {
+            let el = document.getElementById(id);
+            if (!el) {
+                el = document.createElement('input');
+                el.type = 'file';
+                el.id = id;
+                el.accept = '.md,.markdown,.txt,.docx,.doc';
+                el.style.display = 'none';
+                document.body.appendChild(el);
+            }
+            return el;
+        }
+
+        // Build a minimal tabs UI when none exists yet (no workflow has run),
+        // so loaders can render into the YouTube / B-Roll tabs immediately.
+        function _ensureTabsForLoad() {
+            if (document.getElementById('youtubeDetailsContent')
+                && document.getElementById('brollTableContent')) {
+                return; // tabs already present
+            }
+            const resultDiv = document.getElementById('result');
+            if (!resultDiv || typeof createTabbedInterface !== 'function') return;
+            const mainScript = window.currentScript || '';
+            const tabbedHTML = createTabbedInterface(
+                mainScript,        // mainScript
+                null, null, null,  // demo, thumbs, chapter comparisons
+                null, null, null,  // flow original/improved/analysis
+                null, null, null,  // edl content/filename, curl
+                null, null,        // brollImages, grokVideos
+                window._currentBrollTable || null,
+                window._currentYoutubeDetails || null
+            );
+            const headerHtml = '<h3>📂 Loaded Artifacts</h3><p style="color:#94a3b8;">Use the tabs below to review or edit the loaded YouTube / B-Roll content. Run a workflow to fill the rest.</p>';
+            resultDiv.innerHTML = headerHtml + tabbedHTML;
+            resultDiv.className = 'result';
+            resultDiv.style.display = 'block';
+            // Re-render markdown into the freshly created tab divs.
+            try { renderMarkdownContent(mainScript, null, null, null); } catch (_e) {}
+        }
+
+        function loadYouTubeDetailsFromFile() {
+            const inp = _ensureHiddenLoader('_youtubeLoadInput');
+            inp.value = '';
+            inp.onchange = async (ev) => {
+                const f = ev.target.files && ev.target.files[0];
+                if (!f) return;
+                try {
+                    const text = await _readMarkdownOrDocx(f);
+                    window._currentYoutubeDetails = text;
+                    _ensureTabsForLoad();
+                    const div = document.getElementById('youtubeDetailsContent');
+                    if (div) div.innerHTML = (window.marked ? marked.parse(text) : text.replace(/</g, '&lt;'));
+                    const ta = document.getElementById('youtubeDetailsEditor');
+                    if (ta) ta.value = text;
+                    const badge = document.getElementById('ytLoadedBadge');
+                    if (badge) { badge.style.display = ''; badge.title = `Loaded from ${f.name}`; }
+                    if (typeof switchTab === 'function') switchTab('youtubeDetails');
+                    addProgressMessage && addProgressMessage(`📂 Loaded YouTube details from ${f.name} (${text.length} chars)`, 'success');
+                } catch (e) {
+                    alert('Could not load YouTube details file: ' + (e && e.message || e));
+                }
+            };
+            inp.click();
+        }
+
+        function loadBrollTableFromFile() {
+            const inp = _ensureHiddenLoader('_brollLoadInput');
+            inp.value = '';
+            inp.onchange = async (ev) => {
+                const f = ev.target.files && ev.target.files[0];
+                if (!f) return;
+                try {
+                    const text = await _readMarkdownOrDocx(f);
+                    window._currentBrollTable = text;
+                    _ensureTabsForLoad();
+                    const div = document.getElementById('brollTableContent');
+                    if (div) {
+                        try { div.innerHTML = renderBrollTableMarkdown(text); }
+                        catch (_e) { div.innerHTML = (window.marked ? marked.parse(text) : text.replace(/</g, '&lt;')); }
+                    }
+                    const badge = document.getElementById('brollLoadedBadge');
+                    if (badge) { badge.style.display = ''; badge.title = `Loaded from ${f.name}`; }
+                    addProgressMessage && addProgressMessage(`📂 Loaded B-Roll table from ${f.name} (${text.length} chars)`, 'success');
+                    // Per spec: opening a loaded B-Roll table should switch to the
+                    // Shutterstock tab so the user can search for clips. If that tab
+                    // doesn't exist yet (no prior run) fall back to the B-Roll tab.
+                    if (typeof switchTab === 'function') {
+                        const ssBtn = document.querySelector(".tab-button[onclick*=\"'shutterstock'\"]");
+                        if (ssBtn) { switchTab('shutterstock'); }
+                        else { switchTab('brollTable'); }
+                    }
+                } catch (e) {
+                    alert('Could not load B-Roll table file: ' + (e && e.message || e));
+                }
+            };
+            inp.click();
+        }
+
+        function onYouTubeDetailsEdited(value) {
+            window._currentYoutubeDetails = value || '';
+        }
+
+        function toggleYouTubeDetailsEdit() {
+            const preview = document.getElementById('youtubeDetailsContent');
+            const editor = document.getElementById('youtubeDetailsEditor');
+            const btn = document.getElementById('ytEditToggleBtn');
+            if (!preview || !editor || !btn) return;
+            const editing = editor.style.display !== 'none';
+            if (editing) {
+                // Switch back to preview, re-render markdown.
+                const text = editor.value;
+                window._currentYoutubeDetails = text;
+                preview.innerHTML = (window.marked ? marked.parse(text) : text.replace(/</g, '&lt;'));
+                editor.style.display = 'none';
+                preview.style.display = '';
+                btn.innerHTML = '✏️ Edit';
+            } else {
+                // Switch to editor.
+                editor.value = window._currentYoutubeDetails || '';
+                preview.style.display = 'none';
+                editor.style.display = '';
+                btn.innerHTML = '👁️ Preview';
+            }
+        }
         
         // Function to switch tabs
         function switchTab(tabName) {
@@ -3070,6 +3219,8 @@ Time management content here...`;
 
             if (brollTable && typeof brollTable === 'string' && brollTable.trim()) {
                 html += '<button class="tab-button" onclick="switchTab(\'brollTable\')">📊 B-Roll Table</button>';
+            } else {
+                html += '<button class="tab-button" onclick="switchTab(\'brollTable\')" title="Load an existing B-Roll table .docx/.md">📊 B-Roll Table <span style=\"opacity:.6;font-size:11px;\">(load)</span></button>';
             }
             
             if (chapterComparisons && chapterComparisons.length > 0) {
@@ -3095,6 +3246,8 @@ Time management content here...`;
             // YouTube Details tab
             if (youtubeDetails) {
                 html += '<button class="tab-button" onclick="switchTab(\'youtubeDetails\')">📺 YouTube Details</button>';
+            } else {
+                html += '<button class="tab-button" onclick="switchTab(\'youtubeDetails\')" title="Load an existing YouTube upload details .docx/.md">📺 YouTube Details <span style=\"opacity:.6;font-size:11px;\">(load)</span></button>';
             }
             
             html += '</div>'; // End tab-header
@@ -3149,17 +3302,20 @@ Time management content here...`;
             }
 
             // B-Roll Table Tab — formatted markdown table + Save-as-Word
-            if (brollTable && typeof brollTable === 'string' && brollTable.trim()) {
+            // Always render the tab so the user can load an existing B-Roll table doc into it.
+            {
+                const _hasBroll = brollTable && typeof brollTable === 'string' && brollTable.trim();
                 html += '<div id="brollTableTab" class="tab-content">';
                 html += '<h3>📊 B-Roll Search Terms Table</h3>';
                 html += '<div style="margin-bottom: 15px; display: flex; gap: 10px; flex-wrap: wrap;">';
+                html += '<button onclick="loadBrollTableFromFile()" class="toolbar-btn" style="display: flex;" title="Load an existing B-Roll table .docx or .md"><span class="toolbar-icon">📂</span><span class="toolbar-text">Load .docx/.md</span></button>';
                 html += '<button onclick="copyBrollTableMarkdown()" class="toolbar-btn" style="display: flex;"><span class="toolbar-icon">📋</span><span class="toolbar-text">Copy Markdown</span></button>';
                 html += '<button onclick="downloadBrollTableMarkdown()" class="toolbar-btn" style="display: flex;"><span class="toolbar-icon">💾</span><span class="toolbar-text">Download .md</span></button>';
                 html += '<button onclick="saveBrollTableAsWord()" class="toolbar-btn" style="display: flex;"><span class="toolbar-icon">💾</span><span class="toolbar-text">Save as Word</span></button>';
                 html += '</div>';
-                html += '<div class="markdown-content" id="brollTableContent"></div>';
+                html += '<div class="markdown-content" id="brollTableContent">' + (_hasBroll ? '' : '<p style="color:#94a3b8;">No B-Roll table yet. Click <strong>📂 Load .docx/.md</strong> to load an existing one, or run the workflow with <em>B-Roll Table</em> checked.</p>') + '</div>';
                 html += '</div>';
-                window._currentBrollTable = brollTable;
+                if (_hasBroll) { window._currentBrollTable = brollTable; }
             }
             
             // Chapter Comparisons Tab
@@ -3297,17 +3453,23 @@ Time management content here...`;
                 html += '</div>';
             }
             
-            // YouTube Details Tab
-            if (youtubeDetails) {
+            // YouTube Details Tab — always render so an existing details doc can be loaded.
+            {
+                const _hasYt = !!youtubeDetails;
                 html += '<div id="youtubeDetailsTab" class="tab-content">';
                 html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">';
                 html += '<h3 style="margin:0;">📺 YouTube Upload Details</h3>';
-                html += '<div style="display:flex; gap:8px;">';
+                html += '<div style="display:flex; gap:8px; flex-wrap:wrap;">';
+                html += '<button onclick="loadYouTubeDetailsFromFile()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;" title="Load an existing YouTube details .docx or .md">📂 Load .docx/.md</button>';
+                html += '<button id="ytEditToggleBtn" onclick="toggleYouTubeDetailsEdit()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">✏️ Edit</button>';
                 html += '<button onclick="copyYouTubeDetails()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">📋 Copy All</button>';
                 html += '<button onclick="saveYouTubeDetailsAsWord()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">💾 Save as Word</button>';
+                html += '<button onclick="openPublishToYouTube()" style="background:#dc2626; color:#fff; border:1px solid #b91c1c; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:600;" title="Publish the finished video to the AI for Roz YouTube channel">🚀 Publish to YouTube</button>';
                 html += '</div>';
                 html += '</div>';
-                html += `<div class="markdown-content" id="youtubeDetailsContent"></div>`;
+                // Two views: rendered preview (default) and a textarea editor toggled with the Edit button.
+                html += '<div class="markdown-content" id="youtubeDetailsContent">' + (_hasYt ? '' : '<p style="color:#94a3b8;">No YouTube details yet. Click <strong>📂 Load .docx/.md</strong> to load an existing details document, or run the workflow with <em>YouTube Details</em> checked.</p>') + '</div>';
+                html += '<textarea id="youtubeDetailsEditor" oninput="onYouTubeDetailsEdited(this.value)" style="display:none; width:100%; min-height:420px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:12px; font-family: Menlo, monospace; font-size: 13px; line-height: 1.5;"></textarea>';
                 html += '</div>';
             }
 
@@ -3491,7 +3653,11 @@ Time management content here...`;
                         heygen_template_id: heygenTemplateId,
                         heygen_api_key: heygenApiKey,
                         heygen_voice_id: heygenVoiceId,
-                        grok_api_key: grokApiKey
+                        grok_api_key: grokApiKey,
+                        // Pre-loaded artifacts let the backend skip the corresponding
+                        // agents (Load .docx/.md from the YouTube / B-Roll tabs).
+                        youtube_details_override: window._currentYoutubeDetails || null,
+                        broll_table_override: window._currentBrollTable || null
                     })
                 });
                 
@@ -6038,11 +6204,15 @@ Thank you for watching!`;
                     );
                     if (!res.ok || !res.data.success || !res.data.job_id) {
                         failed++;
-                        const err = (res.data && res.data.error) || `HTTP ${res.status}`;
+                        const err = (res.data && res.data.error)
+                            || (res.status === 413
+                                ? `File too large (${(file.size/1024/1024/1024).toFixed(2)} GiB). Increase MAX_UPLOAD_GB on the server.`
+                                : `HTTP ${res.status}`);
                         if (status) {
                             status.style.color = '#f87171';
                             status.textContent = `❌ Upload failed for ${file.name}: ${err}`;
                         }
+                        alert(`❌ Upload failed for ${file.name}\n\n${err}`);
                         _setUploadProgress(null);
                         continue;
                     }
@@ -7609,6 +7779,914 @@ Thank you for watching!`;
             resultEl.style.borderColor = '#f87171';
         });
     }
+    </script>
+
+    <!-- ============================================================
+         Publish to YouTube modal (AI for Roz channel)
+         ============================================================ -->
+    <div id="publishYouTubeModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:flex-start; justify-content:center; overflow-y:auto; padding:40px 20px;">
+      <div style="background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:10px; max-width:780px; width:100%; padding:24px; box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <h3 style="margin:0;">🚀 Publish to YouTube — AI for Roz</h3>
+          <button onclick="closePublishToYouTube()" style="background:transparent; color:#94a3b8; border:none; font-size:24px; cursor:pointer;">×</button>
+        </div>
+
+        <div id="ytAuthBanner" style="display:none; background:#7c2d12; color:#fed7aa; padding:10px 12px; border-radius:6px; margin-bottom:14px; font-size:13px;"></div>
+
+        <style>
+          .yt-acc { background:#0b1220; border:1px solid #334155; border-radius:8px; margin-bottom:10px; overflow:hidden; }
+          .yt-acc > summary { cursor:pointer; padding:10px 14px; font-weight:600; list-style:none; user-select:none;
+                              display:flex; align-items:center; gap:8px; background:#1e293b; color:#e2e8f0; }
+          .yt-acc > summary::-webkit-details-marker { display:none; }
+          .yt-acc > summary::before { content:'▶'; font-size:10px; color:#94a3b8; transition:transform .15s; display:inline-block; }
+          .yt-acc[open] > summary::before { transform:rotate(90deg); }
+          .yt-acc > summary:hover { background:#273449; }
+          .yt-acc-body { padding:12px 14px; }
+          .yt-acc-sub { font-weight:400; font-size:12px; color:#94a3b8; margin-left:auto; }
+        </style>
+
+        <details class="yt-acc" open>
+          <summary>🎬 Video file <span class="yt-acc-sub" id="ytVideoSummary"></span></summary>
+          <div class="yt-acc-body">
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <input id="ytVideoPath" type="text" placeholder="/full/path/to/finished-video.mp4"
+                     style="flex:1; min-width:240px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 10px; border-radius:6px; font-family:monospace; font-size:12px;">
+              <button onclick="browseForYouTubeVideo()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 12px; border-radius:6px; cursor:pointer;" title="Browse for a video file on disk">📂 Browse</button>
+            </div>
+            <div id="ytVideoPreviewWrap" style="display:none; margin-top:8px;">
+              <video id="ytVideoPreview" controls preload="metadata" muted
+                     style="width:100%; max-height:240px; background:#000; border:1px solid #334155; border-radius:6px;"></video>
+              <div id="ytVideoPreviewMeta" style="font-size:11px; color:#64748b; margin-top:4px;"></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="yt-acc">
+          <summary>🔒 Visibility &amp; audience <span class="yt-acc-sub" id="ytVisibilitySummary">Private · Not for kids · Notify subs</span></summary>
+          <div class="yt-acc-body">
+            <div style="margin-bottom:14px;">
+              <label style="display:block; font-weight:600; margin-bottom:6px;">Privacy <span style="color:#fca5a5; font-weight:400; font-size:12px;">(public toggle is done in YouTube Studio)</span></label>
+              <select id="ytPrivacy" style="width:100%; height:auto; box-sizing:border-box; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px; font-size:14px; line-height:1.4;">
+                <option value="private" selected>Private (recommended — review before going public)</option>
+                <option value="unlisted">Unlisted (anyone with the link)</option>
+              </select>
+            </div>
+            <div style="margin-bottom:14px;">
+              <label style="display:block; font-weight:600; margin-bottom:6px;">Audience</label>
+              <select id="ytMadeForKids" style="width:100%; height:auto; box-sizing:border-box; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px; font-size:14px; line-height:1.4;">
+                <option value="false">Not made for kids</option>
+                <option value="true">Made for kids</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block; font-weight:600; margin-bottom:6px;">
+                <input type="checkbox" id="ytNotifySubs" checked> Notify subscribers
+              </label>
+            </div>
+          </div>
+        </details>
+
+        <details class="yt-acc" open>
+          <summary>📝 Video details <span class="yt-acc-sub" id="ytDetailsSummary">title, description, tags, hashtags, category</span></summary>
+          <div class="yt-acc-body">
+            <div style="margin-bottom:10px;">
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">Title (max 100) — you set this</label>
+              <input id="ytTitle" type="text" maxlength="100" placeholder="Enter the video title for YouTube…"
+                     style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+            </div>
+            <div style="margin-bottom:10px;">
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">Description (max 5000)</label>
+              <textarea id="ytDescription" rows="8" maxlength="5000"
+                        style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px; font-family:inherit;"></textarea>
+            </div>
+            <div style="margin-bottom:10px;">
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">
+                Tags (comma-separated). Tip: for multi-word phrases use
+                <strong>hyphens</strong> instead of spaces, e.g.
+                <code>ai-myths, generative-ai, prompt-engineering</code> —
+                YouTube treats hyphenated tokens as a single keyword.
+              </label>
+              <input id="ytTags" type="text"
+                     style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+            </div>
+            <div style="margin-bottom:10px;">
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">
+                Hashtags (comma or space-separated, e.g. <code>AI, Roz, vibecoding</code>) — appended to the description; first 3 appear above the title
+              </label>
+              <input id="ytHashtags" type="text" placeholder="AI, Roz, vibecoding"
+                     style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+            </div>
+            <div>
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">YouTube Category ID</label>
+              <select id="ytCategoryId" style="width:100%; height:auto; box-sizing:border-box; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px; font-size:14px; line-height:1.4;">
+                <option value="27">27 — Education</option>
+                <option value="28">28 — Science &amp; Technology</option>
+                <option value="26">26 — Howto &amp; Style</option>
+                <option value="22">22 — People &amp; Blogs</option>
+                <option value="24">24 — Entertainment</option>
+                <option value="25">25 — News &amp; Politics</option>
+              </select>
+            </div>
+          </div>
+        </details>
+
+        <details class="yt-acc">
+          <summary>⚙️ Advanced settings <span class="yt-acc-sub" id="ytAdvancedSummary">Synthetic: yes · en-US · embed on</span></summary>
+          <div class="yt-acc-body">
+            <div style="margin-bottom:12px;">
+              <label style="display:block; font-weight:600; margin-bottom:6px;">
+                <input type="checkbox" id="ytSyntheticMedia" checked>
+                Altered content (synthetic media disclosure)
+              </label>
+              <div style="font-size:11px; color:#94a3b8; margin-left:22px;">
+                Required by YouTube for AI-cloned voices / synthetic avatars.
+                Sets <code>status.containsSyntheticMedia = true</code>.
+              </div>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+              <div style="flex:1; min-width:160px;">
+                <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">Video language (metadata)</label>
+                <input id="ytDefaultLanguage" type="text" value="en-US"
+                       style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+              </div>
+              <div style="flex:1; min-width:160px;">
+                <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">Spoken-audio language</label>
+                <input id="ytDefaultAudioLanguage" type="text" value="en-US"
+                       style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+              </div>
+            </div>
+            <div style="margin-bottom:12px;">
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">Recording date</label>
+              <input id="ytRecordingDate" type="date"
+                     style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+            </div>
+            <div style="margin-bottom:12px;">
+              <label style="display:block; font-weight:600; margin-bottom:6px;">
+                <input type="checkbox" id="ytEmbeddable" checked> Allow embedding
+              </label>
+            </div>
+
+            <div style="margin-top:14px; padding:10px 12px; background:#0b1220; border:1px solid #334155; border-radius:6px;">
+              <div style="font-weight:600; margin-bottom:6px;">🎙️ Captions (.srt)</div>
+              <div style="font-size:12px; color:#94a3b8; margin-bottom:8px;">
+                Generate a YouTube-uploadable <code>.srt</code> from the
+                video's audio using local Whisper. The DaVinci timeline is
+                <strong>not</strong> modified — you upload the file in
+                YouTube Studio → Subtitles.
+              </div>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <button onclick="generateYouTubeSrt()" id="ytSrtBtn"
+                        style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">
+                  Generate captions (.srt)
+                </button>
+                <select id="ytSrtModel" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:6px; font-size:12px; height:auto;">
+                  <option value="tiny">tiny (fastest, low quality)</option>
+                  <option value="base">base</option>
+                  <option value="small">small</option>
+                  <option value="medium" selected>medium (recommended)</option>
+                  <option value="large">large (slowest, best)</option>
+                </select>
+                <span id="ytSrtStatus" style="font-size:12px; color:#94a3b8;"></span>
+              </div>
+            </div>
+
+            <details style="margin-top:14px; background:#0b1220; border:1px solid #334155; border-radius:6px;">
+              <summary style="cursor:pointer; padding:8px 12px; font-size:12px; color:#fbbf24;">
+                ⚠️ Settings that the YouTube Data API does NOT expose (must be set in YouTube Studio after upload)
+              </summary>
+              <div style="padding:10px 14px; font-size:12px; color:#94a3b8; line-height:1.6;">
+                These fields exist only in YouTube Studio — there is no public
+                API to set them. After publishing, open the video in Studio
+                and configure:
+                <ul style="margin:6px 0 0 16px; padding:0;">
+                  <li>Shorts sampling (Allow / Don't allow)</li>
+                  <li>Comments — Allow all / Hold for review / Disable</li>
+                  <li>Comment ranking — Top comments / Newest</li>
+                  <li>Automatic chapters — On / Off</li>
+                  <li>Caption certification</li>
+                  <li>Self-rated content categories (Inappropriate language, Adult content, Violence, Harmful or dangerous acts, Hateful & derogatory content, Recreational drugs, Firearms, Controversial issues, Tobacco)</li>
+                </ul>
+                Title / description / tags / category / thumbnail / playlists /
+                privacy / made-for-kids / synthetic media / language /
+                recording date / embedding ARE handled here automatically.
+              </div>
+            </details>
+            <details style="margin-top:8px; background:#0b1220; border:1px solid #334155; border-radius:6px;">
+              <summary style="cursor:pointer; padding:8px 12px; font-size:12px; color:#fbbf24;">
+                🃏 Cards (also Studio-only)
+              </summary>
+              <div style="padding:10px 14px; font-size:12px; color:#94a3b8; line-height:1.6;">
+                The YouTube Data API has no endpoint for in-video cards
+                (link to playlist / video / channel). You must add cards
+                manually in YouTube Studio → Editor → Cards. Playlists you
+                might want to link can be loaded via the Playlists section
+                above (their IDs / titles will be in the publish result for
+                copy-paste).
+              </div>
+            </details>
+          </div>
+        </details>
+
+        <details class="yt-acc">
+          <summary>🖼️ Thumbnail <span class="yt-acc-sub" id="ytThumbSummary">none selected</span></summary>
+          <div class="yt-acc-body">
+            <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">
+              From <code>&lt;project&gt;/thumbnails/</code> next to the selected video, or browse to upload.
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
+              <button onclick="browseForYouTubeThumbnail()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;" title="Upload a thumbnail image (PNG/JPG, &lt; 2 MB)">📂 Browse for Thumbnail…</button>
+              <span id="ytThumbBrowseStatus" style="font-size:12px; color:#94a3b8;"></span>
+            </div>
+            <input id="ytThumbFileInput" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" style="display:none;">
+            <div id="ytThumbStatus" style="font-size:12px; color:#64748b; margin-bottom:6px;">Pick a video to load thumbnails…</div>
+            <div id="ytThumbGallery" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:8px;"></div>
+            <input id="ytThumbnailPath" type="hidden" value="">
+            <div id="ytThumbPreviewWrap" style="display:none; margin-top:8px;">
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:4px;">Selected thumbnail preview:</div>
+              <img id="ytThumbPreview" alt="thumbnail preview"
+                   style="max-width:320px; max-height:180px; background:#000; border:1px solid #334155; border-radius:6px; display:block;">
+              <div id="ytThumbPreviewMeta" style="font-size:11px; color:#64748b; margin-top:4px;"></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="yt-acc">
+          <summary>📋 Playlists <span class="yt-acc-sub" id="ytPlaylistSummary">none selected</span></summary>
+          <div class="yt-acc-body">
+            <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">
+              The video will be added to every playlist you check.
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
+              <button onclick="loadYouTubePlaylists()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;" title="Fetch the list of playlists on this channel">📋 Load Playlists from My Channel</button>
+              <input id="ytPlaylistFilter" type="text" placeholder="Filter…" style="flex:1; min-width:120px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:6px 8px; font-size:12px; height:auto; display:none;">
+              <span id="ytPlaylistStatus" style="font-size:12px; color:#94a3b8;">Click to load (will trigger OAuth re-consent on first use)</span>
+            </div>
+            <div id="ytPlaylistList" style="max-height:200px; overflow-y:auto; background:#0f172a; border:1px solid #334155; border-radius:6px; padding:6px; display:none;"></div>
+          </div>
+        </details>
+
+        <div id="ytProgressWrap" style="display:none; margin:16px 0;">
+          <div style="background:#1e293b; border-radius:6px; overflow:hidden; height:20px;">
+            <div id="ytProgressBar" style="background:#dc2626; height:100%; width:0%; transition:width .3s;"></div>
+          </div>
+          <div id="ytProgressText" style="margin-top:6px; font-size:12px; color:#94a3b8;">Preparing…</div>
+        </div>
+
+        <div id="ytResult" style="display:none; margin:14px 0; padding:12px; background:#064e3b; border:1px solid #10b981; border-radius:6px; color:#d1fae5;"></div>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+          <button onclick="closePublishToYouTube()" style="background:#334155; color:#e2e8f0; border:none; padding:10px 18px; border-radius:6px; cursor:pointer;">Cancel</button>
+          <button id="ytPublishBtn" onclick="submitPublishToYouTube()" style="background:#dc2626; color:#fff; border:none; padding:10px 22px; border-radius:6px; cursor:pointer; font-weight:600;">🚀 Publish</button>
+        </div>
+
+        <div style="margin-top:14px; padding-top:10px; border-top:1px solid #334155; font-size:12px; color:#94a3b8; text-align:center;">
+          📖 Reference:
+          <a href="https://support.google.com/youtube/answer/11913617?hl=en&amp;co=GENIE.Platform%3DDesktop"
+             target="_blank" rel="noopener"
+             style="color:#60a5fa; text-decoration:underline;">
+            YouTube — Required disclosures for altered or synthetic content
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // ===== YouTube publishing =====
+      async function openPublishToYouTube() {
+        const md = window._currentYoutubeDetails || '';
+        if (!md) {
+          alert('No YouTube details available. Generate them first.');
+          return;
+        }
+        // Reset UI.
+        document.getElementById('ytResult').style.display = 'none';
+        document.getElementById('ytProgressWrap').style.display = 'none';
+        document.getElementById('ytProgressBar').style.width = '0%';
+        document.getElementById('ytPublishBtn').disabled = false;
+        document.getElementById('ytPublishBtn').innerHTML = '🚀 Publish';
+
+        // Show modal.
+        document.getElementById('publishYouTubeModal').style.display = 'flex';
+
+        // Check OAuth status.
+        try {
+          const auth = await fetch('/api/youtube/auth-status').then(r => r.json());
+          const banner = document.getElementById('ytAuthBanner');
+          if (!auth.has_client_secret) {
+            banner.style.display = 'block';
+            banner.innerHTML =
+              '⚠️ <strong>One-time setup needed.</strong> Place your Google OAuth ' +
+              '"Desktop app" client_secret JSON at: <code>' + auth.client_secret_path + '</code>. ' +
+              'Then click Publish to authorize the AI for Roz channel.';
+          } else if (!auth.is_authorized) {
+            banner.style.display = 'block';
+            banner.innerHTML =
+              'ℹ️ First publish will open a browser window to authorize christian.thilmany@gmail.com. ' +
+              'After authorization the token is cached at <code>' + auth.token_path + '</code>.';
+          } else {
+            banner.style.display = 'none';
+          }
+        } catch (e) { /* non-fatal */ }
+
+        // Parse metadata preview.
+        try {
+          const r = await fetch('/api/youtube/preview-metadata', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({youtube_details_md: md})
+          });
+          const j = await r.json();
+          if (j.success) {
+            // Default title from the parsed YouTube details document; user can edit.
+            document.getElementById('ytTitle').value = j.metadata.title || '';
+            document.getElementById('ytDescription').value = j.metadata.description || '';
+            document.getElementById('ytTags').value = (j.metadata.tags || []).join(', ');
+            // Hashtags are also user-entered (start blank).
+            document.getElementById('ytHashtags').value = '';
+            const cat = j.metadata.category_id || '28';
+            const sel = document.getElementById('ytCategoryId');
+            // Add option if not present.
+            if (!Array.from(sel.options).some(o => o.value === cat)) {
+              const opt = document.createElement('option');
+              opt.value = cat;
+              opt.textContent = cat;
+              sel.appendChild(opt);
+            }
+            sel.value = cat;
+            document.getElementById('ytMadeForKids').value = j.metadata.made_for_kids ? 'true' : 'false';
+          }
+        } catch (e) {
+          alert('Could not parse YouTube details: ' + e.message);
+        }
+
+        // Reset thumbnail selection.
+        document.getElementById('ytThumbnailPath').value = '';
+        document.getElementById('ytThumbGallery').innerHTML = '';
+        document.getElementById('ytThumbStatus').textContent = 'Pick a video to load thumbnails…';
+        document.getElementById('ytThumbBrowseStatus').textContent = '';
+        _setYouTubeThumbPreview('');
+        _setYouTubeVideoPreview(document.getElementById('ytVideoPath').value.trim());
+
+        // Reset playlist picker.
+        window._ytPlaylistsCache = null;
+        const plList = document.getElementById('ytPlaylistList');
+        plList.innerHTML = '';
+        plList.style.display = 'none';
+        const plFilter = document.getElementById('ytPlaylistFilter');
+        plFilter.value = '';
+        plFilter.style.display = 'none';
+        document.getElementById('ytPlaylistStatus').textContent =
+          'Click to load (will trigger OAuth re-consent on first use)';
+
+        // React to manual edits of the path field.
+        const pathInput = document.getElementById('ytVideoPath');
+        pathInput.oninput = () => {
+          const v = pathInput.value.trim();
+          loadYouTubeThumbnails(v);
+          _setYouTubeVideoPreview(v);
+        };
+
+        // Auto-load thumbnails for the current path if one was prefilled.
+        const curPath = pathInput.value.trim();
+        if (curPath) loadYouTubeThumbnails(curPath);
+
+        // Default the Recording date to today (YYYY-MM-DD).
+        try {
+          const recEl = document.getElementById('ytRecordingDate');
+          if (recEl && !recEl.value) {
+            const d = new Date();
+            const iso = d.getFullYear() + '-' +
+                        String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                        String(d.getDate()).padStart(2, '0');
+            recEl.value = iso;
+          }
+        } catch (e) { /* non-fatal */ }
+
+        updateYouTubeAccordionSummaries();
+      }
+
+      function closePublishToYouTube() {
+        document.getElementById('publishYouTubeModal').style.display = 'none';
+      }
+
+      // Generate an SRT caption file from the chosen video using the
+      // local Whisper CLI (server-side). Does NOT touch DaVinci.
+      async function generateYouTubeSrt() {
+        const videoPath = document.getElementById('ytVideoPath').value.trim();
+        if (!videoPath) {
+          alert('Pick a video file first.');
+          return;
+        }
+        const btn = document.getElementById('ytSrtBtn');
+        const status = document.getElementById('ytSrtStatus');
+        const model = document.getElementById('ytSrtModel').value;
+        btn.disabled = true;
+        const oldLabel = btn.textContent;
+        btn.textContent = '⏳ Transcribing… (this can take a while)';
+        status.textContent = 'Running whisper model "' + model + '"…';
+        try {
+          const r = await fetch('/api/youtube/generate-srt', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ video_path: videoPath, model: model, language: 'en' })
+          });
+          const j = await r.json();
+          if (!j.success) throw new Error(j.error || 'failed');
+          status.innerHTML = '✅ Saved <code>' + j.filename + '</code> ('
+            + (j.size_bytes/1024).toFixed(0) + ' KB) — '
+            + '<a href="#" onclick="revealYouTubeSrt(\'' + j.srt_path.replace(/'/g, "\\'") + '\'); return false;" style="color:#60a5fa;">Reveal in Finder</a>'
+            + ' — drag into YouTube Studio → Subtitles.';
+        } catch (e) {
+          status.innerHTML = '<span style="color:#fca5a5;">❌ ' + e.message + '</span>';
+        } finally {
+          btn.disabled = false;
+          btn.textContent = oldLabel;
+        }
+      }
+      async function revealYouTubeSrt(p) {
+        try {
+          await fetch('/api/youtube/reveal-path', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ path: p })
+          });
+        } catch (e) { /* ignore */ }
+      }
+
+      // Refresh the small "summary" text in each accordion header so the
+      // user can see selections without having to expand every section.
+      function _ytShortPath(p) {
+        if (!p) return '';
+        const parts = String(p).split('/');
+        return parts[parts.length - 1] || p;
+      }
+      function updateYouTubeAccordionSummaries() {
+        try {
+          // Video file
+          const vp = (document.getElementById('ytVideoPath')?.value || '').trim();
+          const vs = document.getElementById('ytVideoSummary');
+          if (vs) vs.textContent = vp ? _ytShortPath(vp) : 'no file selected';
+
+          // Visibility & audience
+          const priv = document.getElementById('ytPrivacy');
+          const kids = document.getElementById('ytMadeForKids');
+          const notify = document.getElementById('ytNotifySubs');
+          const visParts = [];
+          if (priv) visParts.push(priv.options[priv.selectedIndex]?.text.split(' ')[0] || priv.value);
+          if (kids) visParts.push(kids.value === 'true' ? 'For kids' : 'Not for kids');
+          if (notify) visParts.push(notify.checked ? 'Notify subs' : 'No notify');
+          const visEl = document.getElementById('ytVisibilitySummary');
+          if (visEl) visEl.textContent = visParts.join(' · ');
+
+          // Video details
+          const title = (document.getElementById('ytTitle')?.value || '').trim();
+          const cat = document.getElementById('ytCategoryId');
+          const catText = cat ? (cat.options[cat.selectedIndex]?.text || cat.value) : '';
+          const detEl = document.getElementById('ytDetailsSummary');
+          if (detEl) {
+            const t = title ? (title.length > 40 ? title.slice(0, 40) + '…' : title) : 'no title';
+            detEl.textContent = t + (catText ? ' · ' + catText : '');
+          }
+
+          // Thumbnail
+          const thumb = (document.getElementById('ytThumbnailPath')?.value || '').trim();
+          const thEl = document.getElementById('ytThumbSummary');
+          if (thEl) thEl.textContent = thumb ? _ytShortPath(thumb) : 'none selected';
+
+          // Advanced
+          const advEl = document.getElementById('ytAdvancedSummary');
+          if (advEl) {
+            const syn = document.getElementById('ytSyntheticMedia');
+            const lang = document.getElementById('ytDefaultLanguage');
+            const emb = document.getElementById('ytEmbeddable');
+            const parts = [];
+            parts.push('Synthetic: ' + (syn && syn.checked ? 'yes' : 'no'));
+            if (lang && lang.value.trim()) parts.push(lang.value.trim());
+            parts.push('embed ' + (emb && emb.checked ? 'on' : 'off'));
+            advEl.textContent = parts.join(' · ');
+          }
+
+          // Playlists
+          const checked = document.querySelectorAll('#ytPlaylistList input[type="checkbox"]:checked');
+          const plEl = document.getElementById('ytPlaylistSummary');
+          if (plEl) {
+            if (checked.length === 0) {
+              plEl.textContent = 'none selected';
+            } else if (checked.length === 1) {
+              const lbl = checked[0].closest('label')?.textContent?.trim() || '1 playlist';
+              plEl.textContent = (lbl.length > 40 ? lbl.slice(0, 40) + '…' : lbl);
+            } else {
+              plEl.textContent = checked.length + ' playlists selected';
+            }
+          }
+        } catch (e) { /* non-fatal */ }
+      }
+
+      // Wire up delegated listeners exactly once so any change inside the
+      // modal updates the accordion headers.
+      (function _initYTAccordionSummaryWiring() {
+        const modal = document.getElementById('publishYouTubeModal');
+        if (!modal || modal._ytSummaryWired) return;
+        modal._ytSummaryWired = true;
+        ['input', 'change'].forEach(evt =>
+          modal.addEventListener(evt, updateYouTubeAccordionSummaries, true));
+      })();
+
+      // Browse for a local video file using the OS native file picker
+      // (via the backend). The browser cannot expose real file paths for
+      // security reasons, so we ask the server to show an Open dialog and
+      // return the chosen path — nothing is uploaded.
+      async function browseForYouTubeVideo() {
+        try {
+          const r = await fetch('/api/youtube/pick-video-path');
+          const j = await r.json();
+          if (!j.success) {
+            if (j.cancelled) return;
+            throw new Error(j.error || 'pick failed');
+          }
+          document.getElementById('ytVideoPath').value = j.path;
+          loadYouTubeThumbnails(j.path);
+          _setYouTubeVideoPreview(j.path, j.size_bytes);
+        } catch (e) {
+          alert('Could not pick video file: ' + (e && e.message || e));
+        }
+      }
+
+      // Browse for a thumbnail image. Small enough that uploading is fine,
+      // but we use the native picker too and just send the path.
+      async function browseForYouTubeThumbnail() {
+        const status = document.getElementById('ytThumbBrowseStatus');
+        try {
+          const r = await fetch('/api/youtube/pick-thumbnail-path');
+          const j = await r.json();
+          if (!j.success) {
+            if (j.cancelled) return;
+            throw new Error(j.error || 'pick failed');
+          }
+          document.getElementById('ytThumbnailPath').value = j.path;
+          status.innerHTML = '✅ Selected <code>' + j.filename + '</code> ('
+            + (j.size_bytes/1024).toFixed(0) + ' KB)';
+          _setYouTubeThumbPreview(j.path, j.size_bytes);
+          document.querySelectorAll('#ytThumbGallery div[data-path]').forEach(el => {
+            el.style.borderColor = '#334155';
+            el.style.boxShadow = 'none';
+          });
+          updateYouTubeAccordionSummaries();
+        } catch (e) {
+          status.textContent = '';
+          alert('Could not pick thumbnail: ' + (e && e.message || e));
+        }
+      }
+
+      async function loadRecentYouTubeVideos() {
+        try {
+          const r = await fetch('/api/youtube/recent-videos').then(x => x.json());
+          const sel = document.getElementById('ytRecentVideos');
+          sel.innerHTML = '';
+          if (!r.success || !r.videos || r.videos.length === 0) {
+            sel.style.display = 'none';
+            return;
+          }
+          const placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.textContent = '— pick from ' + r.directory + ' —';
+          sel.appendChild(placeholder);
+          r.videos.forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v.path;
+            const sizeMb = (v.size_bytes / (1024 * 1024)).toFixed(1);
+            opt.textContent = v.name + '  (' + sizeMb + ' MB)';
+            sel.appendChild(opt);
+          });
+          sel.style.display = 'block';
+          // Wire change to refresh thumbnails as well.
+          sel.onchange = () => {
+            const v = sel.value;
+            document.getElementById('ytVideoPath').value = v;
+            loadYouTubeThumbnails(v);
+          };
+          // Pre-fill with most recent.
+          if (!document.getElementById('ytVideoPath').value) {
+            document.getElementById('ytVideoPath').value = r.videos[0].path;
+            sel.value = r.videos[0].path;
+          }
+          loadYouTubeThumbnails(document.getElementById('ytVideoPath').value);
+        } catch (e) { /* non-fatal */ }
+      }
+
+      // ---- Local file previews --------------------------------------------
+      // The browser can't load file:// URLs from an http page, so we route
+      // previews through the backend /api/youtube/local-preview endpoint
+      // (which is restricted to files under the user's home directory).
+      function _previewUrl(path) {
+        return '/api/youtube/local-preview?path=' + encodeURIComponent(path);
+      }
+
+      function _setYouTubeVideoPreview(path, sizeBytes) {
+        const wrap = document.getElementById('ytVideoPreviewWrap');
+        const vid = document.getElementById('ytVideoPreview');
+        const meta = document.getElementById('ytVideoPreviewMeta');
+        if (!path) {
+          wrap.style.display = 'none';
+          vid.removeAttribute('src');
+          vid.load();
+          meta.textContent = '';
+          return;
+        }
+        vid.src = _previewUrl(path);
+        vid.load();
+        wrap.style.display = 'block';
+        const fname = path.split('/').pop();
+        meta.textContent = fname + (typeof sizeBytes === 'number'
+          ? '  (' + (sizeBytes / (1024*1024)).toFixed(1) + ' MB)' : '');
+      }
+
+      function _setYouTubeThumbPreview(path, sizeBytes) {
+        const wrap = document.getElementById('ytThumbPreviewWrap');
+        const img = document.getElementById('ytThumbPreview');
+        const meta = document.getElementById('ytThumbPreviewMeta');
+        if (!path) {
+          wrap.style.display = 'none';
+          img.removeAttribute('src');
+          meta.textContent = '';
+          return;
+        }
+        img.src = _previewUrl(path);
+        wrap.style.display = 'block';
+        const fname = path.split('/').pop();
+        meta.textContent = fname + (typeof sizeBytes === 'number'
+          ? '  (' + (sizeBytes/1024).toFixed(0) + ' KB)' : '');
+      }
+
+      // ---- Playlist picker -------------------------------------------------      window._ytPlaylistsCache = null;
+
+      function _renderYouTubePlaylists(filter) {
+        const wrap = document.getElementById('ytPlaylistList');
+        const list = window._ytPlaylistsCache || [];
+        const f = (filter || '').toLowerCase().trim();
+        const filtered = f ? list.filter(p => (p.title || '').toLowerCase().includes(f)) : list;
+        if (filtered.length === 0) {
+          wrap.innerHTML = '<div style="padding:8px; color:#94a3b8; font-size:12px;">No playlists match.</div>';
+          return;
+        }
+        // Preserve checked state across filter changes.
+        const checked = new Set(
+          Array.from(wrap.querySelectorAll('input[type=checkbox]:checked'))
+            .map(cb => cb.value)
+        );
+        const html = filtered.map(p => {
+          const id = String(p.id).replace(/"/g, '&quot;');
+          const title = (p.title || '(untitled)')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const meta = (p.privacy_status || '') + ' · ' + (p.item_count || 0) + ' videos';
+          const isChecked = checked.has(p.id) ? 'checked' : '';
+          return '<label style="display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:4px; cursor:pointer; font-size:13px;" '
+               + 'onmouseover="this.style.background=\'#1e293b\'" onmouseout="this.style.background=\'transparent\'">'
+               + '<input type="checkbox" value="' + id + '" ' + isChecked + ' style="margin:0;">'
+               + '<span style="flex:1; color:#e2e8f0;">' + title + '</span>'
+               + '<span style="font-size:11px; color:#64748b;">' + meta + '</span>'
+               + '</label>';
+        }).join('');
+        wrap.innerHTML = html;
+      }
+
+      async function loadYouTubePlaylists() {
+        const status = document.getElementById('ytPlaylistStatus');
+        const wrap = document.getElementById('ytPlaylistList');
+        const filterInp = document.getElementById('ytPlaylistFilter');
+        status.textContent = 'Loading… (browser auth may pop up on first run)';
+        try {
+          const r = await fetch('/api/youtube/playlists');
+          const j = await r.json();
+          if (!j.success) throw new Error(j.error || 'failed');
+          window._ytPlaylistsCache = j.playlists || [];
+          status.innerHTML = 'Loaded <strong>' + window._ytPlaylistsCache.length
+            + '</strong> playlist(s). Check any to add the video to.';
+          wrap.style.display = 'block';
+          filterInp.style.display = 'inline-block';
+          filterInp.oninput = () => _renderYouTubePlaylists(filterInp.value);
+          _renderYouTubePlaylists('');
+        } catch (e) {
+          status.textContent = 'Could not load playlists: ' + (e && e.message || e);
+        }
+      }
+
+      function _selectedPlaylistIds() {
+        const wrap = document.getElementById('ytPlaylistList');
+        return Array.from(wrap.querySelectorAll('input[type=checkbox]:checked'))
+          .map(cb => cb.value);
+      }
+
+      async function loadYouTubeThumbnails(videoPath) {        const gallery = document.getElementById('ytThumbGallery');
+        const status = document.getElementById('ytThumbStatus');
+        const hidden = document.getElementById('ytThumbnailPath');
+        gallery.innerHTML = '';
+        hidden.value = '';
+        if (!videoPath) {
+          status.textContent = 'Pick a video to load thumbnails…';
+          return;
+        }
+        status.textContent = 'Loading thumbnails…';
+        try {
+          const r = await fetch('/api/youtube/thumbnails?video_path='
+                                + encodeURIComponent(videoPath))
+            .then(x => x.json());
+          if (!r.success) {
+            status.textContent = 'Could not load thumbnails: ' + (r.error || 'unknown');
+            return;
+          }
+          if (!r.thumbnails || r.thumbnails.length === 0) {
+            status.textContent = 'No thumbnails found in ' + r.directory
+              + ' (drop PNG/JPG files there to enable selection).';
+            return;
+          }
+          status.innerHTML = 'Found <strong>' + r.thumbnails.length
+            + '</strong> thumbnail(s) in <code>' + r.directory + '</code>. Click to select.';
+          r.thumbnails.forEach(t => {
+            const card = document.createElement('div');
+            card.style.cssText = 'cursor:pointer; border:2px solid #334155; border-radius:6px; '
+              + 'overflow:hidden; background:#1e293b; padding:4px;';
+            if (t.too_large) card.style.opacity = '0.5';
+            card.title = t.name + (t.too_large ? '  (over 2 MB — YouTube will reject)' : '');
+            card.dataset.path = t.path;
+            card.innerHTML =
+              '<img src="' + t.url + '" style="width:100%; height:90px; object-fit:cover; '
+              + 'border-radius:4px; display:block;">' +
+              '<div style="font-size:11px; color:#94a3b8; margin-top:4px; '
+              + 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">'
+              + t.name + '</div>';
+            card.onclick = () => {
+              if (t.too_large) {
+                alert('This thumbnail is over YouTube\'s 2 MB limit and will be rejected.');
+                return;
+              }
+              gallery.querySelectorAll('div[data-path]').forEach(el => {
+                el.style.borderColor = '#334155';
+                el.style.boxShadow = 'none';
+              });
+              card.style.borderColor = '#dc2626';
+              card.style.boxShadow = '0 0 0 2px rgba(220,38,38,0.4)';
+              hidden.value = t.path;
+              _setYouTubeThumbPreview(t.path);
+              updateYouTubeAccordionSummaries();
+            };
+            gallery.appendChild(card);
+          });
+        } catch (e) {
+          status.textContent = 'Failed to load thumbnails: ' + e.message;
+        }
+      }
+
+      async function submitPublishToYouTube() {
+        const videoPath = document.getElementById('ytVideoPath').value.trim();
+        if (!videoPath) {
+          alert('Please pick a video file to publish.');
+          return;
+        }
+        const titleVal = document.getElementById('ytTitle').value.trim();
+        if (!titleVal) {
+          alert('Please enter a title for the video.');
+          document.getElementById('ytTitle').focus();
+          return;
+        }
+        const md = window._currentYoutubeDetails || '';
+        const hashtagsRaw = document.getElementById('ytHashtags').value;
+        const hashtags = hashtagsRaw
+          .split(/[\s,]+/)
+          .map(s => s.replace(/^#+/, '').trim())
+          .filter(Boolean);
+        const overrides = {
+          title: titleVal,
+          description: document.getElementById('ytDescription').value,
+          tags: document.getElementById('ytTags').value.split(',').map(s => s.trim()).filter(Boolean),
+          hashtags: hashtags,
+          category_id: document.getElementById('ytCategoryId').value,
+          made_for_kids: document.getElementById('ytMadeForKids').value === 'true',
+          contains_synthetic_media: document.getElementById('ytSyntheticMedia').checked,
+          default_language: document.getElementById('ytDefaultLanguage').value.trim() || 'en-US',
+          default_audio_language: document.getElementById('ytDefaultAudioLanguage').value.trim() || 'en-US',
+          recording_date: (function () {
+            const d = document.getElementById('ytRecordingDate').value;
+            return d ? (d + 'T00:00:00Z') : null;
+          })(),
+          embeddable: document.getElementById('ytEmbeddable').checked
+        };
+        const body = {
+          video_path: videoPath,
+          youtube_details_md: md,
+          privacy_status: document.getElementById('ytPrivacy').value,
+          notify_subscribers: document.getElementById('ytNotifySubs').checked,
+          thumbnail_path: document.getElementById('ytThumbnailPath').value || null,
+          playlist_ids: _selectedPlaylistIds(),
+          overrides: overrides
+        };
+
+        // Hard guard: never let public slip through from the client.
+        if (body.privacy_status !== 'private' && body.privacy_status !== 'unlisted') {
+          alert('Privacy must be Private or Unlisted. Use YouTube Studio to publish publicly.');
+          return;
+        }
+
+        const btn = document.getElementById('ytPublishBtn');
+        btn.disabled = true;
+        btn.innerHTML = '⏳ Starting…';
+        document.getElementById('ytResult').style.display = 'none';
+        document.getElementById('ytProgressWrap').style.display = 'block';
+        document.getElementById('ytProgressBar').style.width = '0%';
+        document.getElementById('ytProgressText').textContent = 'Authorizing & uploading…';
+
+        let upload_id;
+        try {
+          const r = await fetch('/api/youtube/publish', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+          });
+          const j = await r.json();
+          if (!j.success) {
+            throw new Error(j.error || 'Publish failed');
+          }
+          upload_id = j.upload_id;
+        } catch (e) {
+          btn.disabled = false;
+          btn.innerHTML = '🚀 Publish';
+          document.getElementById('ytProgressWrap').style.display = 'none';
+          alert('❌ ' + e.message);
+          return;
+        }
+
+        // Poll status.
+        const poll = setInterval(async () => {
+          try {
+            const r = await fetch('/api/youtube/publish/status/' + upload_id).then(x => x.json());
+            if (!r.success) return;
+            const s = r.state || {};
+            if (typeof s.progress === 'number') {
+              document.getElementById('ytProgressBar').style.width = s.progress + '%';
+            }
+            document.getElementById('ytProgressText').textContent =
+              (s.status || 'working') + ' — ' + (s.progress || 0) + '%' +
+              (s.filename ? '  (' + s.filename + ')' : '');
+            if (s.status === 'complete') {
+              clearInterval(poll);
+              btn.disabled = false;
+              btn.innerHTML = '🚀 Publish';
+              const result = document.getElementById('ytResult');
+              result.style.display = 'block';
+              let extras = '';
+              if (s.thumbnail_set === true) {
+                extras += 'Thumbnail: <strong>✅ set</strong><br>';
+              } else if (s.thumbnail_error) {
+                extras += 'Thumbnail: <strong style="color:#fca5a5;">❌ failed</strong> — '
+                  + String(s.thumbnail_error).replace(/</g, '&lt;') + '<br>';
+                // Also pop up an alert so the user can't miss it.
+                setTimeout(() => alert('Thumbnail upload FAILED:\n\n'
+                  + s.thumbnail_error
+                  + '\n\nNote: YouTube custom thumbnails require a verified channel. '
+                  + 'Check https://www.youtube.com/verify if you see a 403 / youtubeSignupRequired error.'), 100);
+              } else if (document.getElementById('ytThumbnailPath').value) {
+                extras += 'Thumbnail: <strong style="color:#fbbf24;">⚠️ not set (no error reported)</strong><br>';
+              }
+              const added = (s.playlists_added || []).length;
+              const plErrs = s.playlist_errors || [];
+              if (added > 0) {
+                extras += 'Playlists added: <strong>' + added + '</strong><br>';
+              }
+              if (plErrs.length > 0) {
+                extras += 'Playlist errors: <strong style="color:#fca5a5;">' + plErrs.length + '</strong><br>';
+              }
+              result.innerHTML =
+                '✅ <strong>Published!</strong><br>' +
+                'Video: <a href="' + s.video_url + '" target="_blank" style="color:#fff; text-decoration:underline;">' + s.video_url + '</a><br>' +
+                'Studio: <a href="https://studio.youtube.com/video/' + s.video_id + '/edit" target="_blank" style="color:#fff; text-decoration:underline;">Edit in YouTube Studio</a><br>' +
+                extras +
+                'Privacy: <strong>' + (s.privacy_status || 'private') + '</strong> — review the upload before making it public.';
+
+              // Post-publish reminders dialog (Studio-only settings).
+              setTimeout(() => {
+                const studioUrl = 'https://studio.youtube.com/video/' + s.video_id + '/edit';
+                alert(
+                  '📋 BEFORE GOING PUBLIC — open YouTube Studio and verify:\n\n' +
+                  '  • Automatic chapters: TURN OFF\n' +
+                  '  • Shorts sampling: Allow\n' +
+                  '  • Comments: Allow all  +  ranking = Top comments\n' +
+                  '  • Self-rated content categories: all set to "None"\n' +
+                  '  • Captions: upload the .srt generated in the dialog\n' +
+                  '  • Cards: add manually in Studio → Editor → Cards\n\n' +
+                  'Studio link has been copied below — opening now.'
+                );
+                try { window.open(studioUrl, '_blank'); } catch (e) { /* ignore */ }
+              }, 200);
+            } else if (s.status === 'error') {
+              clearInterval(poll);
+              btn.disabled = false;
+              btn.innerHTML = '🚀 Publish';
+              alert('❌ Upload failed: ' + (s.error || 'unknown error'));
+              document.getElementById('ytProgressText').textContent = 'Failed';
+            }
+          } catch (e) { /* keep polling */ }
+        }, 1500);
+      }
     </script>
 
     <div class="footer">
