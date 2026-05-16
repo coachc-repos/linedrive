@@ -6288,10 +6288,25 @@ Thank you for watching!`;
                     const _p = _palettes[_h % _palettes.length];
                     const thumbBox = document.createElement('div');
                     thumbBox.className = 'vg-thumb';
+                    // Gradient is always set as a fallback behind the poster/video frame.
+                    thumbBox.style.background = 'linear-gradient(135deg, ' + _p[0] + ' 0%, ' + _p[1] + ' 50%, ' + _p[2] + ' 100%)';
                     if (v.poster_url) {
                         thumbBox.style.backgroundImage = 'url("' + v.poster_url + '")';
-                    } else {
-                        thumbBox.style.background = 'linear-gradient(135deg, ' + _p[0] + ' 0%, ' + _p[1] + ' 50%, ' + _p[2] + ' 100%)';
+                    } else if (v.stream_url) {
+                        // No poster sidecar in blob storage — render the first frame
+                        // of the video itself by loading just metadata + ~0.5s.
+                        const vEl = document.createElement('video');
+                        vEl.muted = true;
+                        vEl.playsInline = true;
+                        vEl.preload = 'metadata';
+                        vEl.src = v.stream_url + (v.stream_url.indexOf('#') === -1 ? '#t=0.5' : '');
+                        vEl.style.position = 'absolute';
+                        vEl.style.inset = '0';
+                        vEl.style.width = '100%';
+                        vEl.style.height = '100%';
+                        vEl.style.objectFit = 'cover';
+                        vEl.style.pointerEvents = 'none';
+                        thumbBox.appendChild(vEl);
                     }
                     const play = document.createElement('div');
                     play.className = 'vg-play';
