@@ -1366,6 +1366,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                         tone=tone,
                         script_length=video_length,
                         max_chapters=1 if quick_test else 8,
+                        hook_summary=checkboxes.get("hook_summary", False),
                     ),
                     # 20 minutes - accounts for Script Writer (~5min) + Script Review (~12min)
                     timeout=1200
@@ -3141,21 +3142,50 @@ async def process_existing_script(
                         r"\n\s*---"
                         r"|\n\s*={3,}"
                         r"|\n\s*#{1,6}\s"
-                        r"|\n\s*\*{0,2}\s*(?:Heading|Visual\s*Cue|B-?Roll|Chapter|VISUAL|HEADING)\s*[:\-]"
+                        r"|\n\s*\*{0,2}\s*(?:Heading|Visual\s*Cue|B-?Roll|Chapter|VISUAL|HEADING|OPTION\s*\d+|Host|Summary|Conclusion|Outro|Intro)\s*[:\-]"
                         r"|\n\s*\*{2}[^*\n]+\*{2}\s*:"
+                        r"|\n\s*\n\s*\*{0,2}\s*OPTION\s*\d+"
                         r"|\Z)",
                         _hook_search_text,
                         re.IGNORECASE,
                     )
                     if _hm:
                         _final_hook_text = _hm.group(1).strip()
-                        # Defensive: drop any trailing "Heading:" line that snuck in.
+                        # Defensive: drop any trailing "Heading:" / "OPTION N:" line
+                        # that snuck in despite the lookahead.
                         _final_hook_text = re.split(
-                            r"\n\s*(?:\*{0,2}\s*)?(?:Heading|Visual\s*Cue|B-?Roll|Chapter)\s*[:\-]",
+                            r"\n\s*(?:\*{0,2}\s*)?(?:Heading|Visual\s*Cue|B-?Roll|Chapter|OPTION\s*\d+|Host)\s*[:\-]",
                             _final_hook_text,
                             maxsplit=1,
                             flags=re.IGNORECASE,
                         )[0].strip()
+                        # Defensive: also cut at the first blank-line-followed-by-`---`
+                        # paragraph break, which is the natural end of any hook block.
+                        _final_hook_text = re.split(
+                            r"\n\s*---+\s*\n",
+                            _final_hook_text,
+                            maxsplit=1,
+                        )[0].strip()
+                        # Hard cap: a hook is at most ~120 words. Anything longer
+                        # means our regex bled into adjacent content — truncate
+                        # at the first sentence boundary within the cap.
+                        _MAX_HOOK_WORDS = 120
+                        _words = _final_hook_text.split()
+                        if len(_words) > _MAX_HOOK_WORDS:
+                            _truncated = " ".join(_words[:_MAX_HOOK_WORDS])
+                            # Prefer trimming back to a sentence end.
+                            _sent_end = max(
+                                _truncated.rfind(". "),
+                                _truncated.rfind("! "),
+                                _truncated.rfind("? "),
+                            )
+                            if _sent_end > len(_truncated) // 2:
+                                _truncated = _truncated[: _sent_end + 1]
+                            logger.warning(
+                                f"⚠️ FINAL HOOK extract was {len(_words)} words; "
+                                f"truncated to {_MAX_HOOK_WORDS}-word cap for HeyGen curl."
+                            )
+                            _final_hook_text = _truncated.strip()
 
                     curl_commands = generate_heygen_curl_commands(
                         heygen_with_header, script_title,
@@ -4310,12 +4340,92 @@ def finalize_hook():
                     out = out[: m.start()]
             return out
 
-        # **🎬 OPENING HOOK OPTIONS** header (with optional emoji/bold)
+        # **🎬 OPENING HOOK OPTIONS** header (with optional emoji/bold).
+        # The OPENING HOOK OPTIONS block has a known internal structure:
+        #     # 🎬 OPENING HOOK OPTIONS
+        #     *Choose one of these three hooks for your video:*
+        #     **OPTION 1:** ... ---
+        #     **OPTION 2:** ... ---
+        #     **OPTION 3:** ... ---
+        # The generic _strip_sections terminator includes `---`, so it would
+        # only delete through the FIRST `---` and leave OPTION 2/3 behind.
+        # Use a dedicated stripper that walks past those internal `---`
+        # separators and consumes every **OPTION N:** sub-block until we hit
+        # the next real section.
         _opening_hdr = _re.compile(
-            r"(?:^|\n)\s*(?:#{1,6}\s*)?\*{0,2}\s*(?:🎬\s*)?OPENING\s+HOOK\s+OPTIONS\s*\*{0,2}\s*\n",
+            r"(?:^|\n)\s*(?:={3,}\s*\n)?\s*(?:#{1,6}\s*)?\*{0,2}\s*(?:🎬\s*)?OPENING\s+HOOK\s+OPTIONS\s*\*{0,2}\s*\n(?:\s*={3,}\s*\n)?",
             flags=_re.IGNORECASE,
         )
-        stripped = _strip_sections(stripped, _opening_hdr)
+        _option_block_re = _re.compile(
+            r"\A\s*(?:\*{1,2}\s*)?OPTION\s*\d+\s*:?\s*\*{0,2}\s*\n",
+            flags=_re.IGNORECASE,
+        )
+        _hook_block_terminator = _re.compile(
+            r"\n(?:#{1,6}\s|"
+            r"\s*Heading\s*:|"
+            r"\s*\*{0,2}\s*(?:Chapter|Part|Section|Visual\s*Cue|B-?Roll|Summary|Conclusion|Outro|Intro|Host)\s*[:\-]|"
+            r"\s*\*{0,2}\s*🎯\s*(?:THE\s+)?FINAL\s+HOOK|"
+            r"\s*={3,}\s*\n\s*#)",
+            flags=_re.IGNORECASE,
+        )
+
+        def _strip_opening_hook_options(text: str) -> str:
+            out = text
+            for _ in range(5):
+                m = _opening_hdr.search(out)
+                if not m:
+                    break
+                start = m.start()
+                cursor = m.end()
+                # Optionally consume an intro line like "*Choose one of these three hooks for your video:*"
+                intro_m = _re.match(r"[ \t]*\*[^\n]*\n+", out[cursor:])
+                if intro_m:
+                    cursor += intro_m.end()
+                # Now consume one or more **OPTION N:** ... --- blocks.
+                consumed_any_option = False
+                for _ in range(10):
+                    tail = out[cursor:]
+                    if not _option_block_re.match(tail):
+                        break
+                    # Find end of this OPTION block — next `---` line.
+                    sep_m = _re.search(r"\n\s*---+\s*(?:\n|$)", tail)
+                    if not sep_m:
+                        # No trailing separator — consume to end of paragraph
+                        # or until a real terminator.
+                        term = _hook_block_terminator.search(tail)
+                        cursor += term.start() + 1 if term else len(tail)
+                        consumed_any_option = True
+                        break
+                    cursor += sep_m.end()
+                    consumed_any_option = True
+                # Also consume any trailing blank lines + stray `---` that
+                # remain right after the OPTION blocks.
+                blank_m = _re.match(r"(?:[ \t]*\n)+", out[cursor:])
+                if blank_m:
+                    cursor += blank_m.end()
+                if not consumed_any_option:
+                    # Header found but no options — fall back to terminator scan.
+                    tail = out[cursor:]
+                    term = _hook_block_terminator.search(tail)
+                    cursor += term.start() + 1 if term else len(tail)
+                out = out[:start] + "\n" + out[cursor:]
+            return out
+
+        stripped = _strip_opening_hook_options(stripped)
+
+        # Defensive sweep: also kill any stray **OPTION N:** ... --- blocks
+        # that may still be sitting at the top of the script (e.g. when the
+        # OPENING HOOK OPTIONS header was already trimmed by an earlier pass
+        # but its sub-options remained). This is bounded to the first 6KB so
+        # we never touch genuine in-chapter content.
+        _head, _rest = stripped[:6000], stripped[6000:]
+        _head = _re.sub(
+            r"(?:^|\n)\s*(?:\*{1,2}\s*)?OPTION\s*\d+\s*:?\s*\*{0,2}\s*\n[\s\S]*?\n\s*---+\s*(?:\n|$)",
+            "\n",
+            _head,
+            flags=_re.IGNORECASE,
+        )
+        stripped = _head + _rest
 
         # FINAL HOOK header — tolerant: optional `#`, optional bold, optional
         # 🎯 emoji, optional `THE`, optional trailing colon. Match leading
