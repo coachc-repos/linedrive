@@ -3151,6 +3151,16 @@ async def process_existing_script(
                     )
                     if _hm:
                         _final_hook_text = _hm.group(1).strip()
+                        # PRIMARY terminator: a hook is by definition a SINGLE
+                        # paragraph. Cut at the first blank line so any intro
+                        # paragraph ("Hi, I'm <Host>...") that follows the
+                        # hook without an explicit header doesn't bleed into
+                        # the HeyGen `-hook` curl payload.
+                        _final_hook_text = re.split(
+                            r"\n\s*\n",
+                            _final_hook_text,
+                            maxsplit=1,
+                        )[0].strip()
                         # Defensive: drop any trailing "Heading:" / "OPTION N:" line
                         # that snuck in despite the lookahead.
                         _final_hook_text = re.split(
@@ -3159,10 +3169,9 @@ async def process_existing_script(
                             maxsplit=1,
                             flags=re.IGNORECASE,
                         )[0].strip()
-                        # Defensive: also cut at the first blank-line-followed-by-`---`
-                        # paragraph break, which is the natural end of any hook block.
+                        # Defensive: also cut at the first `---` separator.
                         _final_hook_text = re.split(
-                            r"\n\s*---+\s*\n",
+                            r"\n\s*---+\s*\n?",
                             _final_hook_text,
                             maxsplit=1,
                         )[0].strip()
