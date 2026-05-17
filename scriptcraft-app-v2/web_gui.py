@@ -4945,7 +4945,7 @@ def grok_test_video_generate():
 
         client = xai_sdk.Client(api_key=xai_api_key)
         response = client.video.generate(
-            prompt=prompt,
+            prompt=_grok_prompt_no_audio(prompt),
             model="grok-imagine-video",
             duration=duration,
             aspect_ratio=aspect_ratio,
@@ -5664,6 +5664,24 @@ def grok_get_saved_key():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# Hint appended to every Grok video prompt so the generator avoids audio.
+# xai_sdk video.generate has no audio toggle, so we steer the model via prompt.
+GROK_NO_AUDIO_HINT = (
+    " Silent video only. No audio, no music, no sound effects, no dialogue, "
+    "no voiceover, no ambient sound. Visuals only."
+)
+
+
+def _grok_prompt_no_audio(prompt: str) -> str:
+    """Append the no-audio hint to a Grok video prompt (idempotent)."""
+    base = (prompt or "").strip()
+    if not base:
+        return base
+    if "silent video" in base.lower() or "no audio" in base.lower():
+        return base
+    return base.rstrip(".") + "." + GROK_NO_AUDIO_HINT
+
+
 @app.route("/api/grok/key", methods=["POST"])
 def grok_save_key():
     """Persist Grok API key in server settings so it survives browser/session changes."""
@@ -5770,7 +5788,7 @@ def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, sc
 
         try:
             response = client.video.generate(
-                prompt=prompt,
+                prompt=_grok_prompt_no_audio(prompt),
                 model="grok-imagine-video",
                 duration=6,
                 aspect_ratio="16:9",
