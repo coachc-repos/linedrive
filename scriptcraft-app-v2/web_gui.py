@@ -1443,15 +1443,8 @@ async def process_script_creation(session_id, topic, audience, tone,
             print(f"✅ Script Reviewed by Script Reviewer")
             print(f"✅ Sequential Workflow Completed Successfully")
 
-            # Add introduction to script content (EXACT COPY)
-            introduction = """Hi, I'm Roz's AI Digital Twin. She is a high-tech sales leader, bonafide tech nerd and busy Mom of two really incredible kids. She has spent her career in high-tech working to this moment and beyond and we are here to guide you through it. This is, AI with Roz.
-
----
-
-"""
-
-            # Combine introduction with script content (EXACT COPY)
-            raw_script_content = introduction + result["script_content"]
+            # Use script content directly (no boilerplate intro).
+            raw_script_content = result["script_content"]
 
             # Enhanced script with bold tool formatting (EXACT COPY - NO TIMEOUTS!)
             from console_ui.text_processing import (
@@ -2277,6 +2270,21 @@ async def process_existing_script(
         return
 
     streamer = progress_streams[session_id]
+
+    # One-shot sanitizer: strip the legacy "Hi, I'm Roz's AI Digital Twin..."
+    # boilerplate intro (and its trailing `---` rule) from any uploaded /
+    # re-processed script so it doesn't keep propagating downstream.
+    if script_content:
+        _intro_re = re.compile(
+            r"^\s*Hi[, ]\s*I[\u2019']m\s+Roz['\u2019]s\s+AI\s+Digital\s+Twin\.[\s\S]*?This\s+is,?\s+AI\s+with\s+Roz\.\s*\n+"
+            r"(?:---+\s*\n+)?",
+            flags=re.IGNORECASE,
+        )
+        _new = _intro_re.sub("", script_content, count=1)
+        if _new != script_content:
+            logger.info(
+                "🧹 Stripped legacy 'AI Digital Twin' boilerplate intro from script_content")
+            script_content = _new.lstrip()
 
     try:
         # Initialize EDL variables
@@ -3177,13 +3185,25 @@ async def process_existing_script(
                     if _hm:
                         _final_hook_text = _hm.group(1).strip()
                         # PRIMARY terminator: a hook is ONE paragraph. Cut at
-                        # the FIRST newline (single or double) so any intro
-                        # paragraph ("Hi, I'm <Host>...") that follows the
-                        # hook — even when separated only by a single \n —
-                        # never bleeds into the HeyGen `-hook` curl payload.
-                        # If the hook itself wraps across newlines, the
-                        # rejoin happens downstream in clean_text().
-                        _final_hook_text = _final_hook_text.split("\n", 1)[0].strip()
+                        # the first BLANK line so any intro paragraph that
+                        # follows the hook doesn't bleed into the HeyGen
+                        # `-hook` curl payload. (Hooks themselves may wrap
+                        # across single \n line breaks, so we don't cut on a
+                        # bare single newline.)
+                        _final_hook_text = re.split(
+                            r"\n\s*\n",
+                            _final_hook_text,
+                            maxsplit=1,
+                        )[0].strip()
+                        # Defensive: drop a trailing standing-intro paragraph
+                        # that may be joined to the hook with only a single
+                        # \n (e.g. "...five to start with.\nHi, I'm <Host>...").
+                        _final_hook_text = re.split(
+                            r"\n\s*(?:Hi[, ]\s*I[’']m|Hello[, ]|Welcome\s+back|Welcome\s+to|This\s+is,?\s+AI\s+with)\b",
+                            _final_hook_text,
+                            maxsplit=1,
+                            flags=re.IGNORECASE,
+                        )[0].strip()
                         # Defensive: drop any trailing "Heading:" / "OPTION N:" line
                         # that snuck in despite the lookahead.
                         _final_hook_text = re.split(

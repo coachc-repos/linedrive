@@ -218,12 +218,8 @@ async def run_script_to_demo_workflow():
             script_number = datetime.now().strftime("%H%M")
             print(f"🔢 Script Number: {script_number}")
 
-            # Add introduction to script content WITH script number
-            introduction = f"""Hi, I'm Roz's AI Digital Twin. She is a high-tech sales leader, bonafide tech nerd and busy Mom of two really incredible kids. She has spent her career in high-tech working to this moment and beyond and we are here to guide you through it. This is, AI with Roz.
-
----
-
-# Script #{script_number}: {script_topic}
+            # Add a script-number header (no boilerplate intro).
+            introduction = f"""# Script #{script_number}: {script_topic}
 
 ---
 
