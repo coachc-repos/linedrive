@@ -638,6 +638,37 @@ def generate_heygen_curl_commands(
         text = re.sub(r'\s{2,}', ' ', text)
         return text.strip()
 
+    def strip_stage_lines(text: str) -> str:
+        """Remove non-spoken lines (visual cues, b-roll, headings, metadata)
+        from a chapter body so HeyGen only gets the actual dialogue."""
+        out_lines = []
+        for ln in text.split('\n'):
+            s = ln.strip()
+            if not s:
+                out_lines.append('')
+                continue
+            # Stage direction / production label lines.
+            if re.match(
+                r'^(?:🎬\s*)?(?:\*{0,2}\s*)?'
+                r'(?:Visual\s*Cue|B-?Roll|On[- ]Screen|Graphic|SFX|Music|'
+                r'Caption|Cut\s+to|Transition|Narrator|Voiceover|VO|Heading)'
+                r'\s*:',
+                s, re.IGNORECASE,
+            ):
+                continue
+            # Script-metadata bleed lines (Direct Video - ... / Script Type: /
+            # Duration: / Generated: / Audience: / Tone:).
+            if re.match(
+                r'^(?:Direct\s+Video\b|Script\s+Type\s*:|Duration\s*:|'
+                r'Generated\s*:|Audience\s*:|Tone\s*:|Title\s*:)',
+                s, re.IGNORECASE,
+            ):
+                continue
+            # Strip a leading "Summary:" label (keep the sentence after it).
+            s = re.sub(r'^\s*Summary\s*:\s*', '', s, flags=re.IGNORECASE)
+            out_lines.append(s)
+        return '\n'.join(out_lines).strip()
+
     # Find the HeyGen section
     heygen_match = re.search(
         r'# 🎬 HEYGEN READY SCRIPT\s*={70,}\s*(.+?)(?:\n\n#+\s|$)',
@@ -663,6 +694,24 @@ def generate_heygen_curl_commands(
     chapter_matches = list(re.finditer(
         chapter_pattern, heygen_content, re.DOTALL))
 
+    # FALLBACK: many manually-authored / processed scripts use bare
+    # `Chapter N - Title` or `Chapter N: Title` lines instead of `Heading:`.
+    # Detect those and treat each as a chapter boundary so we don't dump the
+    # entire script into a single Ch1 curl.
+    if not chapter_matches:
+        alt_pattern = (
+            r'^\s*(?:#{1,6}\s*)?(?:\*{0,2})\s*'
+            r'(Chapter\s+\d+\s*[-:–]\s*[^\n]+?)'
+            r'(?:\*{0,2})\s*\n+'
+            r'(.+?)'
+            r'(?=^\s*(?:#{1,6}\s*)?(?:\*{0,2})\s*Chapter\s+\d+\s*[-:–]'
+            r'|^\s*SUPPORTING\s+RESEARCH'
+            r'|^\s*={3,}\s*$'
+            r'|\Z)'
+        )
+        chapter_matches = list(re.finditer(
+            alt_pattern, heygen_content, re.DOTALL | re.MULTILINE))
+
     if chapter_matches:
         # Use structured chapters if they exist.
         # NOTE: We intentionally SKIP any text that appears before the first
@@ -676,7 +725,7 @@ def generate_heygen_curl_commands(
         # Add all chapters as found in the script
         for match in chapter_matches:
             chapter_title = match.group(1).strip()
-            chapter_content = clean_text(match.group(2))
+            chapter_content = clean_text(strip_stage_lines(match.group(2)))
 
             chapters.append({
                 'title': shorten_title(chapter_title),
