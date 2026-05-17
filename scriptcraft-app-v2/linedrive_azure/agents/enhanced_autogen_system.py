@@ -10,6 +10,7 @@ Script Review agents alongside existing tournament and AI tips agents.
 import asyncio
 import logging
 import os
+import re
 import sys
 import time
 import concurrent.futures
@@ -1202,7 +1203,47 @@ specific points to cover, and overall approach. Honor their intent.
 
                 _elapsed = time.time() - _start
                 if script_result.get("success"):
-                    _resp = script_result.get("response", "")
+                    _resp = script_result.get("response", "") or ""
+                    # Detect Azure content-filter refusal text. The Responses API
+                    # sometimes emits partial chapter text followed by a refusal
+                    # apology block. If we leave that in, downstream agents (e.g.
+                    # Hook & Summary) see the refusal in their input and refuse the
+                    # whole job. Strip the refusal tail; if what's left is too
+                    # short to be a real chapter, surface as failure.
+                    _refusal_re = re.compile(
+                        r"(?:^|\n)\s*I[\u2019']?m sorry,?\s+but I cannot assist with that request\.?\s*$",
+                        flags=re.IGNORECASE,
+                    )
+                    if _refusal_re.search(_resp):
+                        _cleaned = _refusal_re.sub("", _resp).rstrip()
+                        _orig_len = len(_resp)
+                        _new_len = len(_cleaned)
+                        # If the chapter is now suspiciously short (<400 chars OR
+                        # we lost more than 25% of the body), treat as a failed
+                        # write so the workflow bails instead of producing a
+                        # broken script that later poisons the hook agent.
+                        if _new_len < 400 or _new_len < _orig_len * 0.5:
+                            print(
+                                f"   ⚠️ [parallel] Chapter {i}/{len(chapters)} hit content-filter refusal "
+                                f"({_orig_len}→{_new_len} chars). Marking as failed."
+                            )
+                            return {
+                                "index": i, "chapter_topic": chapter_topic,
+                                "success": False,
+                                "error": (
+                                    "Chapter writer hit Azure content-filter refusal "
+                                    "('I'm sorry, but I cannot assist with that request.'). "
+                                    "Re-run script creation; if it keeps happening, soften "
+                                    "the chapter topic or audience prompt."
+                                ),
+                                "elapsed": _elapsed,
+                            }
+                        # Otherwise just trim the trailing apology and keep the chapter.
+                        print(
+                            f"   ✂️ [parallel] Chapter {i}/{len(chapters)}: trimmed trailing "
+                            f"refusal apology ({_orig_len}→{_new_len} chars)"
+                        )
+                        _resp = _cleaned
                     print(
                         f"   ✅ [parallel] Chapter {i}/{len(chapters)} done "
                         f"({len(_resp)} chars) in {_elapsed:.1f}s"

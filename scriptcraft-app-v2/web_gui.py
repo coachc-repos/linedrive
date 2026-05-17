@@ -2609,13 +2609,35 @@ async def process_existing_script(
                 # usable hook texts, surface an actionable error rather than
                 # silently completing with nothing for the UI to render.
                 if not _hooks_list:
-                    _err = (
-                        "Hook agent returned no usable hooks. Try again, or "
-                        "check the agent's raw response for parsing issues."
+                    _raw = (
+                        hook_result.get("full_response")
+                        or hook_result.get("raw_response")
+                        or ""
                     )
+                    # Common case: the source script contains an Azure content-
+                    # filter refusal (e.g. "I'm sorry, but I cannot assist with
+                    # that request.") so the Hook agent refused the whole job.
+                    _refusal_marker = "cannot assist with that request"
+                    if _refusal_marker in (script_content or "").lower():
+                        _err = (
+                            "Source script contains Azure content-filter refusal text "
+                            "('I'm sorry, but I cannot assist with that request.'). "
+                            "Remove those lines from the script (or re-run script "
+                            "creation) before generating hooks."
+                        )
+                    elif _refusal_marker in _raw.lower():
+                        _err = (
+                            "Hook agent refused the request (Azure content filter). "
+                            "Soften wording in the script or retry."
+                        )
+                    else:
+                        _err = (
+                            "Hook agent returned no usable hooks. Try again, or "
+                            "check the agent's raw response for parsing issues."
+                        )
                     logger.warning(f"⚠️ Hook-only mode: {_err}")
                     streamer.result = {"success": False, "error": _err}
-                    streamer.send_update(f"❌ {_err}", 100)
+                    streamer.send_update(f"❌ {_err}", -1)
                     return
 
                 # If the source script already has a **🎯 FINAL HOOK:** section,
