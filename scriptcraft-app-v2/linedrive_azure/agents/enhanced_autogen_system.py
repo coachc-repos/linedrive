@@ -1097,22 +1097,36 @@ secondary. Ensure every chapter serves the goals outlined in the description.
                 f"⏱️ Target: {minutes_per_chapter}+ minutes per chapter ({words_per_chapter}+ words)"
             )
 
-            # STEP 2: Script Writer - Chapter by Chapter
+            # STEP 2: Script Writer - Chapter by Chapter (PARALLEL)
             print(
                 f"\n✍️ STEP 2: Chapter-by-Chapter Script Writing [{get_timestamp()}]")
             print("-" * 60)
 
-            for i, chapter_topic in enumerate(chapters, 1):
-                chapter_start = get_timestamp()
+            def _write_one_chapter(i: int, chapter_topic: str) -> Dict[str, Any]:
+                """Write a single chapter. Runs in a worker thread.
+
+                Returns dict: {index, chapter_topic, success, response|error, elapsed}
+                Each call uses its OWN agent thread so chapters are fully
+                independent and safe to run concurrently.
+                """
+                _start = time.time()
+                _ts = get_timestamp()
                 print(
-                    f"\n📝 Writing Chapter {i}/{len(chapters)}: {chapter_topic} [{chapter_start}]"
+                    f"\n📝 [parallel] Start Chapter {i}/{len(chapters)}: {chapter_topic} [{_ts}]"
                 )
 
-                # Create a new thread for each chapter
-                script_thread = (
-                    self.script_writer_client.project.agents.threads.create()
-                )
-                script_thread_id = script_thread.id
+                try:
+                    script_thread = (
+                        self.script_writer_client.project.agents.threads.create()
+                    )
+                    script_thread_id = script_thread.id
+                except Exception as _e:
+                    return {
+                        "index": i, "chapter_topic": chapter_topic,
+                        "success": False,
+                        "error": f"thread create failed: {_e}",
+                        "elapsed": time.time() - _start,
+                    }
 
                 script_request = f"""
 CHAPTER SCRIPT WRITING REQUEST:
@@ -1172,26 +1186,75 @@ REMINDER: The USER'S DESCRIPTION is your guide for level of detail,
 specific points to cover, and overall approach. Honor their intent.
 """
 
-                script_result = self.script_writer_client.send_message(
-                    thread_id=script_thread_id,
-                    message_content=script_request,
-                    show_sources=False,
-                    timeout=300,
-                )
-
-                chapter_end = get_timestamp()
-                if script_result["success"]:
-                    chapter_script = script_result["response"]
-                    all_chapter_scripts.append(chapter_script)
-                    print(
-                        f"   ✅ Chapter {i}/{len(chapters)} completed "
-                        f"({len(chapter_script)} chars) [{chapter_end}]"
+                try:
+                    script_result = self.script_writer_client.send_message(
+                        thread_id=script_thread_id,
+                        message_content=script_request,
+                        show_sources=False,
+                        timeout=300,
                     )
-                else:
+                except Exception as _e:
+                    return {
+                        "index": i, "chapter_topic": chapter_topic,
+                        "success": False, "error": f"send_message raised: {_e}",
+                        "elapsed": time.time() - _start,
+                    }
+
+                _elapsed = time.time() - _start
+                if script_result.get("success"):
+                    _resp = script_result.get("response", "")
+                    print(
+                        f"   ✅ [parallel] Chapter {i}/{len(chapters)} done "
+                        f"({len(_resp)} chars) in {_elapsed:.1f}s"
+                    )
+                    return {
+                        "index": i, "chapter_topic": chapter_topic,
+                        "success": True, "response": _resp, "elapsed": _elapsed,
+                    }
+                return {
+                    "index": i, "chapter_topic": chapter_topic,
+                    "success": False,
+                    "error": script_result.get("error", "unknown"),
+                    "elapsed": _elapsed,
+                }
+
+            # Run all chapter writes in parallel. Cap concurrency to avoid
+            # hammering the agent endpoint; for typical 3-8 chapter videos
+            # max_workers=8 means all chapters run truly concurrently.
+            _parallel_start = time.time()
+            max_workers = min(len(chapters), 8)
+            print(
+                f"🚀 Launching {len(chapters)} chapter writes in parallel "
+                f"(max_workers={max_workers})..."
+            )
+            chapter_results: List[Dict[str, Any]] = [None] * len(chapters)  # type: ignore
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers, thread_name_prefix="chapter-writer"
+            ) as ex:
+                future_to_idx = {
+                    ex.submit(_write_one_chapter, i, chapter_topic): i - 1
+                    for i, chapter_topic in enumerate(chapters, 1)
+                }
+                for fut in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[fut]
+                    chapter_results[idx] = fut.result()
+
+            _parallel_elapsed = time.time() - _parallel_start
+            print(
+                f"🏁 Parallel chapter writing finished in {_parallel_elapsed:.1f}s "
+                f"(would have been ~{sum(r['elapsed'] for r in chapter_results):.1f}s sequential)"
+            )
+
+            # Bail out on first failure (in chapter order) — same behavior as old loop
+            for r in chapter_results:
+                if not r["success"]:
                     return {
                         "success": False,
-                        "error": f"Script Writer failed on Chapter {i}: {script_result.get('error')}",
+                        "error": f"Script Writer failed on Chapter {r['index']}: {r.get('error')}",
                     }
+
+            # Preserve chapter order
+            all_chapter_scripts = [r["response"] for r in chapter_results]
 
             # Combine all chapters into full script
             combined_script = f"""
