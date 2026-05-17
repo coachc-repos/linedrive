@@ -2314,11 +2314,15 @@ async def process_existing_script(
 
         # 1) Prefer an explicit "Heading:" line (first one wins), but skip
         #    chapter-style headings like "Heading: Chapter 1 - ..." so the
-        #    real script title (top-of-doc) can be used instead.
+        #    real script title (top-of-doc) can be used instead. Also skip
+        #    Visual Cue / B-Roll values that occasionally appear as the
+        #    first Heading: in malformed scripts.
         heading_match = None
         for _hm in re.finditer(r'^\s*Heading:\s*(.+)$', script_content, re.MULTILINE | re.IGNORECASE):
             _val = _hm.group(1).strip().strip('*').strip()
             if re.match(r'^chapter\s+\d+\b', _val, re.IGNORECASE):
+                continue
+            if re.match(r'^(?:visual\s*cue|b-?roll|host|hook|summary)\b', _val, re.IGNORECASE):
                 continue
             heading_match = _hm
             break
@@ -2362,6 +2366,12 @@ async def process_existing_script(
                         continue
                     # Skip chapter headings
                     if re.match(r'^chapter\s+\d+\b', line, re.IGNORECASE):
+                        continue
+                    # Skip script-structure label lines that aren't titles.
+                    if re.match(
+                        r'^(?:visual\s*cue|b-?roll|host|hook|summary|heading)\s*[:\-]',
+                        line, re.IGNORECASE,
+                    ):
                         continue
                     script_title = line
                     logger.info(f"📰 ✅ Using line as title: '{script_title}'")
@@ -3166,16 +3176,14 @@ async def process_existing_script(
                     )
                     if _hm:
                         _final_hook_text = _hm.group(1).strip()
-                        # PRIMARY terminator: a hook is by definition a SINGLE
-                        # paragraph. Cut at the first blank line so any intro
+                        # PRIMARY terminator: a hook is ONE paragraph. Cut at
+                        # the FIRST newline (single or double) so any intro
                         # paragraph ("Hi, I'm <Host>...") that follows the
-                        # hook without an explicit header doesn't bleed into
-                        # the HeyGen `-hook` curl payload.
-                        _final_hook_text = re.split(
-                            r"\n\s*\n",
-                            _final_hook_text,
-                            maxsplit=1,
-                        )[0].strip()
+                        # hook — even when separated only by a single \n —
+                        # never bleeds into the HeyGen `-hook` curl payload.
+                        # If the hook itself wraps across newlines, the
+                        # rejoin happens downstream in clean_text().
+                        _final_hook_text = _final_hook_text.split("\n", 1)[0].strip()
                         # Defensive: drop any trailing "Heading:" / "OPTION N:" line
                         # that snuck in despite the lookahead.
                         _final_hook_text = re.split(

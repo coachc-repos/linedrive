@@ -762,9 +762,14 @@ def generate_heygen_curl_commands(
     def shorten_title(full_title):
         """Extract key words from title, removing common filler words."""
         import re
+        # Strip script-structure label prefixes that occasionally leak in
+        # when title extraction falls back to a non-title line.
+        title = re.sub(
+            r'^(?:VISUAL\s*CUE|HEADING|VISUAL|B-?ROLL|HOOK|SUMMARY|HOST)\s*[:\-]\s*',
+            '', full_title, flags=re.IGNORECASE)
         # Remove common prefixes like "Direct Video -", "Video -", etc.
         title = re.sub(r'^(Direct\s+Video\s*-\s*|Video\s*-\s*)',
-                       '', full_title, flags=re.IGNORECASE)
+                       '', title, flags=re.IGNORECASE)
         # Find content before the chapter marker (Ch1p1, Part1, etc.)
         match = re.match(r'^(.+?)(?:-Ch\d+p\d+|-Part\d+)?$', title)
         if match:
