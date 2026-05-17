@@ -5988,84 +5988,94 @@ def export_word():
                 # Handle markdown tables - detect header row with pipes
                 if '|' in line:
                     # Look ahead to check if next line is a separator
+                    is_table = False
                     if i + 1 < len(lines):
                         next_line = lines[i + 1].rstrip()
                         # Check if next line is a table separator (pipes, dashes, colons, spaces)
                         if '|' in next_line and all(c in '|-: \t' for c in next_line.replace('|', '')):
-                            # This is a markdown table!
-                            logger.info(f"📊 Detected table at line {i}")
+                            is_table = True
+                    if not is_table:
+                        # Not a table — treat as a regular paragraph and advance.
+                        # (Lines like "Audience: [a | b | c]" used to cause an
+                        # infinite loop because i was never incremented here.)
+                        paragraph = doc.add_paragraph()
+                        paragraph.add_run(line)
+                        i += 1
+                        continue
+                    # This is a markdown table!
+                    logger.info(f"📊 Detected table at line {i}")
 
-                            # Collect header row
-                            header_line = line
-                            i += 1  # Skip to separator line
-                            i += 1  # Skip separator, move to first data row
+                    # Collect header row
+                    header_line = line
+                    i += 1  # Skip to separator line
+                    i += 1  # Skip separator, move to first data row
 
-                            # Collect all data rows (lines with pipes)
-                            data_lines = []
-                            while i < len(lines):
-                                data_line = lines[i].rstrip()
-                                if '|' in data_line:
-                                    data_lines.append(data_line)
-                                    i += 1
-                                else:
-                                    break
+                    # Collect all data rows (lines with pipes)
+                    data_lines = []
+                    while i < len(lines):
+                        data_line = lines[i].rstrip()
+                        if '|' in data_line:
+                            data_lines.append(data_line)
+                            i += 1
+                        else:
+                            break
 
-                            # Parse the table
-                            # Split on pipes and clean up
-                            header_cells = [cell.strip()
-                                            for cell in header_line.split('|')]
-                            # Remove empty cells from start/end if table has leading/trailing pipes
-                            if header_cells and not header_cells[0]:
-                                header_cells = header_cells[1:]
-                            if header_cells and not header_cells[-1]:
-                                header_cells = header_cells[:-1]
+                    # Parse the table
+                    # Split on pipes and clean up
+                    header_cells = [cell.strip()
+                                    for cell in header_line.split('|')]
+                    # Remove empty cells from start/end if table has leading/trailing pipes
+                    if header_cells and not header_cells[0]:
+                        header_cells = header_cells[1:]
+                    if header_cells and not header_cells[-1]:
+                        header_cells = header_cells[:-1]
 
-                            # Parse data rows
-                            data_rows = []
-                            for data_line in data_lines:
-                                cells = [cell.strip()
-                                         for cell in data_line.split('|')]
-                                # Remove empty cells from start/end
-                                if cells and not cells[0]:
-                                    cells = cells[1:]
-                                if cells and not cells[-1]:
-                                    cells = cells[:-1]
-                                if cells:  # Only add non-empty rows
-                                    data_rows.append(cells)
+                    # Parse data rows
+                    data_rows = []
+                    for data_line in data_lines:
+                        cells = [cell.strip()
+                                 for cell in data_line.split('|')]
+                        # Remove empty cells from start/end
+                        if cells and not cells[0]:
+                            cells = cells[1:]
+                        if cells and not cells[-1]:
+                            cells = cells[:-1]
+                        if cells:  # Only add non-empty rows
+                            data_rows.append(cells)
 
-                            # Create Word table
-                            if header_cells and data_rows:
-                                logger.info(
-                                    f"📊 Creating Word table: {len(header_cells)} columns, {len(data_rows)} rows")
+                    # Create Word table
+                    if header_cells and data_rows:
+                        logger.info(
+                            f"📊 Creating Word table: {len(header_cells)} columns, {len(data_rows)} rows")
 
-                                table = doc.add_table(
-                                    rows=1 + len(data_rows), cols=len(header_cells))
-                                table.style = 'Light Grid Accent 1'
+                        table = doc.add_table(
+                            rows=1 + len(data_rows), cols=len(header_cells))
+                        table.style = 'Light Grid Accent 1'
 
-                                # Add headers
-                                for col_idx, header in enumerate(header_cells):
-                                    if col_idx < len(table.rows[0].cells):
-                                        cell = table.rows[0].cells[col_idx]
-                                        cell.text = header
-                                        # Make header bold
-                                        for paragraph in cell.paragraphs:
-                                            for run in paragraph.runs:
-                                                run.bold = True
+                        # Add headers
+                        for col_idx, header in enumerate(header_cells):
+                            if col_idx < len(table.rows[0].cells):
+                                cell = table.rows[0].cells[col_idx]
+                                cell.text = header
+                                # Make header bold
+                                for paragraph in cell.paragraphs:
+                                    for run in paragraph.runs:
+                                        run.bold = True
 
-                                # Add data rows
-                                for row_idx, row_data in enumerate(data_rows, start=1):
-                                    for col_idx, cell_text in enumerate(row_data):
-                                        if col_idx < len(header_cells) and row_idx < len(table.rows):
-                                            table.rows[row_idx].cells[col_idx].text = cell_text
+                        # Add data rows
+                        for row_idx, row_data in enumerate(data_rows, start=1):
+                            for col_idx, cell_text in enumerate(row_data):
+                                if col_idx < len(header_cells) and row_idx < len(table.rows):
+                                    table.rows[row_idx].cells[col_idx].text = cell_text
 
-                                # Add spacing after table
-                                doc.add_paragraph()
-                                logger.info(f"✅ Table created successfully")
-                            else:
-                                logger.warning(
-                                    f"⚠️ Table parsing failed: headers={len(header_cells)}, rows={len(data_rows)}")
+                        # Add spacing after table
+                        doc.add_paragraph()
+                        logger.info(f"✅ Table created successfully")
+                    else:
+                        logger.warning(
+                            f"⚠️ Table parsing failed: headers={len(header_cells)}, rows={len(data_rows)}")
 
-                            continue
+                    continue
 
                 # Handle horizontal rules (---)
                 elif line.strip() in ['---', '___', '***']:
