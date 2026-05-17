@@ -835,14 +835,11 @@ def generate_heygen_curl_commands(
         )[0]
         hook_clean = clean_text(_hook_raw)
         if hook_clean:
-            if len(hook_clean.split()) >= 20:
-                hook_p1, hook_p2 = split_content(hook_clean)
-                if not hook_p2:
-                    hook_p1, hook_p2 = hook_clean, hook_clean
-            else:
-                hook_p1, hook_p2 = hook_clean, hook_clean
-            curl_commands.append(build_curl(f"{short_title}-hook", hook_p1))
-            curl_commands.append(build_curl(f"{short_title}-hook-2", hook_p2))
+            # Both hook curls get the FULL hook text — the user generates the
+            # HeyGen video for the hook twice (two takes), so each curl must
+            # contain the complete hook, not a split half.
+            curl_commands.append(build_curl(f"{short_title}-hook", hook_clean))
+            curl_commands.append(build_curl(f"{short_title}-hook-2", hook_clean))
             extra_curls += 2
 
     for i, chapter in enumerate(chapters, 1):
