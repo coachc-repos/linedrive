@@ -595,8 +595,84 @@ def extract_heygen_host_script(script_content: str) -> str:
     # Join all paragraphs with double newlines for readability
     heygen_script = "\n\n".join(host_paragraphs)
 
+    # Final scrub: regardless of how we got here, strip every non-spoken
+    # artifact (title, chapter headings, hook/summary markers, separators,
+    # stage directions, metadata) so the HeyGen text is dialogue ONLY.
+    heygen_script = scrub_heygen_text(heygen_script)
+
     print(f"✅ Extracted {len(host_paragraphs)} host paragraphs for HeyGen")
     return heygen_script
+
+
+def scrub_heygen_text(text: str) -> str:
+    """Aggressively remove non-spoken artifacts from a HeyGen-bound script.
+
+    Guarantees the returned string contains ONLY spoken dialogue paragraphs —
+    no titles, no chapter headings, no FINAL HOOK / SUMMARY markers, no
+    visual cues, no metadata, no separators. Safe to call on already-clean
+    text (it becomes a no-op for plain prose).
+    """
+    if not text:
+        return ""
+
+    skip_line_patterns = [
+        # Section headers / dividers
+        r'^\s*#{1,6}\s',
+        r'^\s*={3,}\s*$',
+        r'^\s*-{3,}\s*$',
+        r'^\s*_{3,}\s*$',
+        r'^\s*\*{3,}\s*$',
+        # Script metadata
+        r'^\s*(?:Title|Script\s*Type|Duration|Audience|Tone|Generated|'
+        r'Direct\s+Video|Template\s*ID|Voice\s*ID)\s*:',
+        # Chapter headings (Heading:, Chapter N - …, **Chapter N…**)
+        r'^\s*(?:\*{0,2}\s*)?Heading\s*:',
+        r'^\s*(?:#{1,6}\s*)?(?:\*{0,2}\s*)?Chapter\s+\d+\s*[-:–]',
+        r'^\s*\*{2}\s*Chapter\s+\d+.*\*{2}\s*$',
+        # Hook / Summary markers
+        r'^\s*\*{0,2}\s*(?:🎯\s*)?(?:FINAL\s+)?HOOK\s*[:\(]',
+        r'^\s*\*{0,2}\s*OPENING\s+HOOK',
+        r'^\s*\*{0,2}\s*HOOK\s+OPTION',
+        r'^\s*\*{0,2}\s*OPTION\s+\d+',
+        r'^\s*\*{0,2}\s*(?:📝\s*)?(?:CONCLUSION|SUMMARY)\s*[:\*]',
+        # Speaker / production labels
+        r'^\s*\*{0,2}\s*Host\s*:\s*\*{0,2}\s*$',
+        r'^\s*(?:🎬\s*)?(?:\*{0,2}\s*)?'
+        r'(?:Visual\s*Cue|B-?Roll|On[- ]Screen|Graphic|SFX|Music|Caption|'
+        r'Cut\s+to|Transition|Narrator|Voiceover|VO|Camera|Production\s*Note|'
+        r'Tool\s*Demo|Notes\s+for\s+Producer|Audio|Visual|Graphics|Fade\s+in|'
+        r'Fade\s+out)\s*[:\(]',
+        # Footer
+        r'^\s*Generated\s+by\s+LineDrive',
+    ]
+    compiled = [re.compile(p, re.IGNORECASE) for p in skip_line_patterns]
+
+    kept = []
+    for raw in text.split('\n'):
+        s = raw.strip()
+        if not s:
+            kept.append('')
+            continue
+        if any(rx.match(s) for rx in compiled):
+            continue
+        # Strip leading "Summary:" / "Host:" labels but keep the rest.
+        s = re.sub(r'^\s*(?:Summary|Host)\s*:\s*', '', s, flags=re.IGNORECASE)
+        if not s:
+            continue
+        kept.append(s)
+
+    # Collapse runs of blank lines to single blank lines, trim ends.
+    out_lines = []
+    blank = False
+    for ln in kept:
+        if not ln:
+            if not blank and out_lines:
+                out_lines.append('')
+            blank = True
+        else:
+            out_lines.append(ln)
+            blank = False
+    return '\n'.join(out_lines).strip()
 
 
 def generate_heygen_curl_commands(

@@ -2907,6 +2907,17 @@ Time management content here...`;
             }
         }
         
+        // Extract the HEYGEN READY SCRIPT section out of the assembled main
+        // script blob. Returns the dialogue-only payload (or '' if missing).
+        function extractHeyGenSection(mainScript) {
+            if (!mainScript || typeof mainScript !== 'string') return '';
+            const m = mainScript.match(
+                /#\s*🎬\s*HEYGEN READY SCRIPT[\s\S]*?={3,}\s*([\s\S]*?)(?:\n\s*\n#\s|$)/
+            );
+            if (!m) return '';
+            return m[1].trim();
+        }
+
         // Function to switch tabs
         function switchTab(tabName) {
             // Hide all tab contents
@@ -3364,6 +3375,11 @@ Time management content here...`;
                 : ((thumbnails && Array.isArray(thumbnails.variations))
                     ? thumbnails.variations
                     : []);
+
+            // Pull out the HeyGen-ready dialogue from the main script so we
+            // can render it as its own tab (and so any future scrubbing on
+            // the server is reflected automatically).
+            const heygenText = extractHeyGenSection(mainScript);
             
             // Tab Headers
             html += '<div class="tab-header">';
@@ -3414,6 +3430,11 @@ Time management content here...`;
             // Add curl commands tab if available
             if (curlCommands) {
                 html += '<button class="tab-button" onclick="switchTab(\'curl\')">🚀 Curl Commands</button>';
+            }
+
+            // HeyGen-ready dialogue (only if we found a HEYGEN section)
+            if (heygenText) {
+                html += '<button class="tab-button" onclick="switchTab(\'heygen\')">🎬 HeyGen Script</button>';
             }
 
             // YouTube Details tab
@@ -3549,6 +3570,22 @@ Time management content here...`;
                 html += '</div>';
             }
             
+            // HeyGen Script Tab (dialogue-only, no headings/title)
+            if (heygenText) {
+                html += '<div id="heygenTab" class="tab-content">';
+                html += '<h3 style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">'
+                      + '<span>🎬 HeyGen Script</span>'
+                      + heygenDurationBadge(heygenText, '#8b5cf6')
+                      + '</h3>';
+                html += '<p style="color:#94a3b8; margin-bottom:10px;">Dialogue only — no title, chapter headings, hooks, or stage directions. Paste straight into HeyGen.</p>';
+                html += '<div style="margin-bottom:10px; display:flex; gap:10px; flex-wrap:wrap;">';
+                html += '<button onclick="copyHeyGenToClipboard()" class="toolbar-btn" style="display:flex;"><span class="toolbar-icon">📋</span><span class="toolbar-text">Copy</span></button>';
+                html += '<button onclick="downloadHeyGenText()" class="toolbar-btn" style="display:flex;"><span class="toolbar-icon">💾</span><span class="toolbar-text">Download .txt</span></button>';
+                html += '</div>';
+                html += `<textarea id="heygenScriptTextarea" readonly style="width:100%; min-height:480px; padding:14px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-family:'SF Mono', Menlo, monospace; font-size:13px; line-height:1.55; white-space:pre-wrap;">${escapeHtml(heygenText)}</textarea>`;
+                html += '</div>';
+            }
+
             // Curl Commands Tab
             if (curlCommands) {
                 html += '<div id="curlTab" class="tab-content">';
@@ -4759,10 +4796,33 @@ Time management content here...`;
             }
         }
 
+        // HeyGen script tab helpers
+        function copyHeyGenToClipboard() {
+            const ta = document.getElementById('heygenScriptTextarea');
+            if (!ta || !ta.value) { alert('No HeyGen script to copy.'); return; }
+            navigator.clipboard.writeText(ta.value).then(
+                () => { /* success */ },
+                () => { try { ta.select(); document.execCommand('copy'); } catch (_) {} }
+            );
+        }
+
+        function downloadHeyGenText() {
+            const ta = document.getElementById('heygenScriptTextarea');
+            if (!ta || !ta.value) { alert('No HeyGen script to download.'); return; }
+            const blob = new Blob([ta.value], { type: 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'heygen_script.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
+
         // Download curl commands file
         function downloadCurlCommands() {
             const curlContent = window.currentCurlCommands;
-            
             if (!curlContent) {
                 alert('❌ No curl commands available to download');
                 return;

@@ -3113,18 +3113,23 @@ async def process_existing_script(
             streamer.send_update("🎬 Generating HeyGen Ready section...",
                                  int(current_progress))
             try:
-                from console_ui.text_processing import extract_heygen_host_script
+                from console_ui.text_processing import (
+                    extract_heygen_host_script,
+                    scrub_heygen_text,
+                )
 
                 # Extract from the cleaned source script ONLY (not final_output) so the
                 # HeyGen text never includes the prepended OPENING HOOK OPTIONS block,
                 # the OPTION 1/2/3 "Host:" hooks, the opening statement, or any
                 # generated headers added below.
                 heygen_script = extract_heygen_host_script(cleaned_script)
-                # Fallback: if no Host: markers found, use cleaned script directly
+                # Fallback: if no Host: markers found, scrub the cleaned script
+                # down to dialogue-only (strip title, chapter headings, metadata,
+                # stage directions, hook/summary headers, separators).
                 if not heygen_script:
                     logger.info(
-                        "⚠️ No Host: markers found - using full script for HeyGen section")
-                    heygen_script = cleaned_script
+                        "⚠️ No Host: markers found - scrubbing cleaned script for HeyGen")
+                    heygen_script = scrub_heygen_text(cleaned_script)
                 if heygen_script:
                     heygen_section = f"\n\n{'=' * 80}\n"
                     heygen_section += "# 🎬 HEYGEN READY SCRIPT\n"
@@ -3148,17 +3153,18 @@ async def process_existing_script(
             try:
                 from console_ui.text_processing import (
                     extract_heygen_host_script,
-                    generate_heygen_curl_commands
+                    generate_heygen_curl_commands,
+                    scrub_heygen_text,
                 )
 
                 if not heygen_script:
                     heygen_script = extract_heygen_host_script(cleaned_script)
 
-                # Fallback: if no Host: markers found, use the cleaned script directly
+                # Fallback: if no Host: markers found, scrub for dialogue only.
                 if not heygen_script:
                     logger.info(
-                        "⚠️ No Host: markers found - using full script for curl generation")
-                    heygen_script = cleaned_script
+                        "⚠️ No Host: markers found - scrubbing cleaned script for curl generation")
+                    heygen_script = scrub_heygen_text(cleaned_script)
 
                 if heygen_script:
                     heygen_with_header = (
@@ -3261,8 +3267,19 @@ async def process_existing_script(
                             )
                             _final_hook_text = _truncated.strip()
 
+                    # NOTE: curl chapter splitter needs the ORIGINAL structured
+                    # script (with `Heading:` / `Chapter N -` boundaries) to
+                    # split chapters correctly. `heygen_script` is now scrubbed
+                    # dialogue-only and has no boundaries left, so feed the
+                    # raw cleaned_script (wrapped with the expected header)
+                    # and let the curl generator strip stage-direction lines
+                    # from each chapter's content itself.
+                    curl_source = (
+                        f"# 🎬 HEYGEN READY SCRIPT\n{'=' * 80}\n\n{cleaned_script}"
+                    )
+
                     curl_commands = generate_heygen_curl_commands(
-                        heygen_with_header, script_title,
+                        curl_source, script_title,
                         heygen_api_key, heygen_template_id,
                         heygen_voice_id,
                         final_hook_text=_final_hook_text,
