@@ -1267,11 +1267,15 @@ class ProgressStreamer:
         if progress is None:
             return
 
+        # Treat progress<0 as a terminal failure so the SSE stream closes and
+        # the UI spinner stops (otherwise the client waits forever).
+        is_terminal = (progress == 100) or (progress is not None and progress < 0)
         update = {
             "message": message,
             "progress": progress,
             "timestamp": time.time(),
-            "done": progress == 100
+            "done": is_terminal,
+            "error": progress is not None and progress < 0,
         }
 
         try:
@@ -1279,9 +1283,9 @@ class ProgressStreamer:
                 f"🔍 send_update: putting message in queue for session {self.session_id}")
             self.queue.put(json.dumps(update))
             logger.info(f"🔍 send_update: message queued successfully")
-            if progress == 100:
+            if is_terminal:
                 logger.info(
-                    f"🔍 send_update: marking done=True for session {self.session_id}")
+                    f"🔍 send_update: marking done=True for session {self.session_id} (progress={progress})")
                 self.done = True
             logger.info(f"🔍 send_update: method completed successfully")
         except Exception as e:

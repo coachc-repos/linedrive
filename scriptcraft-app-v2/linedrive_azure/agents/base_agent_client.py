@@ -19,6 +19,7 @@ The base class transparently dispatches to the right backend.
 
 import os
 import time
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
@@ -90,6 +91,10 @@ class BaseAgentClient(ABC):
         self._v2_openai = None
         self._v1_validated = False
         self._active_api_mode: Optional[str] = None
+        # Guards lazy init of v2 project/openai. Critical for parallel chapter writes:
+        # without this, two threads can interleave the two assignments below and one
+        # will read self._v2_openai while it's still None -> 'NoneType has no attribute conversations'.
+        self._v2_init_lock = threading.Lock()
 
     def _get_openai_api_version(self) -> str:
         api_version = (
@@ -138,19 +143,38 @@ class BaseAgentClient(ABC):
         return self._v1_client
 
     def _v2(self):
-        if self._v2_project is None:
-            self._v2_project = AIProjectClient(
-                endpoint=PROJECT_ENDPOINT, credential=self._credential
-            )
-            try:
-                self._v2_openai = self._v2_project.get_openai_client(
-                    api_version=self._get_openai_api_version()
+        # Fast path: both already initialized. Safe to read without the lock
+        # because we only ever publish them together under the lock.
+        proj = self._v2_project
+        oai = self._v2_openai
+        if proj is not None and oai is not None:
+            return proj, oai
+        with self._v2_init_lock:
+            if self._v2_project is None or self._v2_openai is None:
+                project = AIProjectClient(
+                    endpoint=PROJECT_ENDPOINT, credential=self._credential
                 )
-            except TypeError:
-                # azure-ai-projects >= 2.x returns plain openai.OpenAI which
-                # doesn't accept `api_version`. Call without it.
-                self._v2_openai = self._v2_project.get_openai_client()
-        return self._v2_project, self._v2_openai
+                try:
+                    openai_client = project.get_openai_client(
+                        api_version=self._get_openai_api_version()
+                    )
+                except TypeError:
+                    # azure-ai-projects >= 2.x returns plain openai.OpenAI which
+                    # doesn't accept `api_version`. Call without it.
+                    openai_client = project.get_openai_client()
+                # Publish atomically: openai_client first (the one callers use),
+                # then project. Any thread that re-enters during init either takes
+                # the lock or sees the fully populated pair on the fast path.
+                self._v2_openai = openai_client
+                self._v2_project = project
+            return self._v2_project, self._v2_openai
+
+    def _reset_v2(self):
+        """Drop cached v2 clients so the next _v2() call rebuilds them. Lock-protected
+        so we never null them out while another thread is mid-init."""
+        with self._v2_init_lock:
+            self._v2_project = None
+            self._v2_openai = None
 
     # ------------------------------------------------------------------ public API
     def create_thread(self) -> Optional[Any]:
@@ -183,8 +207,7 @@ class BaseAgentClient(ABC):
                         break
                     # Force re-init of the openai client on next attempt in case
                     # the underlying httpx session is in a bad state.
-                    self._v2_project = None
-                    self._v2_openai = None
+                    self._reset_v2()
                     _time.sleep(1.5 * (attempt + 1))
             fallback_msg = str(last_err).lower(
             ) if last_err is not None else ""
@@ -301,8 +324,9 @@ class BaseAgentClient(ABC):
                     )
                     # Reset openai client on connection-class errors so we get a fresh session
                     if "connection" in low or "ssl" in low or "eof" in low or "reset" in low:
-                        self._v2_project = None
-                        self._v2_openai = None
+                        self._reset_v2()
+                        # Refresh local reference for the next loop iteration.
+                        _, openai = self._v2()
                     time.sleep(delay)
                     delay *= 2
                     continue
