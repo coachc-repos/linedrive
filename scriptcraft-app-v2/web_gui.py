@@ -2344,6 +2344,7 @@ async def process_existing_script(
                 'hook summary', 'b-roll', 'broll', 'thumbnail', 'demo package',
                 'youtube details', 'heygen', 'curl commands',
                 'opening hook', 'hook options',
+                'final hook',
             )
             for m in re.finditer(r'^#+\s+(.+)$', script_content, re.MULTILINE):
                 candidate = m.group(1).strip()
@@ -2365,6 +2366,8 @@ async def process_existing_script(
                     # like '**Direct Video - Story Power with AI**' is usable.
                     line = re.sub(r'^[\*_]+\s*', '', line)
                     line = re.sub(r'\s*[\*_]+$', '', line)
+                    # Strip a leading 🎯 / 🎬 emoji + space (FINAL HOOK / OPENING HOOK markers).
+                    line = re.sub(r'^[\U0001F3AF\U0001F3AC]\s*', '', line)
                     line = line.strip()
                     if not line or line.startswith(('#', '-', '[')):
                         continue
@@ -2377,7 +2380,7 @@ async def process_existing_script(
                         continue
                     # Skip script-structure label lines that aren't titles.
                     if re.match(
-                        r'^(?:visual\s*cue|b-?roll|host|hook|summary|heading)\s*[:\-]',
+                        r'^(?:visual\s*cue|b-?roll|host|hook|summary|heading|final\s+hook|opening\s+hook|option\s*\d+)\s*[:\-]?',
                         line, re.IGNORECASE,
                     ):
                         continue
@@ -3218,6 +3221,25 @@ async def process_existing_script(
                             _final_hook_text,
                             maxsplit=1,
                         )[0].strip()
+                        # Defensive: reject obviously-bad captures (just the
+                        # header text, empty, or fewer than ~6 words). Better
+                        # to skip the hook curls than emit a `-hook` curl whose
+                        # content is literally "FINAL HOOK:".
+                        _hook_norm = re.sub(
+                            r"[^a-z0-9 ]+", " ",
+                            _final_hook_text.lower()).strip()
+                        if (
+                            not _hook_norm
+                            or _hook_norm in ("final hook", "opening hook", "host")
+                            or _hook_norm.startswith(("final hook ", "opening hook "))
+                            or len(_final_hook_text.split()) < 6
+                        ):
+                            logger.warning(
+                                "⚠️ FINAL HOOK extract was header-only or too "
+                                "short (%r) — skipping `-hook` curls.",
+                                _final_hook_text[:80],
+                            )
+                            _final_hook_text = ""
                         # Hard cap: a hook is at most ~120 words. Anything longer
                         # means our regex bled into adjacent content — truncate
                         # at the first sentence boundary within the cap.
