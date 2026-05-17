@@ -1501,6 +1501,7 @@
                     <div class="script-input-tabs">
                         <button class="script-input-tab active" id="scriptTabEdit" onclick="switchScriptInputTab('edit')">✏️ Edit</button>
                         <button class="script-input-tab" id="scriptTabPreview" onclick="switchScriptInputTab('preview')">👁 Preview</button>
+                        <button type="button" onclick="downloadScriptTemplateDocx()" style="margin-left:auto; padding:4px 10px; background:linear-gradient(135deg, #6366f1, #4f46e5); color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.8em; font-weight:600;" title="Download a blank ScriptCraft script template as a Word document. Fill it out in Word, then paste back here.">📄 Download Template (.docx)</button>
                     </div>
                     <textarea id="scriptInput" oninput="updateScriptInputDurationBadge()" placeholder="Paste or type your script content here, or click 'Load' button above to load a .md or .txt file..."></textarea>
                     <div id="scriptInputPreview"></div>
@@ -2545,6 +2546,109 @@ Time management content here...`;
             window.URL.revokeObjectURL(url);
         }
 
+        // Download an empty ScriptCraft script template as a Word document.
+        // Uses the exact delimiters the server-side parser keys on so a manual
+        // script round-trips cleanly through the processor.
+        async function downloadScriptTemplateDocx() {
+            const btn = event.target;
+            const orig = btn.textContent;
+            const template = [
+                'Title: [Your script title — short, becomes the folder name]',
+                '',
+                'Script Type: Video',
+                'Duration: medium',
+                'Audience: [beginners | intermediate | advanced]',
+                'Tone: [casual | professional | conversational]',
+                '',
+                '**🎯 FINAL HOOK:**',
+                '',
+                '**Host:**',
+                '',
+                '[One paragraph, 2–4 sentences, that grabs attention in the first 5 seconds. Wrap across multiple lines if you like — the parser keeps everything up to the first blank line as the hook.]',
+                '',
+                '---',
+                '',
+                'Heading: Chapter 1 - [Chapter title]',
+                '',
+                'Visual Cue: [One sentence describing the on-screen visual. Single line only.]',
+                '',
+                '**Host:**',
+                '',
+                '[Spoken dialogue for Chapter 1. Write naturally — the parser joins single newlines into paragraphs and splits paragraphs on blank lines.]',
+                '',
+                '---',
+                '',
+                'Heading: Chapter 2 - [Chapter title]',
+                '',
+                'Visual Cue: [Visual description.]',
+                '',
+                '**Host:**',
+                '',
+                '[Spoken dialogue for Chapter 2.]',
+                '',
+                '---',
+                '',
+                'Heading: Chapter 3 - [Chapter title]',
+                '',
+                'Visual Cue: [Visual description.]',
+                '',
+                '**Host:**',
+                '',
+                '[Spoken dialogue for Chapter 3.]',
+                '',
+                'Summary: [2–3 sentence wrap-up of the whole video. ONLY include this on the last chapter.]',
+                '',
+                '---',
+                '',
+                '',
+                '# PARSER RULES — delete this whole section before processing',
+                '',
+                '- Keep `Title:` as the FIRST line. Nothing above it (no Visual Cue, no FINAL HOOK header).',
+                '- `**🎯 FINAL HOOK:**` is optional; if you keep it, terminate it with `---`.',
+                '- Every chapter MUST start with `Heading: Chapter N - <title>` (sequential 1, 2, 3…).',
+                '- Each chapter has exactly ONE `**Host:**` block.',
+                '- `Visual Cue:` is one line; do not wrap.',
+                '- `Summary:` appears ONLY in the final chapter.',
+                '- Use `---` (3+ hyphens on their own line) between every major block.',
+                '- Do not add a "Hi, I\'m ..." intro paragraph; the processor handles boilerplate automatically.',
+                ''
+            ].join('\n');
+            btn.disabled = true;
+            btn.textContent = '⏳ Building .docx...';
+            try {
+                const response = await fetch('/export_word', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        script_content: template,
+                        title: 'ScriptCraft_Template'
+                    })
+                });
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'ScriptCraft_Template.docx';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    btn.textContent = '✅ Downloaded';
+                } else {
+                    const err = await response.json().catch(() => ({}));
+                    alert('❌ Failed to build template: ' + (err.error || response.statusText));
+                    btn.textContent = orig;
+                }
+            } catch (e) {
+                alert('❌ Error downloading template: ' + e.message);
+                btn.textContent = orig;
+            } finally {
+                btn.disabled = false;
+                setTimeout(() => { btn.textContent = orig; }, 2500);
+            }
+        }
+
         async function saveBrollTableAsWord() {
             const md = window._currentBrollTable || '';
             if (!md) { alert('No B-roll table to save.'); return; }
@@ -2934,6 +3038,63 @@ Time management content here...`;
                 try { console.warn('[heygenDuration] no Host markers found, using whole-text fallback. Sample:', text.slice(0, 200)); } catch (_) {}
             } else {
                 joined = hostBlocks.join('\n');
+            }
+
+            // CHAPTER-AWARE AUGMENT: many scripts (esp. the SCRIPT_TEMPLATE-style
+            // ones and freshly-pasted drafts) only have a `Host:` label inside
+            // the FINAL HOOK — the chapter dialogue itself is plain prose under
+            // `Chapter N - ...` headings preceded by a single `🎬 VISUAL CUE:`
+            // line. In that case `hostBlocks` only captures the hook (~40 words)
+            // and the rest of the script is silently dropped. Detect that and
+            // splice in the chapter bodies.
+            try {
+                const chapterRe = /(^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?\s*Chapter\s+\d+\b[^\n]*\n/gi;
+                const chapterStarts = [];
+                let cm;
+                while ((cm = chapterRe.exec(text)) !== null) {
+                    chapterStarts.push(cm.index + cm[0].length);
+                }
+                if (chapterStarts.length > 0) {
+                    // End-of-chapter-prose terminator: next Chapter heading,
+                    // Summary:, SUPPORTING RESEARCH, ===, YOUTUBE/HEYGEN section,
+                    // or end-of-text.
+                    const endRe = /\n\s*(?:(?:#{1,6}\s*)?(?:\*\*)?\s*Chapter\s+\d+\b|Summary\s*:|SUPPORTING\s+RESEARCH|===|🎬\s*HEYGEN|YOUTUBE\s+VIDEO\s+DESCRIPTION|Generated\s+by\s+LineDrive)/i;
+                    const chapterBodies = [];
+                    for (let k = 0; k < chapterStarts.length; k++) {
+                        const start = chapterStarts[k];
+                        const rest = text.slice(start);
+                        const stop = rest.search(endRe);
+                        let body = stop === -1 ? rest : rest.slice(0, stop);
+                        // Drop leading 🎬 VISUAL CUE: / Visual Cue: / B-Roll:
+                        // lines — those are direction, not spoken dialogue.
+                        body = body.replace(
+                            /^\s*(?:🎬\s*)?(?:\*{0,2}\s*)?(?:Visual\s*Cue|B-?Roll|On[- ]Screen|Graphic|SFX|Music|Caption|Cut\s+to|Transition)\s*:[^\n]*\n?/gim,
+                            ''
+                        );
+                        chapterBodies.push(body);
+                    }
+                    const chapterJoined = chapterBodies.join('\n');
+                    if (chapterJoined.trim()) {
+                        // Only append if our Host-block extractor missed the
+                        // chapter prose — i.e. the hostBlocks total is dwarfed
+                        // by the chapter prose total.
+                        const hostWords = joined.split(/\s+/).filter(Boolean).length;
+                        const chapterWords = chapterJoined.split(/\s+/).filter(Boolean).length;
+                        if (chapterWords > hostWords * 1.5) {
+                            joined = (joined ? joined + '\n' : '') + chapterJoined;
+                            usedFallback = false; // chapter prose IS spoken content
+                        }
+                    }
+                }
+                // Also fold in a trailing `Summary:` block (last chapter recap).
+                const summaryMatch = text.match(
+                    /(^|\n)\s*Summary\s*:\s*([\s\S]*?)(?=\n\s*(?:SUPPORTING\s+RESEARCH|===|🎬\s*HEYGEN|YOUTUBE\s+VIDEO\s+DESCRIPTION|Generated\s+by\s+LineDrive)|\Z)/i
+                );
+                if (summaryMatch && summaryMatch[2] && summaryMatch[2].trim()) {
+                    joined += '\n' + summaryMatch[2];
+                }
+            } catch (e) {
+                try { console.warn('[heygenDuration] chapter-aware augment failed:', e); } catch (_) {}
             }
 
             // Strip residual markdown, code, links, timecodes, and stage directions
