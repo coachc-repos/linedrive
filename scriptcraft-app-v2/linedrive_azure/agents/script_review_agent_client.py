@@ -160,6 +160,62 @@ class ScriptReviewAgentClient(BaseAgentClient):
             thread_id=thread.id, message_content=query, timeout=timeout
         )
 
+    def shorten_to_target(
+        self,
+        script_content: str,
+        target_minutes: float,
+        wpm: int = 150,
+        timeout: int = 600,
+    ) -> Dict[str, Any]:
+        """
+        Rewrite a script so the spoken (Host:) portion fits a target duration.
+
+        The agent must preserve the original markdown structure (Heading: lines,
+        VISUAL CUE blocks, Host: blocks) and only condense the Host: dialogue
+        until the total Host word count is within ~10% of the target.
+
+        Args:
+            script_content: The script content to shorten.
+            target_minutes: Desired final video length in minutes (e.g. 10).
+            wpm: Words-per-minute speaking rate to plan against (default 150).
+            timeout: Max time to wait for the agent response.
+
+        Returns:
+            { success: bool, response: <shortened script text>, ... }
+        """
+        target_words = int(round(target_minutes * wpm))
+        current_words = len(script_content.split())
+
+        query = f"""
+You are condensing a video script so its narrated Host: portion fits a target
+duration. Return ONLY the rewritten script content — no preamble, no commentary,
+no markdown fences. Preserve the original structure exactly:
+- Keep every "Heading:" line and "VISUAL CUE:" block in place.
+- Keep every "Host:" speaker label.
+- Do NOT add new sections, new chapters, or new visual cues.
+- Do NOT remove chapters; keep the same chapter count and order.
+
+TARGET LENGTH:
+- Target video length: {target_minutes:.1f} minutes at {wpm} wpm
+- Target Host: word count: ~{target_words} words (total across all Host blocks)
+- Current total word count (entire script): ~{current_words} words
+
+Tighten the Host: dialogue by removing filler, redundancy, and obvious
+restatements. Keep the message, key examples, and persuasive beats intact.
+The final total Host: word count must land within ±10% of {target_words}.
+
+SCRIPT CONTENT TO SHORTEN:
+{script_content}
+"""
+
+        thread = self.create_thread()
+        if not thread:
+            return {"success": False, "error": "Failed to create shorten thread"}
+
+        return self.send_message(
+            thread_id=thread.id, message_content=query, timeout=timeout
+        )
+
     def quick_feedback(
         self,
         script_content: str,

@@ -604,7 +604,8 @@ def generate_heygen_curl_commands(
     script_title: str,
     api_key: str = "sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC",
     template_id: str = "92c09f8e9a1c4f078f7ae53886b7ad80",
-    voice_id: str = ""
+    voice_id: str = "",
+    final_hook_text: str = ""
 ) -> str:
     """
     Generate HeyGen API curl commands from script content.
@@ -663,18 +664,16 @@ def generate_heygen_curl_commands(
         chapter_pattern, heygen_content, re.DOTALL))
 
     if chapter_matches:
-        # Use structured chapters if they exist
-        # First chapter (intro before first "Heading:")
-        intro_match = re.search(r'^(.+?)(?=\nHeading:)',
-                                heygen_content, re.DOTALL)
-        if intro_match:
-            intro_text = clean_text(intro_match.group(1))
-            chapters.append({
-                'title': shorten_title(script_title),
-                'content': intro_text
-            })
+        # Use structured chapters if they exist.
+        # NOTE: We intentionally SKIP any text that appears before the first
+        # "Heading:" marker (the script intro / FINAL HOOK block). The hook
+        # already gets its own dedicated `{title}-hook` / `-hook-2` curls via
+        # the `final_hook_text` parameter, and standing-intro text like the
+        # "Hi, I'm Roz's AI Digital Twin…" preamble shouldn't be turned into
+        # a phantom Chapter-0 curl. This keeps N "Heading:" lines → N chapter
+        # entries (so 6 chapters yields 6, not 7).
 
-        # Add all other chapters
+        # Add all chapters as found in the script
         for match in chapter_matches:
             chapter_title = match.group(1).strip()
             chapter_content = clean_text(match.group(2))
@@ -754,7 +753,7 @@ def generate_heygen_curl_commands(
     curl_commands.append("\n# 🚀 HEYGEN API CURL COMMANDS")
     curl_commands.append("=" * 80)
     curl_commands.append(
-        f"# Generated: {len(chapters)} chapters (2 per chapter + 1 duplicate of Ch1p1)")
+        f"# Generated: {len(chapters)} chapters (2 per chapter; +2 hook curls if FINAL HOOK present)")
     curl_commands.append(f"# Script: {script_title}")
     curl_commands.append("=" * 80)
     curl_commands.append("")
@@ -786,54 +785,77 @@ def generate_heygen_curl_commands(
             title = truncated or title[:MAX_LEN].strip(' -')
         return title
 
+    # Shorten the script title once for all curl entries
+    short_title = shorten_title(script_title)
+
+    # Build the curl with json.dumps for bullet-proof JSON escaping,
+    # then shell-escape the resulting payload for bash single quotes.
+    def build_curl(title_text: str, content_text: str) -> str:
+        payload = {
+            "caption": False,
+            "title": title_text,
+            "variables": {
+                "script": {
+                    "name": "script",
+                    "type": "text",
+                    "properties": {
+                        "content": content_text,
+                    },
+                }
+            },
+        }
+        data_json = _json.dumps(payload, indent=2, ensure_ascii=False)
+        data_for_bash = shell_single_quote(data_json)
+        return (
+            "curl --request POST \\\n"
+            f"     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\\n"
+            "     --header 'accept: application/json' \\\n"
+            "     --header 'content-type: application/json' \\\n"
+            f"     --header 'x-api-key: {api_key}' \\\n"
+            f"     --data '{data_for_bash}'\n\n"
+        )
+
+    extra_curls = 0
+    # If a FINAL HOOK was selected, emit TWO curls for it (hook + hook-2).
+    # If the hook is long enough, split it in half at a sentence boundary;
+    # otherwise duplicate it so HeyGen always gets two hook variants.
+    if final_hook_text and final_hook_text.strip():
+        # Defensive: truncate at the first script-structure marker so we never
+        # bleed Heading:/Visual Cue:/Chapter lines into the hook curl.
+        _hook_raw = re.split(
+            r"\n\s*(?:\*{0,2}\s*)?(?:Heading|Visual\s*Cue|B-?Roll|Chapter)\s*[:\-]",
+            final_hook_text,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        hook_clean = clean_text(_hook_raw)
+        if hook_clean:
+            if len(hook_clean.split()) >= 20:
+                hook_p1, hook_p2 = split_content(hook_clean)
+                if not hook_p2:
+                    hook_p1, hook_p2 = hook_clean, hook_clean
+            else:
+                hook_p1, hook_p2 = hook_clean, hook_clean
+            curl_commands.append(build_curl(f"{short_title}-hook", hook_p1))
+            curl_commands.append(build_curl(f"{short_title}-hook-2", hook_p2))
+            extra_curls += 2
+
     for i, chapter in enumerate(chapters, 1):
         # Split chapter content into two parts
         part1, part2 = split_content(chapter['content'])
-
-        # Shorten the script title for use in curl commands
-        short_title = shorten_title(script_title)
-
-        # Build the curl with json.dumps for bullet-proof JSON escaping,
-        # then shell-escape the resulting payload for bash single quotes.
-        def build_curl(title_text: str, content_text: str) -> str:
-            payload = {
-                "caption": False,
-                "title": title_text,
-                "variables": {
-                    "script": {
-                        "name": "script",
-                        "type": "text",
-                        "properties": {
-                            "content": content_text,
-                        },
-                    }
-                },
-            }
-            data_json = _json.dumps(payload, indent=2, ensure_ascii=False)
-            data_for_bash = shell_single_quote(data_json)
-            return (
-                "curl --request POST \\\n"
-                f"     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\\n"
-                "     --header 'accept: application/json' \\\n"
-                "     --header 'content-type: application/json' \\\n"
-                f"     --header 'x-api-key: {api_key}' \\\n"
-                f"     --data '{data_for_bash}'\n\n"
-            )
 
         # Generate Part 1 curl command
         title_part1 = f"{short_title}-Ch{i}p1"
         curl_commands.append(build_curl(title_part1, part1))
 
-        # Generate duplicate of ONLY the first chapter's Part 1 command
-        if i == 1:
-            curl_commands.append(build_curl(f"{short_title}-Ch{i}p1b", part1))
-
         # Generate Part 2 curl command
         curl_commands.append(build_curl(f"{short_title}-Ch{i}p2", part2))
 
     curl_commands.append("=" * 80)
+    total_curls = len(chapters) * 2 + extra_curls
+    hook_note = " + 2 FINAL HOOK curls (hook, hook-2)" if extra_curls else ""
     curl_commands.append(
-        f"# ✅ {len(chapters) * 2 + 1} curl commands ready (2 per chapter + Ch1p1b duplicate)")
+        f"# ✅ {total_curls} curl commands ready (2 per chapter{hook_note})")
     curl_commands.append(
         "# Copy and paste individual commands or save to .sh file")
     curl_commands.append("=" * 80)

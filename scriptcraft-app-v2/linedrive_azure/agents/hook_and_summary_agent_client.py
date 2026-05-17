@@ -7,6 +7,9 @@ for completed video scripts to maximize viewer retention and engagement.
 
 from linedrive_azure.agents.base_agent_client import BaseAgentClient
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class HookAndSummaryAgentClient(BaseAgentClient):
@@ -234,71 +237,60 @@ YOUTUBE STRATEGY ALIGNMENT:
         thumbnail_hook_text_options = []
 
         try:
-            # Extract Hook Option 1
-            parts = response_text.split("HOOK OPTION 1 (8-10 SECONDS)")
-            if len(parts) > 1:
-                hook1_section = parts[1].split("HOOK OPTION 2")[0]
-                hook1_parts = hook1_section.split("ANALYSIS:")
-                if len(hook1_parts) > 1:
-                    hook1_text = hook1_parts[0].strip()
-                    hook1_analysis = "ANALYSIS:" + hook1_parts[1].strip()
-                else:
-                    hook1_text = hook1_section.strip()
+            # Helper: regex split that's tolerant of bold markers, heading
+            # markers, missing parens, and extra whitespace around section
+            # labels. The agent occasionally returns `**HOOK OPTION 1**` or
+            # `# HOOK OPTION 1:` instead of the literal heading specified in
+            # the prompt — strict string.split() then returns empty hooks.
+            def _section_between(text: str, start_label: str, end_label: str) -> str:
+                start_pat = re.compile(
+                    rf"\s*(?:\*{{0,2}}|#{{0,6}})\s*{start_label}"
+                    rf"(?:\s*\(\s*\d+\s*[-\u2013]?\s*\d+\s*SECONDS?\s*\))?\s*[:\-]?\s*\*{{0,2}}",
+                    flags=re.IGNORECASE,
+                )
+                end_pat = re.compile(
+                    rf"\s*(?:\*{{0,2}}|#{{0,6}})\s*{end_label}",
+                    flags=re.IGNORECASE,
+                )
+                m = start_pat.search(text)
+                if not m:
+                    return ""
+                tail = text[m.end():]
+                m2 = end_pat.search(tail)
+                return (tail[:m2.start()] if m2 else tail).strip()
 
-            # Extract Hook Option 2
-            parts = response_text.split("HOOK OPTION 2 (8-10 SECONDS)")
-            if len(parts) > 1:
-                hook2_section = parts[1].split("HOOK OPTION 3")[0]
-                hook2_parts = hook2_section.split("ANALYSIS:")
-                if len(hook2_parts) > 1:
-                    hook2_text = hook2_parts[0].strip()
-                    hook2_analysis = "ANALYSIS:" + hook2_parts[1].strip()
-                else:
-                    hook2_text = hook2_section.strip()
+            def _split_analysis(section: str) -> tuple:
+                if not section:
+                    return "", ""
+                a_match = re.search(r"\bANALYSIS\s*:", section, flags=re.IGNORECASE)
+                if not a_match:
+                    return section.strip(), ""
+                return section[:a_match.start()].strip(), "ANALYSIS:" + section[a_match.end():].strip()
 
-            # Extract Hook Option 3
-            parts = response_text.split("HOOK OPTION 3 (8-10 SECONDS)")
-            if len(parts) > 1:
-                hook3_section = parts[1].split("OPENING STATEMENT")[0]
-                hook3_parts = hook3_section.split("ANALYSIS:")
-                if len(hook3_parts) > 1:
-                    hook3_text = hook3_parts[0].strip()
-                    hook3_analysis = "ANALYSIS:" + hook3_parts[1].strip()
-                else:
-                    hook3_text = hook3_section.strip()
+            hook1_section = _section_between(response_text, r"HOOK\s+OPTION\s*1", r"HOOK\s+OPTION\s*2")
+            hook2_section = _section_between(response_text, r"HOOK\s+OPTION\s*2", r"HOOK\s+OPTION\s*3")
+            hook3_section = _section_between(response_text, r"HOOK\s+OPTION\s*3", r"OPENING\s+STATEMENT")
+            hook1_text, hook1_analysis = _split_analysis(hook1_section)
+            hook2_text, hook2_analysis = _split_analysis(hook2_section)
+            hook3_text, hook3_analysis = _split_analysis(hook3_section)
 
-            # Extract Opening Statement
-            opening_parts = response_text.split(
-                "OPENING STATEMENT (15-20 SECONDS)")
-            if len(opening_parts) > 1:
-                opening_section = opening_parts[1].split(
-                    "SUMMARY/CONCLUSION")[0]
-                opening_subparts = opening_section.split("ANALYSIS:")
-                if len(opening_subparts) > 1:
-                    opening_statement = opening_subparts[0].strip()
-                    opening_analysis = "ANALYSIS:" + \
-                        opening_subparts[1].strip()
-                else:
-                    opening_statement = opening_section.strip()
+            opening_section = _section_between(response_text, r"OPENING\s+STATEMENT", r"SUMMARY\s*/\s*CONCLUSION")
+            opening_statement, opening_analysis = _split_analysis(opening_section)
 
-            # Extract summary section
-            summary_parts = response_text.split(
-                "SUMMARY/CONCLUSION (30-45 SECONDS)")
-            if len(summary_parts) > 1:
-                summary_section = summary_parts[1].split("FLOW ANALYSIS:")[0]
-                summary_subparts = summary_section.split("ANALYSIS:")
-                if len(summary_subparts) > 1:
-                    summary_text = summary_subparts[0].strip()
-                    summary_analysis = "ANALYSIS:" + \
-                        summary_subparts[1].strip()
-                else:
-                    summary_text = summary_section.strip()
+            summary_section = _section_between(response_text, r"SUMMARY\s*/\s*CONCLUSION", r"FLOW\s+ANALYSIS")
+            summary_text, summary_analysis = _split_analysis(summary_section)
 
-            # Extract flow analysis section
-            flow_parts = response_text.split("FLOW ANALYSIS:")
-            if len(flow_parts) > 1:
-                flow_section = flow_parts[1].split("YOUTUBE STRATEGY")[0]
-                flow_analysis = flow_section.strip()
+            flow_analysis = _section_between(response_text, r"FLOW\s+ANALYSIS", r"YOUTUBE\s+STRATEGY")
+
+            # If the robust extractor returned nothing AND the raw response is
+            # non-trivial, log a head/tail snippet to help diagnose format drift.
+            if not (hook1_text or hook2_text or hook3_text) and response_text.strip():
+                _snip = response_text.strip()
+                _head = _snip[:400].replace("\n", "\\n")
+                _tail = _snip[-400:].replace("\n", "\\n")
+                logger.warning(
+                    f"⚠️ Hook parser found 0 hooks. Response head: {_head!r} | tail: {_tail!r}"
+                )
 
             # Extract thumbnail hook options (preferred format)
             for idx in range(1, 4):

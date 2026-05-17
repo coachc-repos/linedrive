@@ -1453,6 +1453,10 @@
                         <input type="checkbox" id="checkHookSummary" style="width: auto; margin-right: 4px;">
                         <span style="font-size: 0.8em !important;">🎯 Hook</span>
                     </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;" title="Condense Host: dialogue to match the requested video length">
+                        <input type="checkbox" id="checkShortenScript" style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">✂️ Shorten</span>
+                    </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkFlowAnalysis" style="width: auto; margin-right: 4px;">
                         <span style="font-size: 0.8em !important;">🔄 Flow</span>
@@ -2903,7 +2907,14 @@ Time management content here...`;
             // Visual Cue:, B-roll:, etc. — or another Host: line).
             const hostBlocks = [];
             const hostRe = /(^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*\**\s*/gi;
-            const stopRe = /(^|\n)\s*(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|visual\s+cue\s*:|b-?roll\s*:|on[- ]screen\s*:|graphic\s*:|sfx\s*:|music\s*:|caption\s*:|cut\s+to\s*:|transition\s*:|narrator\s*:|guest\s*:|voiceover\s*:|vo\s*:)/i;
+            // Stop a Host: block when we hit:
+            //   * any speaker/cue label (**Foo:** / ### Foo: / Foo:)
+            //   * a markdown heading line (# / ## / ### …) — important for
+            //     .docx-extracted text where the extractor emits `# Chapter N`
+            //     ahead of each chapter; without this the previous Host block
+            //     would swallow chapter dividers and double-count words.
+            //   * a horizontal rule (--- or ===).
+            const stopRe = /(^|\n)\s*(?:#{1,6}\s+\S|(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|chapter\s+\d|visual\s+cue\s*:|b-?roll\s*:|on[- ]screen\s*:|graphic\s*:|sfx\s*:|music\s*:|caption\s*:|cut\s+to\s*:|transition\s*:|narrator\s*:|guest\s*:|voiceover\s*:|vo\s*:)|---+|===+)/i;
             let m;
             while ((m = hostRe.exec(text)) !== null) {
                 const start = m.index + m[0].length;
@@ -3531,9 +3542,10 @@ Time management content here...`;
                 'checkHookSummary',
                 'checkFlowAnalysis',
                 'checkThumbnails',
-                'checkDemoScript'
+                'checkDemoScript',
+                'checkShortenScript'
             ];
-            
+
             checkboxes.forEach(id => {
                 const checkbox = document.getElementById(id);
                 if (checkbox) {
@@ -3614,7 +3626,8 @@ Time management content here...`;
                 hook_summary: document.getElementById('checkHookSummary')?.checked || false,
                 flow_analysis: document.getElementById('checkFlowAnalysis')?.checked || false,
                 thumbnails: document.getElementById('checkThumbnails')?.checked || false,
-                demo: document.getElementById('checkDemoScript')?.checked || false
+                demo: document.getElementById('checkDemoScript')?.checked || false,
+                shorten_script: document.getElementById('checkShortenScript')?.checked || false
             };
             
             // Get metadata
@@ -3738,6 +3751,22 @@ Time management content here...`;
                         window.currentProcessingSessionId = null;
                         const processedScript = message.script || '';
                         const scriptTitle = message.script_title || 'Processed Script';
+
+                        // HOOK-ONLY MODE: backend generated 3 hook options and is
+                        // waiting for the user to pick one. Open the picker modal
+                        // instead of rendering script output. Clear the in-progress
+                        // UI first so the spinner doesn't hang while the modal is up.
+                        if (message.awaiting_hook_selection && Array.isArray(message.hooks) && message.hooks.length > 0) {
+                            try {
+                                addProgressMessage('🎯 Hook options generated — pick one to finalize.', 'success');
+                                updateFooterProgress(100, '🎯 Pick a hook');
+                                preserveDebugLog();
+                                if (progressDiv) progressDiv.style.display = 'none';
+                            } catch (_e) { /* non-fatal */ }
+                            openHookPickerModal(message.hooks, scriptTitle, message.original_script || '', message.hook_labels || []);
+                            return;
+                        }
+
                         const thumbnails = (message.thumbnails && message.thumbnails.length > 0)
                             ? message.thumbnails
                             : ((message.thumbnail_results && message.thumbnail_results.variations)
@@ -4020,7 +4049,8 @@ Time management content here...`;
                     flow_analysis: document.getElementById('checkFlowAnalysis')?.checked || false,
                     thumbnails: document.getElementById('checkThumbnails')?.checked || false,
                     demo: document.getElementById('checkDemoScript')?.checked || false,
-                    all: document.getElementById('checkAll')?.checked || false
+                    all: document.getElementById('checkAll')?.checked || false,
+                    shorten_script: document.getElementById('checkShortenScript')?.checked || false
                 };
                 const grokApiKey = (document.getElementById('grokApiKey')?.value || '').trim();
                 
@@ -4137,6 +4167,25 @@ Time management content here...`;
                         }
                         window.currentProcessingSessionId = null;
                         finalScript = message.script || '';
+
+                        // HOOK-ONLY MODE: backend generated 3 hook options and is
+                        // waiting for the user to pick one. Open the picker modal
+                        // instead of rendering script output. Clear the in-progress
+                        // UI first so the spinner doesn't hang while the modal is up.
+                        if (message.awaiting_hook_selection && Array.isArray(message.hooks) && message.hooks.length > 0) {
+                            try {
+                                addProgressMessage('🎯 Hook options generated — pick one to finalize.', 'success');
+                                updateFooterProgress(100, '🎯 Pick a hook');
+                                preserveDebugLog();
+                                if (progressDiv) progressDiv.style.display = 'none';
+                            } catch (_e) { /* non-fatal */ }
+                            const scriptTitleForHook = message.script_title
+                                || document.getElementById('createTopic')?.value.trim()
+                                || 'Processed Script';
+                            openHookPickerModal(message.hooks, scriptTitleForHook, message.original_script || '', message.hook_labels || []);
+                            return;
+                        }
+
                         const thumbnails = (message.thumbnails && message.thumbnails.length > 0)
                             ? message.thumbnails
                             : ((message.thumbnail_results && message.thumbnail_results.variations)
@@ -6821,6 +6870,160 @@ Thank you for watching!`;
                 }
             }
         }
+
+        // ---- Hook Picker modal (hook-only mode) ----
+        // Opened when the user runs hook generation by itself. Lets them pick
+        // one of the three generated hooks and POSTs to /api/finalize-hook to
+        // produce a final script with a single **🎯 FINAL HOOK:** section.
+        function openHookPickerModal(hooks, scriptTitle, originalScript, hookLabels) {
+            // Tear down any previous instance
+            const prev = document.getElementById('hookPickerModal');
+            if (prev) prev.remove();
+
+            const modal = document.createElement('div');
+            modal.id = 'hookPickerModal';
+            modal.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:10000; display:flex; align-items:center; justify-content:center; padding:20px;';
+
+            const inner = document.createElement('div');
+            inner.style.cssText = 'background:#0f172a; border:1px solid #334155; border-radius:8px; max-width:900px; width:100%; max-height:90vh; overflow:auto; padding:20px; color:#e2e8f0; font-family: ui-sans-serif, system-ui;';
+
+            let html = '<h2 style="margin:0 0 4px 0; color:#10b981;">🎯 Pick Your Opening Hook</h2>';
+            html += '<p style="margin:0 0 16px 0; color:#94a3b8; font-size:0.9em;">'
+                  + 'Select one to add as the <b>FINAL HOOK:</b> section in your script. '
+                  + 'The previously chosen hook (if any) will be replaced.</p>';
+
+            const labels = Array.isArray(hookLabels) ? hookLabels : [];
+            (hooks || []).forEach((hookText, i) => {
+                const words = (hookText || '').trim().split(/\s+/).filter(Boolean).length;
+                const seconds = Math.round((words / 150) * 60);
+                const mmss = Math.floor(seconds / 60) + ':' + (seconds % 60 < 10 ? '0' : '') + (seconds % 60);
+                const labelRaw = (labels[i] || ('OPTION ' + (i + 1)));
+                const isCurrent = /current/i.test(labelRaw);
+                const labelColor = isCurrent ? '#fbbf24' : '#38bdf8';
+                html += '<label style="display:block; margin-bottom:12px; padding:12px; background:'
+                      + (isCurrent ? '#1f2937' : '#1e293b')
+                      + '; border:1px solid '
+                      + (isCurrent ? '#fbbf24' : '#334155')
+                      + '; border-radius:6px; cursor:pointer;">'
+                      + '<div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">'
+                      +   '<input type="radio" name="hookPickerChoice" value="' + i + '"' + (i === 0 ? ' checked' : '') + ' style="margin:0;">'
+                      +   '<b style="color:' + labelColor + ';">' + escapeHtml(String(labelRaw).toUpperCase()) + '</b>'
+                      +   '<span style="color:#94a3b8; font-size:0.85em;">~' + mmss + ' · ' + words + ' words</span>'
+                      + '</div>'
+                      + '<div style="white-space:pre-wrap; color:#e2e8f0; font-size:0.95em; line-height:1.5;">'
+                      +   escapeHtml(hookText)
+                      + '</div>'
+                      + '</label>';
+            });
+
+            html += '<div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">'
+                  + '<button id="hookPickerCancelBtn" style="padding:8px 16px; background:#334155; color:#e2e8f0; border:none; border-radius:4px; cursor:pointer;">Cancel</button>'
+                  + '<button id="hookPickerApplyBtn" style="padding:8px 16px; background:linear-gradient(135deg,#10b981,#059669); color:white; border:none; border-radius:4px; cursor:pointer; font-weight:600;">✅ Use This Hook</button>'
+                  + '</div>'
+                  + '<div id="hookPickerStatus" style="margin-top:10px; font-size:0.85em; color:#94a3b8;"></div>';
+
+            inner.innerHTML = html;
+            modal.appendChild(inner);
+            document.body.appendChild(modal);
+
+            document.getElementById('hookPickerCancelBtn').addEventListener('click', () => {
+                modal.remove();
+            });
+
+            document.getElementById('hookPickerApplyBtn').addEventListener('click', async () => {
+                const choice = document.querySelector('input[name="hookPickerChoice"]:checked');
+                if (!choice) return;
+                const idx = parseInt(choice.value, 10);
+                const chosenText = (hooks[idx] || '').trim();
+                const status = document.getElementById('hookPickerStatus');
+                status.textContent = '⏳ Saving final script…';
+                status.style.color = '#94a3b8';
+
+                try {
+                    const resp = await fetch('/api/finalize-hook', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            hook_text: chosenText,
+                            script_title: scriptTitle || 'Untitled Script',
+                            original_script: originalScript || ''
+                        })
+                    });
+                    const data = await resp.json();
+                    if (!data.success) {
+                        status.textContent = '❌ ' + (data.error || 'Failed to save');
+                        status.style.color = '#ef4444';
+                        return;
+                    }
+                    status.textContent = '✅ Saved. Updating script…';
+                    status.style.color = '#10b981';
+
+                    // Replace the script input with the final output and close.
+                    const ta = document.getElementById('scriptInput');
+                    if (ta) {
+                        ta.value = data.script || '';
+                        if (typeof updateScriptInputDurationBadge === 'function') {
+                            updateScriptInputDurationBadge();
+                        }
+                        if (typeof renderScriptInputPreview === 'function') {
+                            renderScriptInputPreview();
+                        }
+                        if (typeof switchScriptInputTab === 'function') {
+                            switchScriptInputTab('preview');
+                        }
+                    }
+
+                    // Also render the final script in the bottom results area
+                    // so the user can see it (matches the normal processing flow).
+                    try {
+                        window.currentScript = data.script || '';
+                        window.currentScriptTitle = data.script_title || scriptTitle;
+                        const resultDiv = document.getElementById('result');
+                        if (resultDiv && typeof createTabbedInterface === 'function') {
+                            const tabbedHTML = createTabbedInterface(
+                                data.script || '',
+                                null, [], null, null, null, null,
+                                null, null, null, null, null, '', null
+                            );
+                            resultDiv.innerHTML =
+                                '<h3>🎯 Final Hook Applied</h3>'
+                                + '<p><strong>Title:</strong> '
+                                + (data.script_title || scriptTitle || 'Script')
+                                + '</p>' + tabbedHTML;
+                            resultDiv.className = 'result';
+                            resultDiv.style.display = 'block';
+                            setTimeout(() => {
+                                const contentDiv = document.getElementById('mainScriptContent');
+                                if (contentDiv) {
+                                    contentDiv.setAttribute('data-original-markdown', data.script || '');
+                                }
+                                if (typeof renderMarkdownContent === 'function') {
+                                    renderMarkdownContent(data.script || '', null);
+                                }
+                                resultDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }, 150);
+                            // Reveal common toolbar buttons.
+                            ['wordBtn', 'markdownBtn', 'saveBtn'].forEach(id => {
+                                const el = document.getElementById(id);
+                                if (el) el.style.display = 'inline-block';
+                            });
+                        }
+                    } catch (_e) { /* non-fatal render error */ }
+
+                    addProgressMessage('🎯 FINAL HOOK applied to script', 'success');
+                    if (data.markdown_path) {
+                        addProgressMessage('💾 Saved → ' + data.markdown_path, 'info');
+                    }
+                    setTimeout(() => modal.remove(), 600);
+                } catch (e) {
+                    status.textContent = '❌ ' + (e.message || e);
+                    status.style.color = '#ef4444';
+                }
+            });
+        }
+
+        // Minimal HTML escaper for safe text injection in hook picker.
+        // (Reuses the project-wide escapeHtml defined earlier in this file.)
 
         // ---- API Keys modal (Google / HeyGen / Grok) ----
         function openApiKeysModal() {

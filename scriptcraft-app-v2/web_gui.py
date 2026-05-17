@@ -1448,6 +1448,56 @@ async def process_script_creation(session_id, topic, audience, tone,
             # Use enhanced script as final content (EXACT COPY)
             final_script_content = enhanced_script_content
 
+            # OPTIONAL: Shorten script to fit requested video_length.
+            # Same logic as in process_existing_script — agent-based condense.
+            if checkboxes.get("shorten_script", False):
+                try:
+                    import re as _re_short
+                    _vl_match = _re_short.search(r"(\d+(?:\.\d+)?)", str(video_length or ""))
+                    _target_minutes = float(_vl_match.group(1)) if _vl_match else 10.0
+                    _wpm = 150
+                    _target_words = int(round(_target_minutes * _wpm))
+
+                    def _host_word_count_create(text: str) -> int:
+                        blocks = _re_short.findall(
+                            r"(?:^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*\**\s*([\s\S]*?)(?="
+                            r"\n\s*(?:#{1,6}\s+\S|(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|chapter\s+\d|visual\s+cue\s*:|b-?roll\s*:)|---+|===+)"
+                            r"|\Z)",
+                            text,
+                            flags=_re_short.IGNORECASE,
+                        )
+                        return sum(len(b.split()) for b in blocks)
+
+                    _before_host = _host_word_count_create(final_script_content)
+                    streamer.send_update(
+                        f"✂️ Shortening to ~{_target_minutes:.0f} min (target ~{_target_words} Host words, current {_before_host})",
+                        98,
+                    )
+                    if _before_host > _target_words * 1.15:
+                        from linedrive_azure.agents.script_review_agent_client import (
+                            ScriptReviewAgentClient,
+                        )
+                        _agent = ScriptReviewAgentClient()
+                        _r = _agent.shorten_to_target(
+                            script_content=final_script_content,
+                            target_minutes=_target_minutes,
+                            wpm=_wpm,
+                            timeout=600,
+                        )
+                        if _r.get("success") and _r.get("response"):
+                            _short = _r["response"].strip()
+                            _short = _re_short.sub(r"^```[a-zA-Z]*\n", "", _short)
+                            _short = _re_short.sub(r"\n```\s*$", "", _short)
+                            if _short:
+                                final_script_content = _short
+                                _after = _host_word_count_create(final_script_content)
+                                streamer.send_update(
+                                    f"✅ Shortened: Host words {_before_host} → {_after}",
+                                    98,
+                                )
+                except Exception as _se:
+                    logger.error(f"❌ Shorten (create flow) error: {_se}")
+
             # Use the user's requested topic for folder/file naming.
             # If topic is empty, fall back to a title extracted from the generated content.
             extracted_script_title = _extract_script_title_for_output(
@@ -2376,6 +2426,87 @@ async def process_existing_script(
         thumbnail_hook_text = ""
         thumbnail_hook_text_options: list[str] = []
 
+        # OPTIONAL: Shorten script to fit requested video length.
+        # When `shorten_script` is checked we call the script-review agent to
+        # condense the Host: dialogue down to ~target_minutes * wpm words.
+        if checkboxes.get("shorten_script", False):
+            try:
+                # Parse target minutes from video_length (e.g. "10 minutes")
+                _vl_match = re.search(r"(\d+(?:\.\d+)?)", str(video_length or ""))
+                _target_minutes = float(_vl_match.group(1)) if _vl_match else 10.0
+                _wpm = 150
+                _target_words = int(round(_target_minutes * _wpm))
+
+                def _host_word_count(text: str) -> int:
+                    blocks = re.findall(
+                        r"(?:^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*\**\s*([\s\S]*?)(?="
+                        r"\n\s*(?:#{1,6}\s+\S|(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|chapter\s+\d|visual\s+cue\s*:|b-?roll\s*:)|---+|===+)"
+                        r"|\Z)",
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+                    return sum(len(b.split()) for b in blocks)
+
+                _before_host_words = _host_word_count(cleaned_script)
+                streamer.send_update(
+                    f"✂️ Shortening script to ~{_target_minutes:.0f} min "
+                    f"(target ~{_target_words} Host words, current {_before_host_words})",
+                    12,
+                )
+
+                # Only call the agent when the current script is materially longer
+                if _before_host_words > _target_words * 1.15:
+                    from linedrive_azure.agents.script_review_agent_client import (
+                        ScriptReviewAgentClient,
+                    )
+                    _shorten_agent = ScriptReviewAgentClient()
+                    _short_result = _shorten_agent.shorten_to_target(
+                        script_content=cleaned_script,
+                        target_minutes=_target_minutes,
+                        wpm=_wpm,
+                        timeout=600,
+                    )
+                    if _short_result.get("success") and _short_result.get("response"):
+                        _shortened = _short_result["response"].strip()
+                        # Strip ``` code fences if the agent wrapped its reply.
+                        _shortened = re.sub(r"^```[a-zA-Z]*\n", "", _shortened)
+                        _shortened = re.sub(r"\n```\s*$", "", _shortened)
+                        if _shortened:
+                            cleaned_script = _shortened
+                            _after_host_words = _host_word_count(cleaned_script)
+                            streamer.send_update(
+                                f"✅ Shortened: Host words {_before_host_words} → {_after_host_words} "
+                                f"(target ~{_target_words})",
+                                14,
+                            )
+                        else:
+                            streamer.send_update("⚠️ Shorten agent returned empty content; keeping original", 14)
+                    else:
+                        _err = _short_result.get("error", "unknown error")
+                        streamer.send_update(f"⚠️ Shorten agent failed: {_err}; keeping original", 14)
+                else:
+                    streamer.send_update(
+                        f"✅ Script already at/under target length — no shortening needed",
+                        14,
+                    )
+            except Exception as _shorten_err:
+                logger.error(f"❌ Shorten step error: {_shorten_err}")
+                streamer.send_update(f"⚠️ Shorten step error: {_shorten_err}", 14)
+
+        # HOOK-ONLY MODE: when only the Hook checkbox is set (no other section
+        # generators), we generate 3 hook options and return them to the UI for
+        # interactive selection. The user picks one in a modal, then
+        # /api/finalize-hook writes the final script with a single FINAL HOOK
+        # section and strips any prior OPENING HOOK OPTIONS block.
+        _section_flags = [
+            "youtube_details", "broll", "broll_images", "heygen", "curl",
+            "demo", "thumbnails", "flow_analysis", "grok_videos",
+        ]
+        _hook_only_mode = (
+            checkboxes.get("hook_summary", False)
+            and not any(checkboxes.get(_f, False) for _f in _section_flags)
+        )
+
         # Generate Hook & Summary if requested
         if checkboxes.get("hook_summary", False):
             streamer.send_update("🎯 Generating Hook & Summary...", 15)
@@ -2464,6 +2595,98 @@ async def process_existing_script(
 
             logger.info(
                 f"📌 Adding {3 if hook3_text else (2 if hook2_text else 1)} hook option(s) to output")
+
+            # HOOK-ONLY MODE: short-circuit here and return hooks to UI for
+            # interactive selection instead of writing the full output file.
+            if _hook_only_mode:
+                _hooks_list = [h for h in (hook1_text, hook2_text, hook3_text) if h]
+
+                # Defensive: if the agent returned success but produced zero
+                # usable hook texts, surface an actionable error rather than
+                # silently completing with nothing for the UI to render.
+                if not _hooks_list:
+                    _err = (
+                        "Hook agent returned no usable hooks. Try again, or "
+                        "check the agent's raw response for parsing issues."
+                    )
+                    logger.warning(f"⚠️ Hook-only mode: {_err}")
+                    streamer.result = {"success": False, "error": _err}
+                    streamer.send_update(f"❌ {_err}", 100)
+                    return
+
+                # If the source script already has a **🎯 FINAL HOOK:** section,
+                # extract its Host body and prepend it as a "Keep current"
+                # option so the user can re-pick the existing hook.
+                _existing_hook_text = ""
+                try:
+                    # Find the start of any "FINAL HOOK" section (tolerant of
+                    # markdown bold, leading emoji, "the", trailing colon, etc.)
+                    _start_re = re.compile(
+                        r"(?:^|\n)\s*(?:#{1,6}\s*)?\*{0,2}\s*(?:🎯\s*)?(?:THE\s+)?FINAL\s+HOOK\s*:?\s*\*{0,2}\s*\n",
+                        flags=re.IGNORECASE,
+                    )
+                    _m = _start_re.search(script_content)
+                    if _m:
+                        _body = script_content[_m.end():]
+                        # Optional "Host:" / "**Host:**" label line
+                        _body = re.sub(
+                            r"^\s*\*{0,2}\s*Host\s*:?\s*\*{0,2}\s*\n+",
+                            "",
+                            _body,
+                            count=1,
+                            flags=re.IGNORECASE,
+                        )
+                        # Terminator: --- rule, next markdown heading, next
+                        # "Heading:" marker, next labeled section (e.g.
+                        # "**Chapter 1:**", "OPENING HOOK OPTIONS"), or EOF.
+                        _end_re = re.compile(
+                            r"\n(?:---+\s*\n|"
+                            r"#{1,6}\s|"
+                            r"\s*Heading\s*:|"
+                            r"\s*\*{1,2}\s*(?:Chapter|Part|Section|Opening|Hook|Summary|Conclusion|Outro|Intro)[^\n]*\*{1,2}|"
+                            r"\s*\*{1,2}\s*🎬|"
+                            r"\s*\*{1,2}\s*🎯|"
+                            r"\s*(?:🎬|🎯)\s+\w|"
+                            r"\s*FINAL\s+HOOK\s*:)",
+                            flags=re.IGNORECASE,
+                        )
+                        _e = _end_re.search(_body)
+                        _hook_body = _body[: _e.start()] if _e else _body
+                        _existing_hook_text = _hook_body.strip()
+                        # Sanity: drop if absurdly long (likely matched past the hook)
+                        if len(_existing_hook_text) > 1200:
+                            logger.info(
+                                f"ℹ️ Existing FINAL HOOK candidate too long ({len(_existing_hook_text)} chars); ignoring"
+                            )
+                            _existing_hook_text = ""
+                except Exception as _ex:
+                    logger.warning(f"⚠️ Existing FINAL HOOK extract failed: {_ex}")
+                logger.info(
+                    f"🔎 Existing FINAL HOOK extraction: {'FOUND ' + str(len(_existing_hook_text)) + ' chars' if _existing_hook_text else 'not found'}"
+                )
+                _hook_labels = [f"Option {i+1}" for i in range(len(_hooks_list))]
+                if _existing_hook_text:
+                    _hooks_list = [_existing_hook_text] + _hooks_list
+                    _hook_labels = ["Current FINAL HOOK"] + _hook_labels
+
+                logger.info(
+                    f"🎯 Hook-only mode: returning {len(_hooks_list)} hooks for UI selection"
+                    + (" (incl. existing FINAL HOOK)" if _existing_hook_text else "")
+                )
+                streamer.result = {
+                    "success": True,
+                    "awaiting_hook_selection": True,
+                    "hooks": _hooks_list,
+                    "hook_labels": _hook_labels,
+                    "script_title": script_title,
+                    "original_script": script_content,
+                    "session_id": session_id,
+                }
+                streamer.send_update(
+                    f"🎯 {len(_hooks_list)} hook options ready — pick one to finalize",
+                    100,
+                )
+                return
 
             final_output += "**🎬 OPENING HOOK OPTIONS**\n\n"
             final_output += "*Choose one of these three hooks for your video:*\n\n"
@@ -2878,10 +3101,41 @@ async def process_existing_script(
                     heygen_with_header = (
                         f"# 🎬 HEYGEN READY SCRIPT\n{'=' * 80}\n\n{heygen_script}"
                     )
+
+                    # Extract a FINAL HOOK section (if present in cleaned_script
+                    # or final_output) so we can emit a dedicated `{short}-hook`
+                    # curl command alongside the chapter curls.
+                    _hook_search_text = f"{final_output}\n{cleaned_script}"
+                    _final_hook_text = ""
+                    _hm = re.search(
+                        r"\*{0,2}\s*(?:🎯\s*)?FINAL\s+HOOK\s*:?\s*\*{0,2}\s*\n+"
+                        r"(?:\*{0,2}\s*Host\s*:?\s*\*{0,2}\s*\n+)?"
+                        r"([\s\S]*?)"
+                        r"(?="
+                        r"\n\s*---"
+                        r"|\n\s*={3,}"
+                        r"|\n\s*#{1,6}\s"
+                        r"|\n\s*\*{0,2}\s*(?:Heading|Visual\s*Cue|B-?Roll|Chapter|VISUAL|HEADING)\s*[:\-]"
+                        r"|\n\s*\*{2}[^*\n]+\*{2}\s*:"
+                        r"|\Z)",
+                        _hook_search_text,
+                        re.IGNORECASE,
+                    )
+                    if _hm:
+                        _final_hook_text = _hm.group(1).strip()
+                        # Defensive: drop any trailing "Heading:" line that snuck in.
+                        _final_hook_text = re.split(
+                            r"\n\s*(?:\*{0,2}\s*)?(?:Heading|Visual\s*Cue|B-?Roll|Chapter)\s*[:\-]",
+                            _final_hook_text,
+                            maxsplit=1,
+                            flags=re.IGNORECASE,
+                        )[0].strip()
+
                     curl_commands = generate_heygen_curl_commands(
                         heygen_with_header, script_title,
                         heygen_api_key, heygen_template_id,
-                        heygen_voice_id
+                        heygen_voice_id,
+                        final_hook_text=_final_hook_text,
                     )
                     if curl_commands:
                         # Store curl commands separately (don't append to script)
@@ -3782,6 +4036,10 @@ def progress_stream(session_id):
                                 "broll_table": streamer.result.get("broll_table"),
                                 "broll_rows": streamer.result.get("broll_rows"),
                                 "youtube_details": streamer.result.get("youtube_details"),
+                                "awaiting_hook_selection": streamer.result.get("awaiting_hook_selection", False),
+                                "hooks": streamer.result.get("hooks", []),
+                                "hook_labels": streamer.result.get("hook_labels", []),
+                                "original_script": streamer.result.get("original_script", ""),
                             }
 
                             print("\n" + "="*70)
@@ -3968,6 +4226,136 @@ def process_script():
         error_msg = f"Script processing request failed: {str(e)}"
         logger.error(f"❌ {error_msg}")
         return jsonify({"success": False, "error": error_msg})
+
+
+@app.route("/api/finalize-hook", methods=["POST"])
+def finalize_hook():
+    """Apply a user-chosen hook to a script and save the final output.
+
+    Called by the frontend after the user picks one of the three hooks
+    generated in hook-only mode. We strip any prior **🎬 OPENING HOOK
+    OPTIONS** block from the source script, prepend a single
+    **🎯 FINAL HOOK:** section with the chosen hook, and save md/docx.
+    """
+    import re as _re
+    try:
+        data = request.json or {}
+        chosen_hook = (data.get("hook_text") or "").strip()
+        original_script = (data.get("original_script") or "").strip()
+        script_title = (data.get("script_title") or "Untitled Script").strip()
+
+        if not chosen_hook:
+            return jsonify({"success": False, "error": "hook_text is required"}), 400
+        if not original_script:
+            return jsonify({"success": False, "error": "original_script is required"}), 400
+
+        # Strip ALL existing OPENING HOOK OPTIONS / FINAL HOOK blocks so we
+        # never stack hooks on repeated picks. We can't rely on a `---`
+        # terminator being present, so we scan for each section header and
+        # delete through a tolerant end-of-section marker: next markdown
+        # heading, `Heading:` marker, `---` rule, next labeled section
+        # (Chapter/Part/Opening/Hook/Summary/Outro), or EOF.
+        stripped = original_script
+
+        def _strip_sections(text, header_re):
+            _end_re = _re.compile(
+                r"\n(?:---+\s*\n|"
+                r"#{1,6}\s|"
+                r"\s*Heading\s*:|"
+                r"\s*\*{1,2}\s*(?:Chapter|Part|Section|Opening|Hook|Summary|Conclusion|Outro|Intro)[^\n]*\*{1,2}|"
+                r"\s*\*{1,2}\s*🎬|"
+                r"\s*\*{1,2}\s*🎯|"
+                r"\s*(?:🎬|🎯)\s+\w)",
+                flags=_re.IGNORECASE,
+            )
+            out = text
+            # Iterate until no more matches (handles multiple stacked sections)
+            for _ in range(20):
+                m = header_re.search(out)
+                if not m:
+                    break
+                tail = out[m.end():]
+                e = _end_re.search(tail)
+                # If end found, drop through end marker's leading newline only,
+                # keeping the terminator line intact. If no end, drop to EOF.
+                if e:
+                    out = out[: m.start()] + tail[e.start() + 1 :]
+                else:
+                    out = out[: m.start()]
+            return out
+
+        # **🎬 OPENING HOOK OPTIONS** header (with optional emoji/bold)
+        _opening_hdr = _re.compile(
+            r"(?:^|\n)\s*(?:#{1,6}\s*)?\*{0,2}\s*(?:🎬\s*)?OPENING\s+HOOK\s+OPTIONS\s*\*{0,2}\s*\n",
+            flags=_re.IGNORECASE,
+        )
+        stripped = _strip_sections(stripped, _opening_hdr)
+
+        # FINAL HOOK header — tolerant: optional `#`, optional bold, optional
+        # 🎯 emoji, optional `THE`, optional trailing colon. Match leading
+        # newline OR start-of-string OR end of a previous line (handles cases
+        # where the header is glued onto the prior line, e.g.
+        # "# Title**🎯 FINAL HOOK:**").
+        _final_hdr = _re.compile(
+            r"(?:^|\n|(?<=\*\*))\s*(?:#{1,6}\s*)?\*{0,2}\s*(?:🎯\s*)?(?:THE\s+)?FINAL\s+HOOK\s*:?\s*\*{0,2}\s*\n",
+            flags=_re.IGNORECASE,
+        )
+        stripped = _strip_sections(stripped, _final_hdr)
+
+        # Also strip a stray "**Host:**" / "Host:" line if it was left behind
+        # immediately after we removed a FINAL HOOK header.
+        stripped = _re.sub(
+            r"(?:^|\n)\s*\*{0,2}\s*Host\s*:\s*\*{0,2}\s*\n+([^\n]+\n)(?=\s*\n|$)",
+            "\n",
+            stripped,
+            count=0,
+            flags=_re.IGNORECASE,
+        )
+        stripped = stripped.lstrip("\n")
+
+        hook_block = (
+            "**🎯 FINAL HOOK:**\n\n"
+            "**Host:**\n\n"
+            f"{chosen_hook}\n\n"
+            "---\n\n"
+        )
+
+        # Insert AFTER the title heading if the first non-blank line is a
+        # markdown heading (`# Title`). Otherwise prepend.
+        title_match = _re.match(r"\s*(#{1,6}[^\n]*\n+)", stripped)
+        if title_match:
+            title_line = title_match.group(1)
+            rest = stripped[title_match.end():]
+            final_output = f"{title_line}\n{hook_block}{rest.lstrip()}"
+        else:
+            final_output = f"{hook_block}{stripped}"
+
+        # Save md/docx using the same helper as the main pipeline
+        try:
+            saved_md, saved_docx = asyncio.run(
+                _save_script_md_and_docx(script_title, final_output)
+            )
+        except RuntimeError:
+            # Already inside an event loop — schedule synchronously
+            loop = asyncio.new_event_loop()
+            try:
+                saved_md, saved_docx = loop.run_until_complete(
+                    _save_script_md_and_docx(script_title, final_output)
+                )
+            finally:
+                loop.close()
+
+        return jsonify({
+            "success": True,
+            "script": final_output,
+            "script_title": script_title,
+            "markdown_path": saved_md,
+            "docx_path": saved_docx,
+        })
+
+    except Exception as e:
+        logger.error(f"❌ /api/finalize-hook error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/export_markdown", methods=["POST"])
