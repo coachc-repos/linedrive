@@ -622,9 +622,11 @@ def scrub_heygen_text(text: str) -> str:
         r'^\s*-{3,}\s*$',
         r'^\s*_{3,}\s*$',
         r'^\s*\*{3,}\s*$',
-        # Script metadata
+        # Script metadata (accept both ":" and " -" separators)
         r'^\s*(?:Title|Script\s*Type|Duration|Audience|Tone|Generated|'
-        r'Direct\s+Video|Template\s*ID|Voice\s*ID)\s*:',
+        r'Template\s*ID|Voice\s*ID)\s*[:\-]',
+        # "Direct Video - <title>" header line
+        r'^\s*Direct\s+Video\s*[-:–]',
         # Chapter headings (Heading:, Chapter N - …, **Chapter N…**)
         r'^\s*(?:\*{0,2}\s*)?Heading\s*:',
         r'^\s*(?:#{1,6}\s*)?(?:\*{0,2}\s*)?Chapter\s+\d+\s*[-:–]',

@@ -1794,16 +1794,20 @@ async def process_script_creation(session_id, topic, audience, tone,
             if checkboxes.get("heygen", False):
                 try:
                     print("\n🎬 Generating HeyGen Ready section...")
-                    from console_ui.text_processing import extract_heygen_host_script
+                    from console_ui.text_processing import (
+                        extract_heygen_host_script,
+                        scrub_heygen_text,
+                    )
 
                     heygen_script = extract_heygen_host_script(
                         final_script_content)
 
-                    # Fallback: if no Host: markers found, use the script content directly
+                    # Fallback: if no Host: markers found, scrub the raw script
+                    # (strips title, metadata, chapter headings, stage directions, etc.)
                     if not heygen_script:
                         print(
-                            "⚠️ No Host: markers found - using full script for HeyGen section")
-                        heygen_script = final_script_content
+                            "⚠️ No Host: markers found - scrubbing full script for HeyGen section")
+                        heygen_script = scrub_heygen_text(final_script_content)
 
                     if heygen_script:
                         heygen_section = f"\n\n{'=' * 80}\n"
