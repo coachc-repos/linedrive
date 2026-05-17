@@ -683,13 +683,28 @@ EMOTION_BY_VARIATION = {
 
 
 def _safe_title_for_paths(script_title: str) -> str:
-    """Normalize script title to filesystem-safe folder name used by generators."""
+    """Normalize script title to filesystem-safe folder/file name."""
     normalized = (script_title or '').strip()
     normalized = re.sub(r'^\s*#\s*', '', normalized)
     normalized = re.sub(r'^\s*Direct\s+Video\s*-\s*', '',
                         normalized, flags=re.IGNORECASE)
+    # Strip Visual Cue / Heading-style label prefixes that occasionally leak
+    # in when title extraction falls back to a non-title line.
+    normalized = re.sub(
+        r'^\s*(?:VISUAL\s*CUE|HEADING|VISUAL|B-?ROLL|HOOK|SUMMARY|HOST)\s*[:\-]\s*',
+        '', normalized, flags=re.IGNORECASE)
     safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '', normalized)
     safe_title = re.sub(r'\s+', '_', safe_title).strip('_.')
+    # macOS/APFS allows 255 bytes per path component but the script also
+    # appends suffixes ("_curls.sh", "_heygen_curls.json", etc.) so cap at
+    # 80 chars and trim back to a word boundary to keep names readable.
+    _MAX_COMPONENT = 80
+    if len(safe_title) > _MAX_COMPONENT:
+        _trim = safe_title[:_MAX_COMPONENT]
+        _last_us = _trim.rfind('_')
+        if _last_us > _MAX_COMPONENT // 2:
+            _trim = _trim[:_last_us]
+        safe_title = _trim.strip('_.') or safe_title[:_MAX_COMPONENT]
     return safe_title or "untitled_script"
 
 
