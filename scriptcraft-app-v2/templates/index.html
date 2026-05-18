@@ -2134,6 +2134,39 @@ Time management content here...`;
             const title = (window.currentScriptTitle || 'grok').toString();
             _downloadMediaZip({ title: title, videos: videos }, 'grok-videos.zip');
         }
+
+        async function deleteGrokVideo(filename, cardId) {
+            if (!filename) return;
+            if (!confirm(`Delete "${filename}"?\n\nThe video file will be removed from disk (B-roll directory) and from this gallery. This cannot be undone.`)) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/grok-videos/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: filename }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    alert('❌ Delete failed: ' + (data.error || `HTTP ${res.status}`));
+                    return;
+                }
+                // Remove from in-memory list
+                if (Array.isArray(window.grokVideosData)) {
+                    window.grokVideosData = window.grokVideosData.filter(v => {
+                        const f = v && v.filename ? v.filename.split('/').pop() : '';
+                        return f !== filename;
+                    });
+                }
+                // Remove the card from the DOM
+                const card = document.getElementById(cardId);
+                if (card && card.parentNode) {
+                    card.parentNode.removeChild(card);
+                }
+            } catch (err) {
+                alert('❌ Delete failed: ' + err.message);
+            }
+        }
         
         // Function to render Grok AI-generated video gallery
         function renderGrokVideosGallery(grokVideos) {
@@ -2150,7 +2183,8 @@ Time management content here...`;
             grokVideos.forEach((vid, index) => {
                 const fname = vid.filename ? vid.filename.split('/').pop() : null;
                 const videoSrc = fname ? `/broll-videos/${fname}` : (vid.url || '');
-                html += `<div style="background: #1e293b; border: 1px solid #334155; border-radius: 8px; overflow: hidden;">
+                const cardId = `grokVidCard_${index}`;
+                html += `<div id="${cardId}" data-filename="${escapeHtml(fname || '')}" style="background: #1e293b; border: 1px solid #334155; border-radius: 8px; overflow: hidden;">
                     <div style="position: relative; padding-top: 56.25%; background: #0f172a;">`;
                 if (videoSrc) {
                     html += `<video controls style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;" preload="metadata">
@@ -2164,7 +2198,15 @@ Time management content here...`;
                     <div style="padding: 10px;">
                         <div style="color: #60a5fa; font-weight: 600; font-size: 13px; margin-bottom: 4px;">${escapeHtml(vid.timecode || '')}</div>
                         <div style="color: #e2e8f0; font-size: 13px; margin-bottom: 4px;">${escapeHtml(vid.search_term || '')}</div>
-                        <div style="color: #94a3b8; font-size: 12px; line-height: 1.4;">${escapeHtml(vid.description || '')}</div>
+                        <div style="color: #94a3b8; font-size: 12px; line-height: 1.4; margin-bottom: 10px;">${escapeHtml(vid.description || '')}</div>
+                        <div style="display:flex; gap:8px;">`;
+                if (fname) {
+                    html += `<a href="${videoSrc}" download="${escapeHtml(fname)}" style="flex:1;text-align:center;padding:6px 10px;background:#1e40af;color:#fff;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600;">⬇️ Download</a>`;
+                    html += `<button onclick="deleteGrokVideo('${escapeHtml(fname)}', '${cardId}')" style="flex:1;padding:6px 10px;background:#7f1d1d;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;" title="Delete this video from disk and remove it from the gallery">🗑️ Delete</button>`;
+                } else {
+                    html += `<span style="flex:1;text-align:center;padding:6px 10px;color:#64748b;font-size:12px;">No local file</span>`;
+                }
+                html += `</div>
                     </div>
                 </div>`;
             });
@@ -6582,6 +6624,19 @@ Thank you for watching!`;
                     const play = document.createElement('div');
                     play.className = 'vg-play';
                     thumbBox.appendChild(play);
+
+                    // Delete (🗑️) button — top-right of thumb
+                    const delBtn = document.createElement('button');
+                    delBtn.type = 'button';
+                    delBtn.title = 'Delete this video from the gallery';
+                    delBtn.textContent = '🗑️';
+                    delBtn.style.cssText = 'position:absolute;top:6px;right:6px;z-index:5;background:rgba(15,23,42,0.85);color:#f87171;border:1px solid #7f1d1d;border-radius:6px;width:30px;height:30px;font-size:14px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;';
+                    delBtn.onclick = async (ev) => {
+                        ev.stopPropagation();
+                        await deleteGalleryVideo(v);
+                    };
+                    thumbBox.appendChild(delBtn);
+
                     card.appendChild(thumbBox);
 
                     const meta = document.createElement('div');
@@ -6604,6 +6659,32 @@ Thank you for watching!`;
             } catch (err) {
                 status.style.color = '#f87171';
                 status.textContent = '❌ ' + err.message;
+            }
+        }
+
+        async function deleteGalleryVideo(v) {
+            if (!v || !v.rel_path) {
+                alert('Cannot delete: missing video path.');
+                return;
+            }
+            const label = v.title || v.filename || v.rel_path;
+            if (!confirm(`Delete "${label}" from the Video Gallery?\n\nThis will remove the video from Azure Blob storage (or the local gallery folder) and CANNOT be undone.`)) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/finished-videos/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rel_path: v.rel_path }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    alert('❌ Delete failed: ' + (data.error || `HTTP ${res.status}`));
+                    return;
+                }
+                await loadVideoGallery();
+            } catch (err) {
+                alert('❌ Delete failed: ' + err.message);
             }
         }
 

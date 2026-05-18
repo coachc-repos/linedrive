@@ -8966,6 +8966,151 @@ def api_finished_videos_file():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/finished-videos/delete", methods=["POST"])
+def api_finished_videos_delete():
+    """Delete a finished video from the gallery.
+
+    POST body: {"rel_path": "<blob name or local rel path>"}
+
+    - When FINISHED_VIDEOS_BLOB_CONTAINER is set: deletes the blob, plus any
+      sibling `<stem>.jpg` poster blob.
+    - Otherwise: deletes the local file under FINISHED_VIDEOS_ROOT. If the
+      parent folder is then empty, removes the folder as well.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        rel = (data.get("rel_path") or data.get("path") or "").strip()
+        if not rel:
+            return jsonify({"success": False, "error": "Missing 'rel_path'"}), 400
+        if ".." in rel.split("/") or rel.startswith("/"):
+            return jsonify({"success": False, "error": "Invalid path"}), 400
+
+        # Azure Blob mode
+        if FINISHED_VIDEOS_BLOB_CONTAINER:
+            try:
+                svc = _finished_videos_blob_service()
+                container = svc.get_container_client(
+                    FINISHED_VIDEOS_BLOB_CONTAINER)
+                deleted = []
+                try:
+                    container.delete_blob(rel)
+                    deleted.append(rel)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"❌ blob delete failed for {rel}: {e}")
+                    return jsonify({
+                        "success": False,
+                        "error": f"Blob delete failed: {e}",
+                    }), 500
+                # Best-effort: delete sidecar poster <stem>.jpg
+                if "." in rel:
+                    stem = rel.rsplit(".", 1)[0]
+                    for poster in (stem + ".jpg", stem + ".jpeg"):
+                        try:
+                            container.delete_blob(poster)
+                            deleted.append(poster)
+                        except Exception:  # noqa: BLE001
+                            pass
+                return jsonify({"success": True, "deleted": deleted,
+                                "source": "blob"})
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"❌ /api/finished-videos/delete (blob) "
+                             f"failed: {e}", exc_info=True)
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        # Local mode
+        root = FINISHED_VIDEOS_ROOT
+        candidate = (root / rel).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return jsonify({"success": False,
+                            "error": "Path escapes finished-videos root"}), 400
+        if not candidate.is_file():
+            return jsonify({"success": False, "error": "File not found"}), 404
+        if candidate.suffix.lower() not in _VIDEO_EXTS:
+            return jsonify({"success": False,
+                            "error": "Not a supported video type"}), 400
+        try:
+            candidate.unlink()
+        except Exception as e:  # noqa: BLE001
+            return jsonify({"success": False,
+                            "error": f"Delete failed: {e}"}), 500
+        deleted = [str(candidate.relative_to(root))]
+        # Best-effort: matching local poster
+        for suf in (".jpg", ".jpeg", ".png"):
+            poster = candidate.with_suffix(suf)
+            if poster.exists():
+                try:
+                    poster.unlink()
+                    deleted.append(str(poster.relative_to(root)))
+                except Exception:  # noqa: BLE001
+                    pass
+        # If parent folder is now empty (and isn't the gallery root), drop it.
+        try:
+            parent = candidate.parent
+            if parent != root and parent.is_dir() and not any(
+                p for p in parent.iterdir() if not p.name.startswith(".")
+            ):
+                parent.rmdir()
+        except Exception:  # noqa: BLE001
+            pass
+        return jsonify({"success": True, "deleted": deleted,
+                        "source": "local"})
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"❌ /api/finished-videos/delete failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/grok-videos/delete", methods=["POST"])
+def api_grok_video_delete():
+    """Delete a single Grok-generated B-roll video file by filename.
+
+    POST body: {"filename": "grok_20260517_0_clip.mp4"}
+
+    Searches the same candidate directories used by /broll-videos/<filename>
+    and deletes every matching .mp4 it finds (covers both the current run's
+    output dir and the legacy ~/Dev/brollvideos cache).
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_name = (data.get("filename") or "").strip()
+        if not raw_name:
+            return jsonify({"success": False, "error": "Missing 'filename'"}), 400
+        safe_name = Path(raw_name).name  # strip any path components
+        if not safe_name or not safe_name.lower().endswith(".mp4"):
+            return jsonify({"success": False,
+                            "error": "Filename must be a .mp4"}), 400
+
+        candidates = []
+        base = _get_output_base_dir()
+        if base is not None:
+            candidates.append(base / "broll" / safe_name)
+            for run_broll in base.glob("*/broll"):
+                candidates.append(run_broll / safe_name)
+        candidates.append(Path.home() / "Dev" / "brollvideos" / safe_name)
+
+        deleted = []
+        for path in candidates:
+            try:
+                if path.exists() and path.is_file():
+                    path.unlink()
+                    deleted.append(str(path))
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"❌ grok-video delete failed for {path}: {e}")
+
+        if not deleted:
+            return jsonify({"success": False,
+                            "error": "File not found in any broll directory",
+                            "filename": safe_name}), 404
+        return jsonify({"success": True, "deleted": deleted,
+                        "filename": safe_name})
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"❌ /api/grok-videos/delete failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/finished-videos/upload", methods=["POST"])
 def api_finished_videos_upload():
     """Start a background transcode + upload to the gallery.
