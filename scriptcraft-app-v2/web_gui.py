@@ -1482,11 +1482,23 @@ async def process_script_creation(session_id, topic, audience, tone,
                         return sum(len(b.split()) for b in blocks)
 
                     _before_host = _host_word_count_create(final_script_content)
+                    # If user picked a percent reduction, compute target from current host words.
+                    # Otherwise fall back to duration-derived target.
+                    _percent_raw = str(checkboxes.get("shorten_percent", "")).strip().lower()
+                    _target_words_override = None
+                    if _percent_raw and _percent_raw != "target":
+                        try:
+                            _pct = int(_percent_raw)
+                            if 0 < _pct < 100 and _before_host > 0:
+                                _target_words_override = int(round(_before_host * (1 - _pct / 100.0)))
+                        except Exception:
+                            _target_words_override = None
+                    _effective_target = _target_words_override if _target_words_override else _target_words
                     streamer.send_update(
-                        f"✂️ Shortening to ~{_target_minutes:.0f} min (target ~{_target_words} Host words, current {_before_host})",
+                        f"✂️ Shortening to ~{_target_minutes:.0f} min (target ~{_effective_target} Host words, current {_before_host})",
                         98,
                     )
-                    if _before_host > _target_words * 1.15:
+                    if _before_host > _effective_target * 1.05:
                         from linedrive_azure.agents.script_review_agent_client import (
                             ScriptReviewAgentClient,
                         )
@@ -1496,6 +1508,9 @@ async def process_script_creation(session_id, topic, audience, tone,
                             target_minutes=_target_minutes,
                             wpm=_wpm,
                             timeout=600,
+                            target_words_override=_target_words_override,
+                            reduction_percent=(int(_percent_raw) if _target_words_override else None),
+                            current_host_words=_before_host,
                         )
                         if _r.get("success") and _r.get("response"):
                             _short = _r["response"].strip()
@@ -2493,14 +2508,26 @@ async def process_existing_script(
                     return sum(len(b.split()) for b in blocks)
 
                 _before_host_words = _host_word_count(cleaned_script)
+                # Resolve a target word count: percent (of current) takes precedence
+                # over the duration-derived target so the user can ask for e.g. "-25%".
+                _percent_raw = str(checkboxes.get("shorten_percent", "")).strip().lower()
+                _target_words_override = None
+                if _percent_raw and _percent_raw != "target":
+                    try:
+                        _pct = int(_percent_raw)
+                        if 0 < _pct < 100 and _before_host_words > 0:
+                            _target_words_override = int(round(_before_host_words * (1 - _pct / 100.0)))
+                    except Exception:
+                        _target_words_override = None
+                _effective_target = _target_words_override if _target_words_override else _target_words
                 streamer.send_update(
                     f"✂️ Shortening script to ~{_target_minutes:.0f} min "
-                    f"(target ~{_target_words} Host words, current {_before_host_words})",
+                    f"(target ~{_effective_target} Host words, current {_before_host_words})",
                     12,
                 )
 
                 # Only call the agent when the current script is materially longer
-                if _before_host_words > _target_words * 1.15:
+                if _before_host_words > _effective_target * 1.05:
                     from linedrive_azure.agents.script_review_agent_client import (
                         ScriptReviewAgentClient,
                     )
@@ -2510,6 +2537,9 @@ async def process_existing_script(
                         target_minutes=_target_minutes,
                         wpm=_wpm,
                         timeout=600,
+                        target_words_override=_target_words_override,
+                        reduction_percent=(int(_percent_raw) if _target_words_override else None),
+                        current_host_words=_before_host_words,
                     )
                     if _short_result.get("success") and _short_result.get("response"):
                         _shortened = _short_result["response"].strip()

@@ -1495,6 +1495,14 @@
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;" title="Condense Host: dialogue to match the requested video length">
                         <input type="checkbox" id="checkShortenScript" style="width: auto; margin-right: 4px;">
                         <span style="font-size: 0.8em !important;">✂️ Shorten</span>
+                        <select id="shortenPercent" title="Reduce Host: word count by this much" style="margin-left:6px; padding:2px 4px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:3px; font-size:0.85em;" onclick="event.stopPropagation();" onchange="event.stopPropagation();">
+                            <option value="10">−10%</option>
+                            <option value="20">−20%</option>
+                            <option value="25" selected>−25%</option>
+                            <option value="33">−33%</option>
+                            <option value="50">−50%</option>
+                            <option value="target">to video length</option>
+                        </select>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkFlowAnalysis" style="width: auto; margin-right: 4px;">
@@ -3922,11 +3930,12 @@ Time management content here...`;
             const flowAnalysisChecked = document.getElementById('checkFlowAnalysis')?.checked || false;
             const thumbnailsChecked = document.getElementById('checkThumbnails')?.checked || false;
             const demoChecked = document.getElementById('checkDemoScript')?.checked || false;
+            const shortenChecked = document.getElementById('checkShortenScript')?.checked || false;
             
             // Validate: at least one checkbox must be selected
             if (!scriptChecked && !youtubeChecked && !heygenChecked && 
                 !brollChecked && !brollImagesChecked && !grokVideosChecked &&
-                !hookSummaryChecked && !flowAnalysisChecked && !thumbnailsChecked && !demoChecked) {
+                !hookSummaryChecked && !flowAnalysisChecked && !thumbnailsChecked && !demoChecked && !shortenChecked) {
                 alert('Please select at least one output to generate!');
                 return;
             }
@@ -3969,7 +3978,8 @@ Time management content here...`;
                 flow_analysis: document.getElementById('checkFlowAnalysis')?.checked || false,
                 thumbnails: document.getElementById('checkThumbnails')?.checked || false,
                 demo: document.getElementById('checkDemoScript')?.checked || false,
-                shorten_script: document.getElementById('checkShortenScript')?.checked || false
+                shorten_script: document.getElementById('checkShortenScript')?.checked || false,
+                shorten_percent: document.getElementById('shortenPercent')?.value || '25'
             };
             
             // Get metadata
@@ -4392,7 +4402,8 @@ Time management content here...`;
                     thumbnails: document.getElementById('checkThumbnails')?.checked || false,
                     demo: document.getElementById('checkDemoScript')?.checked || false,
                     all: document.getElementById('checkAll')?.checked || false,
-                    shorten_script: document.getElementById('checkShortenScript')?.checked || false
+                    shorten_script: document.getElementById('checkShortenScript')?.checked || false,
+                    shorten_percent: document.getElementById('shortenPercent')?.value || '25'
                 };
                 const grokApiKey = (document.getElementById('grokApiKey')?.value || '').trim();
                 
