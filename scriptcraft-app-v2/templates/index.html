@@ -500,6 +500,45 @@
             font-family: 'Monaco', 'Courier New', monospace;
             font-size: 10px;
         }
+
+        /* Generic collapse/expand toggle for big panes (input script, logs,
+           result tabs). The OUTER container keeps its existing show/hide
+           semantics — this only collapses the body within it. */
+        .sc-collapse-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            background: #1e293b;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.95em;
+            text-align: left;
+            user-select: none;
+            font-family: inherit;
+        }
+        .sc-collapse-btn:hover { background: #273449; }
+        .sc-collapse-icon {
+            display: inline-block;
+            width: 12px;
+            font-size: 11px;
+            color: #94a3b8;
+            transition: transform 0.15s;
+        }
+        .sc-collapse-btn[aria-expanded="false"] .sc-collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .sc-collapse-sub {
+            margin-left: auto;
+            font-weight: 400;
+            font-size: 0.8em;
+            color: #94a3b8;
+        }
         
         .progress-log-item {
             padding: 2px 0;
@@ -1495,6 +1534,12 @@
             
             <!-- Script Input (shown when Script checkbox is NOT checked) -->
             <div id="scriptInputSection" style="display: none;">
+                <button type="button" class="sc-collapse-btn" aria-expanded="true" onclick="toggleCollapsible(this)" title="Show / hide the input script editor">
+                    <span class="sc-collapse-icon">▼</span>
+                    <span>📝 Input Script</span>
+                    <span class="sc-collapse-sub">Click to collapse / expand</span>
+                </button>
+                <div>
                 <div class="form-group">
                     <label for="scriptInput">📝 Enter Your Script (Required when Script checkbox is unchecked):</label>
                     <div id="scriptInputDurationBadge" style="margin:6px 0 8px 0; padding:6px 10px; background:#0f172a; border:1px solid #334155; border-left:3px solid #10b981; border-radius:6px; font-size:12px; color:#10b981; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; display:inline-block;" title="Estimated HeyGen avatar render time at 150 wpm — counts only words inside **Host:** sections">⏱ ~0:00 (0 words @ 150 wpm)</div>
@@ -1505,6 +1550,7 @@
                     </div>
                     <textarea id="scriptInput" oninput="updateScriptInputDurationBadge()" placeholder="Paste or type your script content here, or click 'Load' button above to load a .md or .txt file..."></textarea>
                     <div id="scriptInputPreview"></div>
+                </div>
                 </div>
             </div>
 
@@ -1586,6 +1632,12 @@
             <input type="file" id="fileInput" accept=".md,.txt,.markdown,.docx,.doc" style="display: none;" onchange="loadFile(event)">
             
             <div id="progress" class="progress">
+                <button type="button" class="sc-collapse-btn" aria-expanded="true" onclick="toggleCollapsible(this)" title="Show / hide progress log">
+                    <span class="sc-collapse-icon">▼</span>
+                    <span>🔄 Progress Log</span>
+                    <span class="sc-collapse-sub">Click to collapse / expand</span>
+                </button>
+                <div>
                 <div class="progress-header">
                     <div class="spinner"></div>
                     <p id="progressText">🔄 Processing...</p>
@@ -1605,9 +1657,16 @@
                 <div id="progressLog" class="progress-log">
                     <!-- Progress messages will be appended here -->
                 </div>
+                </div>
             </div>
             
             <div id="debugLog" class="progress" style="display: none;">
+                <button type="button" class="sc-collapse-btn" aria-expanded="true" onclick="toggleCollapsible(this)" title="Show / hide execution log">
+                    <span class="sc-collapse-icon">▼</span>
+                    <span>📋 Execution Log</span>
+                    <span class="sc-collapse-sub">Click to collapse / expand</span>
+                </button>
+                <div>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <h3 style="margin: 0;">📋 Execution Log</h3>
                     <button onclick="clearDebugLog()" style="padding: 2px 8px; font-size: 0.7em; background: #ef4444; border: 1px solid #dc2626; border-radius: 4px; color: white; cursor: pointer;">Clear Log</button>
@@ -1615,8 +1674,14 @@
                 <div id="debugLogContent" class="progress-log">
                     <!-- Final debug log will be copied here -->
                 </div>
+                </div>
             </div>
             
+            <button type="button" id="resultCollapseBtn" class="sc-collapse-btn" aria-expanded="true" onclick="toggleResultPanel(this)" style="display:none;" title="Show / hide processed script results">
+                <span class="sc-collapse-icon">▼</span>
+                <span>🎬 Processed Script</span>
+                <span class="sc-collapse-sub">Click to collapse / expand</span>
+            </button>
             <div id="result" style="display: none;">
                 <!-- Tabbed interface will be inserted here dynamically -->
             </div>
@@ -3045,6 +3110,42 @@ Time management content here...`;
             div.textContent = text;
             return div.innerHTML;
         }
+
+        // Toggle a section body (next sibling of the button). The outer
+        // container's own display:none toggling is unaffected — this only
+        // collapses the inner body, so toolbar buttons (e.g. Stop B-roll)
+        // that live in the header remain visible when collapsed if present.
+        function toggleCollapsible(btn) {
+            const body = btn && btn.nextElementSibling;
+            if (!body) return;
+            const isCollapsed = body.style.display === 'none';
+            body.style.display = isCollapsed ? '' : 'none';
+            btn.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+        }
+
+        // The #result panel is rewritten with innerHTML by many code paths,
+        // so its collapse toggle lives OUTSIDE as a sibling. The toggle hides
+        // / shows the #result element directly. A MutationObserver keeps the
+        // button visible whenever #result is shown by other code.
+        function toggleResultPanel(btn) {
+            const panel = document.getElementById('result');
+            if (!panel) return;
+            const isCollapsed = panel.style.display === 'none';
+            panel.style.display = isCollapsed ? 'block' : 'none';
+            btn.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+            const icon = btn.querySelector('.sc-collapse-icon');
+            if (icon) icon.textContent = isCollapsed ? '▼' : '▶';
+        }
+        document.addEventListener('DOMContentLoaded', function () {
+            const panel = document.getElementById('result');
+            const btn = document.getElementById('resultCollapseBtn');
+            if (!panel || !btn) return;
+            const sync = () => {
+                btn.style.display = (panel.style.display && panel.style.display !== 'none') ? '' : 'none';
+            };
+            sync();
+            new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['style'] });
+        });
 
         // Estimate HeyGen video duration from script text.
         // HeyGen avatars speak ~150 wpm by default. Only **Host:** sections are
