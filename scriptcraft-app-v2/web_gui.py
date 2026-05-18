@@ -1499,10 +1499,10 @@ async def process_script_creation(session_id, topic, audience, tone,
                         98,
                     )
                     if _before_host > _effective_target * 1.05:
-                        from linedrive_azure.agents.script_review_agent_client import (
-                            ScriptReviewAgentClient,
+                        from linedrive_azure.agents.script_shorten_agent_client import (
+                            ScriptShortenAgentClient,
                         )
-                        _agent = ScriptReviewAgentClient()
+                        _agent = ScriptShortenAgentClient()
                         _r = _agent.shorten_to_target(
                             script_content=final_script_content,
                             target_minutes=_target_minutes,
@@ -2528,10 +2528,10 @@ async def process_existing_script(
 
                 # Only call the agent when the current script is materially longer
                 if _before_host_words > _effective_target * 1.05:
-                    from linedrive_azure.agents.script_review_agent_client import (
-                        ScriptReviewAgentClient,
+                    from linedrive_azure.agents.script_shorten_agent_client import (
+                        ScriptShortenAgentClient,
                     )
-                    _shorten_agent = ScriptReviewAgentClient()
+                    _shorten_agent = ScriptShortenAgentClient()
                     _short_result = _shorten_agent.shorten_to_target(
                         script_content=cleaned_script,
                         target_minutes=_target_minutes,

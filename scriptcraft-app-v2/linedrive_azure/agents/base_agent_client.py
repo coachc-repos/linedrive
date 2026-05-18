@@ -57,6 +57,7 @@ V1_TO_V2_AGENT_NAME: Dict[str, str] = {
     "Script-Writer-Agent": "Script-Writer-Agent",
     "Script-Topic-Assistant-Agent": "Script-Topic-Assistant-Agent",
     "Script-Demo-Assistant-Agent": "Script-Demo-Assistant-Agent",
+    "Script-Shorten-Agent": "Script-Shorten-Agent",
 }
 
 # Lower-cased lookup for robustness against minor casing differences.
