@@ -377,13 +377,14 @@
             flex-direction: column;
             align-items: center;
             gap: 2px;
-            padding: 5px 8px;
+            padding: 10px 14px;
             background: #1e293b;
             border: 1px solid #334155;
-            border-radius: 6px;
+            border-radius: 8px;
             cursor: pointer;
             transition: all 0.2s;
-            min-width: 50px;
+            min-width: 56px;
+            min-height: 48px;
         }
         
         .toolbar-btn:hover {
@@ -398,7 +399,7 @@
         }
         
         .toolbar-icon {
-            font-size: 1.2em;
+            font-size: 1.8em;
             line-height: 1;
         }
         
@@ -406,16 +407,20 @@
             font-size: 0.65em;
             color: #ffffff;
             font-weight: 500;
+            /* Hidden by default — show full label on hover only. */
+            display: none;
         }
-        
-        .toolbar-btn:hover .toolbar-text {
+
+        .toolbar-btn:hover .toolbar-text,
+        .toolbar-btn:focus-visible .toolbar-text {
+            display: inline;
             color: #0ea5e9;
         }
         
         /* Responsive toolbar */
         @media (max-width: 768px) {
             .toolbar {
-                justify-content: flex-start;
+                justify-content: center;
                 flex-wrap: nowrap;
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
@@ -429,12 +434,14 @@
 
             .toolbar-section {
                 flex-wrap: nowrap;
-                justify-content: flex-start;
+                justify-content: center;
                 gap: 4px;
             }
 
             .toolbar-label {
-                display: none !important;
+                width: 100%;
+                text-align: center;
+                margin-bottom: 5px;
             }
 
             /* Compact toolbar buttons so they fit on a single row without wrapping */
@@ -448,34 +455,12 @@
                 font-size: 1em;
             }
             .toolbar-text {
-                font-size: 0.65em;
+                font-size: 0.55em;
             }
 
             /* v2-only on mobile: hide the Agent API selector entirely */
             #agentModeToggle {
                 display: none !important;
-            }
-
-            /* Shrink HeyGen Template Browse/Details buttons on mobile */
-            .heygen-tpl-btn {
-                padding: 2px 6px !important;
-                font-size: 0.6em !important;
-                font-weight: 500 !important;
-            }
-
-            /* Shrink form selects/inputs on mobile (e.g., Script Duration) */
-            input[type="text"],
-            select {
-                font-size: 10px !important;
-                height: 22px !important;
-                padding: 1px 4px !important;
-                line-height: 1.2 !important;
-            }
-            .form-group label {
-                font-size: 0.7em;
-            }
-            .form-group {
-                margin-bottom: 4px;
             }
         }
         
@@ -519,6 +504,45 @@
             padding: 6px;
             font-family: 'Monaco', 'Courier New', monospace;
             font-size: 10px;
+        }
+
+        /* Generic collapse/expand toggle for big panes (input script, logs,
+           result tabs). The OUTER container keeps its existing show/hide
+           semantics — this only collapses the body within it. */
+        .sc-collapse-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            background: #1e293b;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.95em;
+            text-align: left;
+            user-select: none;
+            font-family: inherit;
+        }
+        .sc-collapse-btn:hover { background: #273449; }
+        .sc-collapse-icon {
+            display: inline-block;
+            width: 12px;
+            font-size: 11px;
+            color: #94a3b8;
+            transition: transform 0.15s;
+        }
+        .sc-collapse-btn[aria-expanded="false"] .sc-collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .sc-collapse-sub {
+            margin-left: auto;
+            font-weight: 400;
+            font-size: 0.8em;
+            color: #94a3b8;
         }
         
         .progress-log-item {
@@ -1003,7 +1027,7 @@
                 <span class="toolbar-label">Actions</span>
                 <button class="toolbar-btn" id="primaryBtn" onclick="processWorkflow()" title="Generate selected outputs">
                     <span class="toolbar-icon">🚀</span>
-                    <span class="toolbar-text">Generate</span>
+                    <span class="toolbar-text">Generate Script</span>
                 </button>
             </div>
             
@@ -1077,9 +1101,9 @@
                     <span class="toolbar-icon">🔑</span>
                     <span class="toolbar-text">API Keys</span>
                 </button>
-                <button class="toolbar-btn" onclick="openOutputDirModal()" id="outputDirBtn" title="Set base output directory for saving all generated artifacts" style="display:none;">
+                <button class="toolbar-btn" onclick="openOutputDirModal()" id="outputDirBtn" title="Set base output directory for saving all generated artifacts">
                     <span class="toolbar-icon">📁</span>
-                    <span class="toolbar-text">Output Dir</span>
+                    <span class="toolbar-text">Output Directory</span>
                 </button>
                 <button class="toolbar-btn" onclick="saveAllOutputs()" id="saveAllOutputsBtn" title="Save current results (script, images, thumbnails, videos, EDL, curls) to the configured Output Directory" style="display:none;">
                     <span class="toolbar-icon">💾</span>
@@ -1098,7 +1122,12 @@
             </div>
         </div>
 
-        <!-- Output Directory display strip removed in container build -->
+        <!-- Current Output Directory display strip -->
+        <div id="outputDirStrip" style="display:none; padding:6px 14px; margin:6px 0 4px 0; background:#0f172a; border:1px solid #334155; border-radius:6px; color:#94a3b8; font-size:0.78em;">
+            <span style="color:#64748b;">📁 Output Dir:</span>
+            <span id="outputDirDisplay" style="color:#e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">(not set)</span>
+            <button onclick="openOutputDirModal()" style="margin-left:8px; padding:2px 8px; background:#1e293b; border:1px solid #334155; color:#94a3b8; border-radius:4px; cursor:pointer; font-size:0.85em;">Change</button>
+        </div>
 
         <div style="display:none;">
             <!-- Hidden inputs preserve the existing JS contract; values are managed via the API Keys modal (🔑 toolbar button). -->
@@ -1434,47 +1463,64 @@
         
         <div class="main-content">
             <!-- Workflow Selection Checkboxes -->
-            <div class="form-group" style="background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; margin-bottom: 10px;">
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 4px;">
+            <div class="form-group" style="background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">
+                <span class="toolbar-label" style="flex: 0 0 auto;">Script Options</span>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 4px; flex: 1 1 auto;">
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkScript" onclick="toggleScriptInput()" checked style="width: auto; margin-right: 4px;">
                         <span style="font-size: 0.8em !important;">📝 Script</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkYouTubeDetails" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">📺 YouTube</span>
+                        <span style="font-size: 0.8em !important;">📺 Publish to Youtube</span>
+                        <button type="button" onclick="event.preventDefault(); event.stopPropagation(); loadYouTubeDetailsFromFile();" title="Load existing YouTube details .docx/.md (skips the agent)" style="margin-left:6px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:0 6px; border-radius:3px; font-size:0.85em; cursor:pointer;">📂</button>
+                        <span id="ytLoadedBadge" style="display:none; margin-left:4px; color:#10b981; font-size:0.75em;" title="YouTube details pre-loaded">●</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkHeyGenReady" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎬 HeyGen</span>
+                        <span style="font-size: 0.8em !important;">🎬 Heygen Script and Curl Commands</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkBRollTable" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎥 B-Roll</span>
+                        <span style="font-size: 0.8em !important;">🎥 B-Roll Table and Shutterstock Links</span>
+                        <button type="button" onclick="event.preventDefault(); event.stopPropagation(); loadBrollTableFromFile();" title="Load existing B-Roll table .docx/.md (skips the agent)" style="margin-left:6px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:0 6px; border-radius:3px; font-size:0.85em; cursor:pointer;">📂</button>
+                        <span id="brollLoadedBadge" style="display:none; margin-left:4px; color:#10b981; font-size:0.75em;" title="B-Roll table pre-loaded">●</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkBRollImages" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎨 B-Roll Img</span>
+                        <span style="font-size: 0.8em !important;">🎨 B-Roll Images</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkGrokVideos" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🤖 Grok Vid</span>
+                        <span style="font-size: 0.8em !important;">🤖 Grok Videos from B-Roll Table</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkHookSummary" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎯 Hook</span>
+                        <span style="font-size: 0.8em !important;">🎯 Hook & Summary</span>
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;" title="Condense Host: dialogue to match the requested video length">
+                        <input type="checkbox" id="checkShortenScript" style="width: auto; margin-right: 4px;">
+                        <span style="font-size: 0.8em !important;">✂️ Shorten Script</span>
+                        <select id="shortenPercent" title="Reduce Host: word count by this much" style="margin-left:6px; padding:2px 4px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:3px; font-size:0.85em;" onclick="event.stopPropagation();" onchange="event.stopPropagation();">
+                            <option value="10">−10%</option>
+                            <option value="20">−20%</option>
+                            <option value="25" selected>−25%</option>
+                            <option value="33">−33%</option>
+                            <option value="50">−50%</option>
+                            <option value="target">to video length</option>
+                        </select>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkFlowAnalysis" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🔄 Flow</span>
+                        <span style="font-size: 0.8em !important;">🔄 Script Flow Quality</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkThumbnails" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🖼️ Thumb</span>
+                        <span style="font-size: 0.8em !important;">🖼️ Thumbnails</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkDemoScript" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎯 Demo</span>
+                        <span style="font-size: 0.8em !important;">🎯 Demo Scripts</span>
                     </label>
                 </div>
             </div>
@@ -1484,8 +1530,8 @@
                 <div style="display: flex; gap: 15px; align-items: center;">
                     <label for="heygenTemplateId" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;">Template ID:</label>
                     <input type="text" id="heygenTemplateId" value="92c09f8e9a1c4f078f7ae53886b7ad80" style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
-                    <button class="heygen-tpl-btn" onclick="browseHeyGenTemplates()" style="padding: 4px 10px; background: linear-gradient(135deg, #0ea5e9, #0284c7); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">📋 Browse</button>
-                    <button class="heygen-tpl-btn" onclick="viewHeyGenTemplateDetails()" style="padding: 4px 10px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🔍 Details</button>
+                    <button onclick="browseHeyGenTemplates()" style="padding: 4px 10px; background: linear-gradient(135deg, #0ea5e9, #0284c7); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">📋 Browse</button>
+                    <button onclick="viewHeyGenTemplateDetails()" style="padding: 4px 10px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🔍 Details</button>
                     <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
                     <label for="heygenVoiceId" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;">Voice ID:</label>
                     <input type="text" id="heygenVoiceId" value="{{ saved_heygen_voice_id or '' }}" placeholder="Select a voice..." autocomplete="off" style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
@@ -1502,15 +1548,23 @@
             
             <!-- Script Input (shown when Script checkbox is NOT checked) -->
             <div id="scriptInputSection" style="display: none;">
+                <button type="button" class="sc-collapse-btn" aria-expanded="true" onclick="toggleCollapsible(this)" title="Show / hide the input script editor">
+                    <span class="sc-collapse-icon">▼</span>
+                    <span>📝 Input Script</span>
+                    <span class="sc-collapse-sub">Click to collapse / expand</span>
+                </button>
+                <div>
                 <div class="form-group">
                     <label for="scriptInput">📝 Enter Your Script (Required when Script checkbox is unchecked):</label>
                     <div id="scriptInputDurationBadge" style="margin:6px 0 8px 0; padding:6px 10px; background:#0f172a; border:1px solid #334155; border-left:3px solid #10b981; border-radius:6px; font-size:12px; color:#10b981; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; display:inline-block;" title="Estimated HeyGen avatar render time at 150 wpm — counts only words inside **Host:** sections">⏱ ~0:00 (0 words @ 150 wpm)</div>
                     <div class="script-input-tabs">
                         <button class="script-input-tab active" id="scriptTabEdit" onclick="switchScriptInputTab('edit')">✏️ Edit</button>
                         <button class="script-input-tab" id="scriptTabPreview" onclick="switchScriptInputTab('preview')">👁 Preview</button>
+                        <button type="button" onclick="downloadScriptTemplateDocx(this)" style="margin-left:auto; padding:4px 10px; background:linear-gradient(135deg, #6366f1, #4f46e5); color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.8em; font-weight:600;" title="Download a blank ScriptCraft script template as a Word document. Fill it out in Word, then paste back here.">📄 Download Template (.docx)</button>
                     </div>
                     <textarea id="scriptInput" oninput="updateScriptInputDurationBadge()" placeholder="Paste or type your script content here, or click 'Load' button above to load a .md or .txt file..."></textarea>
                     <div id="scriptInputPreview"></div>
+                </div>
                 </div>
             </div>
 
@@ -1592,6 +1646,12 @@
             <input type="file" id="fileInput" accept=".md,.txt,.markdown,.docx,.doc" style="display: none;" onchange="loadFile(event)">
             
             <div id="progress" class="progress">
+                <button type="button" class="sc-collapse-btn" aria-expanded="true" onclick="toggleCollapsible(this)" title="Show / hide progress log">
+                    <span class="sc-collapse-icon">▼</span>
+                    <span>🔄 Progress Log</span>
+                    <span class="sc-collapse-sub">Click to collapse / expand</span>
+                </button>
+                <div>
                 <div class="progress-header">
                     <div class="spinner"></div>
                     <p id="progressText">🔄 Processing...</p>
@@ -1611,9 +1671,16 @@
                 <div id="progressLog" class="progress-log">
                     <!-- Progress messages will be appended here -->
                 </div>
+                </div>
             </div>
             
             <div id="debugLog" class="progress" style="display: none;">
+                <button type="button" class="sc-collapse-btn" aria-expanded="true" onclick="toggleCollapsible(this)" title="Show / hide execution log">
+                    <span class="sc-collapse-icon">▼</span>
+                    <span>📋 Execution Log</span>
+                    <span class="sc-collapse-sub">Click to collapse / expand</span>
+                </button>
+                <div>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <h3 style="margin: 0;">📋 Execution Log</h3>
                     <button onclick="clearDebugLog()" style="padding: 2px 8px; font-size: 0.7em; background: #ef4444; border: 1px solid #dc2626; border-radius: 4px; color: white; cursor: pointer;">Clear Log</button>
@@ -1621,8 +1688,14 @@
                 <div id="debugLogContent" class="progress-log">
                     <!-- Final debug log will be copied here -->
                 </div>
+                </div>
             </div>
             
+            <button type="button" id="resultCollapseBtn" class="sc-collapse-btn" aria-expanded="true" onclick="toggleResultPanel(this)" style="display:none;" title="Show / hide processed script results">
+                <span class="sc-collapse-icon">▼</span>
+                <span>🎬 Processed Script</span>
+                <span class="sc-collapse-sub">Click to collapse / expand</span>
+            </button>
             <div id="result" style="display: none;">
                 <!-- Tabbed interface will be inserted here dynamically -->
             </div>
@@ -2140,6 +2213,39 @@ Time management content here...`;
             const title = (window.currentScriptTitle || 'grok').toString();
             _downloadMediaZip({ title: title, videos: videos }, 'grok-videos.zip');
         }
+
+        async function deleteGrokVideo(filename, cardId) {
+            if (!filename) return;
+            if (!confirm(`Delete "${filename}"?\n\nThe video file will be removed from disk (B-roll directory) and from this gallery. This cannot be undone.`)) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/grok-videos/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: filename }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    alert('❌ Delete failed: ' + (data.error || `HTTP ${res.status}`));
+                    return;
+                }
+                // Remove from in-memory list
+                if (Array.isArray(window.grokVideosData)) {
+                    window.grokVideosData = window.grokVideosData.filter(v => {
+                        const f = v && v.filename ? v.filename.split('/').pop() : '';
+                        return f !== filename;
+                    });
+                }
+                // Remove the card from the DOM
+                const card = document.getElementById(cardId);
+                if (card && card.parentNode) {
+                    card.parentNode.removeChild(card);
+                }
+            } catch (err) {
+                alert('❌ Delete failed: ' + err.message);
+            }
+        }
         
         // Function to render Grok AI-generated video gallery
         function renderGrokVideosGallery(grokVideos) {
@@ -2156,7 +2262,8 @@ Time management content here...`;
             grokVideos.forEach((vid, index) => {
                 const fname = vid.filename ? vid.filename.split('/').pop() : null;
                 const videoSrc = fname ? `/broll-videos/${fname}` : (vid.url || '');
-                html += `<div style="background: #1e293b; border: 1px solid #334155; border-radius: 8px; overflow: hidden;">
+                const cardId = `grokVidCard_${index}`;
+                html += `<div id="${cardId}" data-filename="${escapeHtml(fname || '')}" style="background: #1e293b; border: 1px solid #334155; border-radius: 8px; overflow: hidden;">
                     <div style="position: relative; padding-top: 56.25%; background: #0f172a;">`;
                 if (videoSrc) {
                     html += `<video controls style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;" preload="metadata">
@@ -2170,7 +2277,15 @@ Time management content here...`;
                     <div style="padding: 10px;">
                         <div style="color: #60a5fa; font-weight: 600; font-size: 13px; margin-bottom: 4px;">${escapeHtml(vid.timecode || '')}</div>
                         <div style="color: #e2e8f0; font-size: 13px; margin-bottom: 4px;">${escapeHtml(vid.search_term || '')}</div>
-                        <div style="color: #94a3b8; font-size: 12px; line-height: 1.4;">${escapeHtml(vid.description || '')}</div>
+                        <div style="color: #94a3b8; font-size: 12px; line-height: 1.4; margin-bottom: 10px;">${escapeHtml(vid.description || '')}</div>
+                        <div style="display:flex; gap:8px;">`;
+                if (fname) {
+                    html += `<a href="${videoSrc}" download="${escapeHtml(fname)}" style="flex:1;text-align:center;padding:6px 10px;background:#1e40af;color:#fff;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600;">⬇️ Download</a>`;
+                    html += `<button onclick="deleteGrokVideo('${escapeHtml(fname)}', '${cardId}')" style="flex:1;padding:6px 10px;background:#7f1d1d;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;" title="Delete this video from disk and remove it from the gallery">🗑️ Delete</button>`;
+                } else {
+                    html += `<span style="flex:1;text-align:center;padding:6px 10px;color:#64748b;font-size:12px;">No local file</span>`;
+                }
+                html += `</div>
                     </div>
                 </div>`;
             });
@@ -2342,15 +2457,13 @@ Time management content here...`;
             });
             
             if (mainScriptDiv && mainScript) {
+                // Custom line-by-line renderer (NOT marked.js) so a stray ** or
+                // ___ separator can never bold the rest of the document.
                 const escapeHtml = (s) => s
                     .replace(/&/g, '&amp;')
                     .replace(/</g, '&lt;')
                     .replace(/>/g, '&gt;');
-                // Strip ``` code fences (AI sometimes wraps tables in them).
-                const cleanedScript = (mainScript || '')
-                    .replace(/\r\n?/g, '\n')
-                    .replace(/^[ \t]*```[\w-]*[ \t]*$/gm, '');
-                const lines = cleanedScript.split('\n');
+                const lines = (mainScript || '').replace(/\r\n?/g, '\n').split('\n');
                 const out = [];
                 let para = [];
                 const flushPara = () => {
@@ -2359,55 +2472,11 @@ Time management content here...`;
                         para = [];
                     }
                 };
-                // Render an inline markdown bold (**...**) within escaped text.
-                const renderInline = (s) => escapeHtml(s).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-                // Detect a markdown table that starts at lines[i] (header row + |---| separator).
-                const tryConsumeTable = (i) => {
-                    const headerLine = (lines[i] || '').trim();
-                    const sepLine = (lines[i + 1] || '').trim();
-                    if (!headerLine.startsWith('|') || !sepLine.startsWith('|')) return null;
-                    if (!/^\|?\s*:?-{2,}/.test(sepLine.replace(/^\|/, ''))) return null;
-                    const splitRow = (row) => row
-                        .replace(/^\|/, '')
-                        .replace(/\|$/, '')
-                        .split('|')
-                        .map(c => c.trim());
-                    const headers = splitRow(headerLine);
-                    const bodyRows = [];
-                    let j = i + 2;
-                    while (j < lines.length) {
-                        const t = (lines[j] || '').trim();
-                        if (!t.startsWith('|')) break;
-                        bodyRows.push(splitRow(t));
-                        j++;
-                    }
-                    let html = '<table class="broll-table"><thead><tr>';
-                    headers.forEach(h => { html += '<th>' + renderInline(h) + '</th>'; });
-                    html += '</tr></thead><tbody>';
-                    bodyRows.forEach(cells => {
-                        html += '<tr>';
-                        cells.forEach(c => { html += '<td>' + renderInline(c) + '</td>'; });
-                        html += '</tr>';
-                    });
-                    html += '</tbody></table>';
-                    return { html, nextIndex: j };
-                };
-                for (let i = 0; i < lines.length; i++) {
-                    const raw = lines[i];
+                for (const raw of lines) {
                     const line = raw.replace(/\s+$/g, '');
                     const trimmed = line.trim();
                     if (trimmed === '') { flushPara(); continue; }
                     if (/^[_\-=]{3,}$/.test(trimmed)) { flushPara(); out.push('<hr>'); continue; }
-                    // Markdown table? (allow leading whitespace before the first '|')
-                    if (trimmed.startsWith('|')) {
-                        const tbl = tryConsumeTable(i);
-                        if (tbl) {
-                            flushPara();
-                            out.push(tbl.html);
-                            i = tbl.nextIndex - 1;
-                            continue;
-                        }
-                    }
                     let m;
                     if ((m = trimmed.match(/^(?:#+\s*)?(?:Heading:\s*)?(Chapter\s+\d+[\s\S]*)$/i))) {
                         flushPara();
@@ -2496,110 +2565,233 @@ Time management content here...`;
                 }
             }
 
-            // Render B-Roll Table tab if present
+            // Render B-roll table tab if present
             const brollTableDiv = document.getElementById('brollTableContent');
-            if (brollTableDiv) {
-                const tbl = window._currentBrollTable || '';
-                if (tbl) {
-                    brollTableDiv.innerHTML = renderBrollTableMarkdown(tbl);
-                } else {
-                    brollTableDiv.innerHTML = '<p style="color:#94a3b8;">No B-roll table available.</p>';
-                }
+            if (brollTableDiv && window._currentBrollTable) {
+                brollTableDiv.innerHTML = renderBrollTableMarkdown(window._currentBrollTable);
             }
         }
 
-        // Convert a markdown B-roll table (possibly wrapped in ``` fences and
-        // preceded/followed by other text) into a styled HTML table. Any
-        // leading non-table text is rendered as a paragraph; anything after
-        // the table (e.g. **Stock Footage Search String:** ...) is rendered
-        // as escaped paragraphs/bold.
+        // Render the B-roll markdown table as a styled HTML table (matches
+        // .broll-table CSS). Strips ``` fences, finds the pipe-table block,
+        // and renders any preamble/tail text as <p> with **bold** support.
         function renderBrollTableMarkdown(md) {
-            if (!md) return '';
-            const escapeHtml = (s) => String(s)
+            if (!md || typeof md !== 'string') return '<p>No B-roll table available.</p>';
+            const escapeHtml = (s) => s
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
-            const renderInline = (s) => escapeHtml(s).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-            // Strip ``` fences.
-            const cleaned = String(md)
-                .replace(/\r\n?/g, '\n')
-                .replace(/^[ \t]*```[\w-]*[ \t]*$/gm, '');
-            const lines = cleaned.split('\n');
-            const splitRow = (row) => row.trim()
-                .replace(/^\|/, '')
-                .replace(/\|$/, '')
-                .split('|')
-                .map(c => c.trim());
-            // Find header + separator anywhere in the text.
+            const renderInline = (s) => escapeHtml(s)
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            const cleaned = md.replace(/^[ \t]*```[\w-]*[ \t]*$/gm, '');
+            const lines = cleaned.replace(/\r\n?/g, '\n').split('\n').map(l => l.replace(/\s+$/g, ''));
+            // Find header + separator
             let headerIdx = -1;
             for (let i = 0; i < lines.length - 1; i++) {
-                const a = (lines[i] || '').trim();
-                const b = (lines[i + 1] || '').trim();
-                if (a.startsWith('|') && b.startsWith('|') &&
-                    /^\|?\s*:?-{2,}/.test(b.replace(/^\|/, ''))) {
+                const a = lines[i].trim();
+                const b = lines[i + 1].trim();
+                if (a.startsWith('|') && b.startsWith('|')
+                    && /^[-:|\s]+$/.test(b.replace(/\|/g, ''))) {
                     headerIdx = i;
                     break;
                 }
             }
-            const out = [];
             if (headerIdx < 0) {
-                // No table found — render raw markdown as paragraphs.
-                out.push('<p style="color:#94a3b8;">B-roll table markdown could not be parsed as a table. Showing raw content:</p>');
-                out.push('<pre style="white-space:pre-wrap; background:#0f172a; padding:12px; border-radius:6px; color:#e2e8f0;">' + escapeHtml(cleaned) + '</pre>');
-                return out.join('\n');
+                return '<pre style="white-space: pre-wrap; color:#e2e8f0;">' + escapeHtml(cleaned) + '</pre>';
             }
-            // Pre-table preamble.
-            const preamble = lines.slice(0, headerIdx).join('\n').trim();
-            if (preamble) {
-                out.push('<p>' + renderInline(preamble).replace(/\n+/g, '<br>') + '</p>');
-            }
+            const splitRow = (row) => {
+                let cells = row.split('|').map(c => c.trim());
+                if (cells.length && cells[0] === '') cells = cells.slice(1);
+                if (cells.length && cells[cells.length - 1] === '') cells = cells.slice(0, -1);
+                return cells;
+            };
             const headers = splitRow(lines[headerIdx]);
             const bodyRows = [];
             let j = headerIdx + 2;
-            while (j < lines.length) {
-                const t = (lines[j] || '').trim();
-                if (!t.startsWith('|')) break;
-                bodyRows.push(splitRow(t));
-                j++;
+            for (; j < lines.length; j++) {
+                const ln = lines[j].trim();
+                if (!ln.startsWith('|')) break;
+                const cells = splitRow(ln);
+                if (cells.length) bodyRows.push(cells);
             }
-            let tbl = '<table class="broll-table"><thead><tr>';
-            headers.forEach(h => { tbl += '<th>' + renderInline(h) + '</th>'; });
-            tbl += '</tr></thead><tbody>';
-            bodyRows.forEach(cells => {
-                tbl += '<tr>';
-                cells.forEach(c => { tbl += '<td>' + renderInline(c) + '</td>'; });
-                tbl += '</tr>';
+            // Preamble paragraphs
+            let out = '';
+            for (let k = 0; k < headerIdx; k++) {
+                const t = lines[k].trim();
+                if (t) out += '<p>' + renderInline(t) + '</p>';
+            }
+            // Build table
+            out += '<table class="broll-table"><thead><tr>';
+            headers.forEach(h => { out += '<th>' + renderInline(h) + '</th>'; });
+            out += '</tr></thead><tbody>';
+            bodyRows.forEach(row => {
+                out += '<tr>';
+                for (let c = 0; c < headers.length; c++) {
+                    out += '<td>' + renderInline(row[c] || '') + '</td>';
+                }
+                out += '</tr>';
             });
-            tbl += '</tbody></table>';
-            out.push(tbl);
-            // Post-table content (e.g. "**Stock Footage Search String:** ...").
-            const tail = lines.slice(j).join('\n').trim();
-            if (tail) {
-                const tailParas = tail.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
-                tailParas.forEach(p => {
-                    out.push('<p style="margin-top:12px;">' +
-                        renderInline(p).replace(/\n/g, '<br>') + '</p>');
-                });
+            out += '</tbody></table>';
+            // Tail paragraphs
+            for (let k = j; k < lines.length; k++) {
+                const t = lines[k].trim();
+                if (t) out += '<p>' + renderInline(t) + '</p>';
             }
-            return out.join('\n');
+            return out;
         }
 
-        async function saveBrollTableAsWord() {
-            const content = window._currentBrollTable || '';
-            if (!content) { alert('No B-roll table to save.'); return; }
-            const btn = event.target;
-            const orig = btn.textContent;
-            btn.disabled = true;
-            btn.textContent = '⏳ Saving...';
+        function copyBrollTableMarkdown() {
+            const md = window._currentBrollTable || '';
+            if (!md) { alert('No B-roll table to copy.'); return; }
+            navigator.clipboard.writeText(md).then(() => {
+                const btn = event.target.closest('button');
+                if (btn) {
+                    const orig = btn.innerHTML;
+                    btn.innerHTML = '<span class="toolbar-icon">✅</span><span class="toolbar-text">Copied!</span>';
+                    setTimeout(() => { btn.innerHTML = orig; }, 1500);
+                }
+            });
+        }
+
+        function downloadBrollTableMarkdown() {
+            const md = window._currentBrollTable || '';
+            if (!md) { alert('No B-roll table to download.'); return; }
+            const blob = new Blob([md], { type: 'text/markdown' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'broll_table.md';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
+
+        // Download an empty ScriptCraft script template as a Word document.
+        // Uses the exact delimiters the server-side parser keys on so a manual
+        // script round-trips cleanly through the processor.
+        async function downloadScriptTemplateDocx(btnEl) {
+            const btn = btnEl || (typeof event !== 'undefined' && event && event.target) || null;
+            const orig = btn ? btn.textContent : '';
+            const template = [
+                'Title: [Your script title — short, becomes the folder name]',
+                '',
+                'Script Type: Video',
+                'Duration: medium',
+                'Audience: [beginners | intermediate | advanced]',
+                'Tone: [casual | professional | conversational]',
+                '',
+                '**🎯 FINAL HOOK:**',
+                '',
+                '**Host:**',
+                '',
+                '[One paragraph, 2–4 sentences, that grabs attention in the first 5 seconds. Wrap across multiple lines if you like — the parser keeps everything up to the first blank line as the hook.]',
+                '',
+                '---',
+                '',
+                'Heading: Chapter 1 - [Chapter title]',
+                '',
+                'Visual Cue: [One sentence describing the on-screen visual. Single line only.]',
+                '',
+                '**Host:**',
+                '',
+                '[Spoken dialogue for Chapter 1. Write naturally — the parser joins single newlines into paragraphs and splits paragraphs on blank lines.]',
+                '',
+                '---',
+                '',
+                'Heading: Chapter 2 - [Chapter title]',
+                '',
+                'Visual Cue: [Visual description.]',
+                '',
+                '**Host:**',
+                '',
+                '[Spoken dialogue for Chapter 2.]',
+                '',
+                '---',
+                '',
+                'Heading: Chapter 3 - [Chapter title]',
+                '',
+                'Visual Cue: [Visual description.]',
+                '',
+                '**Host:**',
+                '',
+                '[Spoken dialogue for Chapter 3.]',
+                '',
+                'Summary: [2–3 sentence wrap-up of the whole video. ONLY include this on the last chapter.]',
+                '',
+                '---',
+                '',
+                '',
+                '# PARSER RULES — delete this whole section before processing',
+                '',
+                '- Keep `Title:` as the FIRST line. Nothing above it (no Visual Cue, no FINAL HOOK header).',
+                '- `**🎯 FINAL HOOK:**` is optional; if you keep it, terminate it with `---`.',
+                '- Every chapter MUST start with `Heading: Chapter N - <title>` (sequential 1, 2, 3…).',
+                '- Each chapter has exactly ONE `**Host:**` block.',
+                '- `Visual Cue:` is one line; do not wrap.',
+                '- `Summary:` appears ONLY in the final chapter.',
+                '- Use `---` (3+ hyphens on their own line) between every major block.',
+                '- Do not add a "Hi, I\'m ..." intro paragraph; the processor handles boilerplate automatically.',
+                ''
+            ].join('\n');
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Building .docx...'; }
             try {
                 const response = await fetch('/export_word', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        script_content: content,
+                        script_content: template,
+                        title: 'ScriptCraft_Template'
+                    })
+                });
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'ScriptCraft_Template.docx';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    if (btn) btn.textContent = '✅ Downloaded';
+                } else {
+                    const err = await response.json().catch(() => ({}));
+                    alert('❌ Failed to build template: ' + (err.error || response.statusText));
+                    if (btn) btn.textContent = orig;
+                }
+            } catch (e) {
+                alert('❌ Error downloading template: ' + e.message);
+                if (btn) btn.textContent = orig;
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    setTimeout(() => { btn.textContent = orig; }, 2500);
+                }
+            }
+        }
+
+        async function saveBrollTableAsWord() {
+            const md = window._currentBrollTable || '';
+            if (!md) { alert('No B-roll table to save.'); return; }
+            const btn = event.target.closest('button');
+            const orig = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="toolbar-icon">⏳</span><span class="toolbar-text">Saving...</span>';
+            }
+            try {
+                const scriptTitle = window._currentScriptTitle
+                    || (document.getElementById('scriptTitle') && document.getElementById('scriptTitle').value)
+                    || 'AI Script';
+                const response = await fetch('/export_word', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        script_content: md,
                         title: 'BRoll_Table',
                         save_to_broll_dir: true,
-                        script_title: window.currentScriptTitle || ''
+                        script_title: scriptTitle
                     })
                 });
                 if (response.ok) {
@@ -2612,43 +2804,21 @@ Time management content here...`;
                     a.click();
                     document.body.removeChild(a);
                     window.URL.revokeObjectURL(url);
-                    btn.textContent = '✅ Saved!';
+                    if (btn) btn.innerHTML = '<span class="toolbar-icon">✅</span><span class="toolbar-text">Saved!</span>';
                 } else {
                     const err = await response.json().catch(() => ({}));
-                    alert('❌ Failed to save: ' + (err.error || response.statusText));
-                    btn.textContent = orig;
+                    alert('Save failed: ' + (err.error || response.statusText));
+                    if (btn) btn.innerHTML = orig;
                 }
             } catch (e) {
-                alert('❌ Error saving Word document: ' + e.message);
-                btn.textContent = orig;
+                alert('Save error: ' + e.message);
+                if (btn) btn.innerHTML = orig;
             } finally {
-                btn.disabled = false;
-                setTimeout(() => { btn.textContent = orig; }, 2000);
+                if (btn) {
+                    btn.disabled = false;
+                    setTimeout(() => { if (btn.innerHTML.includes('Saved')) btn.innerHTML = orig; }, 2000);
+                }
             }
-
-        function copyBrollTable() {
-            const tbl = window._currentBrollTable || '';
-            if (!tbl) { alert('No B-roll table available.'); return; }
-            navigator.clipboard.writeText(tbl).then(() => {
-                const btn = event.target;
-                const orig = btn.textContent;
-                btn.textContent = '✅ Copied';
-                setTimeout(() => { btn.textContent = orig; }, 1500);
-            });
-        }
-
-        function downloadBrollTable() {
-            const tbl = window._currentBrollTable || '';
-            if (!tbl) { alert('No B-roll table available.'); return; }
-            const blob = new Blob([tbl], { type: 'text/markdown' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'broll_table.md';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
         }
 
         async function saveYouTubeDetailsAsWord() {
@@ -2712,7 +2882,163 @@ Time management content here...`;
                 document.body.removeChild(ta);
             });
         }
+
+        // -- Load existing YouTube details / B-Roll table from a .docx or .md file
+        //    so the user doesn't have to re-run the corresponding agent. The loaded
+        //    text is stored in window._currentYoutubeDetails / window._currentBrollTable
+        //    and is automatically passed as an override to /process-script.
+
+        async function _readMarkdownOrDocx(file) {
+            const name = (file.name || '').toLowerCase();
+            const isDocx = name.endsWith('.docx') || name.endsWith('.doc')
+                || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+            if (isDocx) {
+                const fd = new FormData();
+                fd.append('file', file);
+                const r = await fetch('/api/extract-docx', { method: 'POST', body: fd });
+                const j = await r.json();
+                if (!j || !j.success) throw new Error((j && j.error) || 'Failed to extract .docx');
+                return j.text || '';
+            }
+            return await file.text();
+        }
+
+        function _ensureHiddenLoader(id) {
+            let el = document.getElementById(id);
+            if (!el) {
+                el = document.createElement('input');
+                el.type = 'file';
+                el.id = id;
+                el.accept = '.md,.markdown,.txt,.docx,.doc';
+                el.style.display = 'none';
+                document.body.appendChild(el);
+            }
+            return el;
+        }
+
+        // Build a minimal tabs UI when none exists yet (no workflow has run),
+        // so loaders can render into the YouTube / B-Roll tabs immediately.
+        function _ensureTabsForLoad() {
+            if (document.getElementById('youtubeDetailsContent')
+                && document.getElementById('brollTableContent')) {
+                return; // tabs already present
+            }
+            const resultDiv = document.getElementById('result');
+            if (!resultDiv || typeof createTabbedInterface !== 'function') return;
+            const mainScript = window.currentScript || '';
+            const tabbedHTML = createTabbedInterface(
+                mainScript,        // mainScript
+                null, null, null,  // demo, thumbs, chapter comparisons
+                null, null, null,  // flow original/improved/analysis
+                null, null, null,  // edl content/filename, curl
+                null, null,        // brollImages, grokVideos
+                window._currentBrollTable || null,
+                window._currentYoutubeDetails || null
+            );
+            const headerHtml = '<h3>📂 Loaded Artifacts</h3><p style="color:#94a3b8;">Use the tabs below to review or edit the loaded YouTube / B-Roll content. Run a workflow to fill the rest.</p>';
+            resultDiv.innerHTML = headerHtml + tabbedHTML;
+            resultDiv.className = 'result';
+            resultDiv.style.display = 'block';
+            // Re-render markdown into the freshly created tab divs.
+            try { renderMarkdownContent(mainScript, null, null, null); } catch (_e) {}
+        }
+
+        function loadYouTubeDetailsFromFile() {
+            const inp = _ensureHiddenLoader('_youtubeLoadInput');
+            inp.value = '';
+            inp.onchange = async (ev) => {
+                const f = ev.target.files && ev.target.files[0];
+                if (!f) return;
+                try {
+                    const text = await _readMarkdownOrDocx(f);
+                    window._currentYoutubeDetails = text;
+                    _ensureTabsForLoad();
+                    const div = document.getElementById('youtubeDetailsContent');
+                    if (div) div.innerHTML = (window.marked ? marked.parse(text) : text.replace(/</g, '&lt;'));
+                    const ta = document.getElementById('youtubeDetailsEditor');
+                    if (ta) ta.value = text;
+                    const badge = document.getElementById('ytLoadedBadge');
+                    if (badge) { badge.style.display = ''; badge.title = `Loaded from ${f.name}`; }
+                    if (typeof switchTab === 'function') switchTab('youtubeDetails');
+                    addProgressMessage && addProgressMessage(`📂 Loaded YouTube details from ${f.name} (${text.length} chars)`, 'success');
+                } catch (e) {
+                    alert('Could not load YouTube details file: ' + (e && e.message || e));
+                }
+            };
+            inp.click();
+        }
+
+        function loadBrollTableFromFile() {
+            const inp = _ensureHiddenLoader('_brollLoadInput');
+            inp.value = '';
+            inp.onchange = async (ev) => {
+                const f = ev.target.files && ev.target.files[0];
+                if (!f) return;
+                try {
+                    const text = await _readMarkdownOrDocx(f);
+                    window._currentBrollTable = text;
+                    _ensureTabsForLoad();
+                    const div = document.getElementById('brollTableContent');
+                    if (div) {
+                        try { div.innerHTML = renderBrollTableMarkdown(text); }
+                        catch (_e) { div.innerHTML = (window.marked ? marked.parse(text) : text.replace(/</g, '&lt;')); }
+                    }
+                    const badge = document.getElementById('brollLoadedBadge');
+                    if (badge) { badge.style.display = ''; badge.title = `Loaded from ${f.name}`; }
+                    addProgressMessage && addProgressMessage(`📂 Loaded B-Roll table from ${f.name} (${text.length} chars)`, 'success');
+                    // Per spec: opening a loaded B-Roll table should switch to the
+                    // Shutterstock tab so the user can search for clips. If that tab
+                    // doesn't exist yet (no prior run) fall back to the B-Roll tab.
+                    if (typeof switchTab === 'function') {
+                        const ssBtn = document.querySelector(".tab-button[onclick*=\"'shutterstock'\"]");
+                        if (ssBtn) { switchTab('shutterstock'); }
+                        else { switchTab('brollTable'); }
+                    }
+                } catch (e) {
+                    alert('Could not load B-Roll table file: ' + (e && e.message || e));
+                }
+            };
+            inp.click();
+        }
+
+        function onYouTubeDetailsEdited(value) {
+            window._currentYoutubeDetails = value || '';
+        }
+
+        function toggleYouTubeDetailsEdit() {
+            const preview = document.getElementById('youtubeDetailsContent');
+            const editor = document.getElementById('youtubeDetailsEditor');
+            const btn = document.getElementById('ytEditToggleBtn');
+            if (!preview || !editor || !btn) return;
+            const editing = editor.style.display !== 'none';
+            if (editing) {
+                // Switch back to preview, re-render markdown.
+                const text = editor.value;
+                window._currentYoutubeDetails = text;
+                preview.innerHTML = (window.marked ? marked.parse(text) : text.replace(/</g, '&lt;'));
+                editor.style.display = 'none';
+                preview.style.display = '';
+                btn.innerHTML = '✏️ Edit';
+            } else {
+                // Switch to editor.
+                editor.value = window._currentYoutubeDetails || '';
+                preview.style.display = 'none';
+                editor.style.display = '';
+                btn.innerHTML = '👁️ Preview';
+            }
+        }
         
+        // Extract the HEYGEN READY SCRIPT section out of the assembled main
+        // script blob. Returns the dialogue-only payload (or '' if missing).
+        function extractHeyGenSection(mainScript) {
+            if (!mainScript || typeof mainScript !== 'string') return '';
+            const m = mainScript.match(
+                /#\s*🎬\s*HEYGEN READY SCRIPT[\s\S]*?={3,}\s*([\s\S]*?)(?:\n\s*\n#\s|$)/
+            );
+            if (!m) return '';
+            return m[1].trim();
+        }
+
         // Function to switch tabs
         function switchTab(tabName) {
             // Hide all tab contents
@@ -2799,6 +3125,42 @@ Time management content here...`;
             return div.innerHTML;
         }
 
+        // Toggle a section body (next sibling of the button). The outer
+        // container's own display:none toggling is unaffected — this only
+        // collapses the inner body, so toolbar buttons (e.g. Stop B-roll)
+        // that live in the header remain visible when collapsed if present.
+        function toggleCollapsible(btn) {
+            const body = btn && btn.nextElementSibling;
+            if (!body) return;
+            const isCollapsed = body.style.display === 'none';
+            body.style.display = isCollapsed ? '' : 'none';
+            btn.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+        }
+
+        // The #result panel is rewritten with innerHTML by many code paths,
+        // so its collapse toggle lives OUTSIDE as a sibling. The toggle hides
+        // / shows the #result element directly. A MutationObserver keeps the
+        // button visible whenever #result is shown by other code.
+        function toggleResultPanel(btn) {
+            const panel = document.getElementById('result');
+            if (!panel) return;
+            const isCollapsed = panel.style.display === 'none';
+            panel.style.display = isCollapsed ? 'block' : 'none';
+            btn.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+            const icon = btn.querySelector('.sc-collapse-icon');
+            if (icon) icon.textContent = isCollapsed ? '▼' : '▶';
+        }
+        document.addEventListener('DOMContentLoaded', function () {
+            const panel = document.getElementById('result');
+            const btn = document.getElementById('resultCollapseBtn');
+            if (!panel || !btn) return;
+            const sync = () => {
+                btn.style.display = (panel.style.display && panel.style.display !== 'none') ? '' : 'none';
+            };
+            sync();
+            new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['style'] });
+        });
+
         // Estimate HeyGen video duration from script text.
         // HeyGen avatars speak ~150 wpm by default. Only **Host:** sections are
         // narrated by the avatar, so we extract just those blocks and ignore
@@ -2818,7 +3180,14 @@ Time management content here...`;
             // Visual Cue:, B-roll:, etc. — or another Host: line).
             const hostBlocks = [];
             const hostRe = /(^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*\**\s*/gi;
-            const stopRe = /(^|\n)\s*(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|visual\s+cue\s*:|b-?roll\s*:|on[- ]screen\s*:|graphic\s*:|sfx\s*:|music\s*:|caption\s*:|cut\s+to\s*:|transition\s*:|narrator\s*:|guest\s*:|voiceover\s*:|vo\s*:)/i;
+            // Stop a Host: block when we hit:
+            //   * any speaker/cue label (**Foo:** / ### Foo: / Foo:)
+            //   * a markdown heading line (# / ## / ### …) — important for
+            //     .docx-extracted text where the extractor emits `# Chapter N`
+            //     ahead of each chapter; without this the previous Host block
+            //     would swallow chapter dividers and double-count words.
+            //   * a horizontal rule (--- or ===).
+            const stopRe = /(^|\n)\s*(?:#{1,6}\s+\S|(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|chapter\s+\d|visual\s+cue\s*:|b-?roll\s*:|on[- ]screen\s*:|graphic\s*:|sfx\s*:|music\s*:|caption\s*:|cut\s+to\s*:|transition\s*:|narrator\s*:|guest\s*:|voiceover\s*:|vo\s*:)|---+|===+)/i;
             let m;
             while ((m = hostRe.exec(text)) !== null) {
                 const start = m.index + m[0].length;
@@ -2838,6 +3207,63 @@ Time management content here...`;
                 try { console.warn('[heygenDuration] no Host markers found, using whole-text fallback. Sample:', text.slice(0, 200)); } catch (_) {}
             } else {
                 joined = hostBlocks.join('\n');
+            }
+
+            // CHAPTER-AWARE AUGMENT: many scripts (esp. the SCRIPT_TEMPLATE-style
+            // ones and freshly-pasted drafts) only have a `Host:` label inside
+            // the FINAL HOOK — the chapter dialogue itself is plain prose under
+            // `Chapter N - ...` headings preceded by a single `🎬 VISUAL CUE:`
+            // line. In that case `hostBlocks` only captures the hook (~40 words)
+            // and the rest of the script is silently dropped. Detect that and
+            // splice in the chapter bodies.
+            try {
+                const chapterRe = /(^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?\s*Chapter\s+\d+\b[^\n]*\n/gi;
+                const chapterStarts = [];
+                let cm;
+                while ((cm = chapterRe.exec(text)) !== null) {
+                    chapterStarts.push(cm.index + cm[0].length);
+                }
+                if (chapterStarts.length > 0) {
+                    // End-of-chapter-prose terminator: next Chapter heading,
+                    // Summary:, SUPPORTING RESEARCH, ===, YOUTUBE/HEYGEN section,
+                    // or end-of-text.
+                    const endRe = /\n\s*(?:(?:#{1,6}\s*)?(?:\*\*)?\s*Chapter\s+\d+\b|Summary\s*:|SUPPORTING\s+RESEARCH|===|🎬\s*HEYGEN|YOUTUBE\s+VIDEO\s+DESCRIPTION|Generated\s+by\s+LineDrive)/i;
+                    const chapterBodies = [];
+                    for (let k = 0; k < chapterStarts.length; k++) {
+                        const start = chapterStarts[k];
+                        const rest = text.slice(start);
+                        const stop = rest.search(endRe);
+                        let body = stop === -1 ? rest : rest.slice(0, stop);
+                        // Drop leading 🎬 VISUAL CUE: / Visual Cue: / B-Roll:
+                        // lines — those are direction, not spoken dialogue.
+                        body = body.replace(
+                            /^\s*(?:🎬\s*)?(?:\*{0,2}\s*)?(?:Visual\s*Cue|B-?Roll|On[- ]Screen|Graphic|SFX|Music|Caption|Cut\s+to|Transition)\s*:[^\n]*\n?/gim,
+                            ''
+                        );
+                        chapterBodies.push(body);
+                    }
+                    const chapterJoined = chapterBodies.join('\n');
+                    if (chapterJoined.trim()) {
+                        // Only append if our Host-block extractor missed the
+                        // chapter prose — i.e. the hostBlocks total is dwarfed
+                        // by the chapter prose total.
+                        const hostWords = joined.split(/\s+/).filter(Boolean).length;
+                        const chapterWords = chapterJoined.split(/\s+/).filter(Boolean).length;
+                        if (chapterWords > hostWords * 1.5) {
+                            joined = (joined ? joined + '\n' : '') + chapterJoined;
+                            usedFallback = false; // chapter prose IS spoken content
+                        }
+                    }
+                }
+                // Also fold in a trailing `Summary:` block (last chapter recap).
+                const summaryMatch = text.match(
+                    /(^|\n)\s*Summary\s*:\s*([\s\S]*?)(?=\n\s*(?:SUPPORTING\s+RESEARCH|===|🎬\s*HEYGEN|YOUTUBE\s+VIDEO\s+DESCRIPTION|Generated\s+by\s+LineDrive)|\Z)/i
+                );
+                if (summaryMatch && summaryMatch[2] && summaryMatch[2].trim()) {
+                    joined += '\n' + summaryMatch[2];
+                }
+            } catch (e) {
+                try { console.warn('[heygenDuration] chapter-aware augment failed:', e); } catch (_) {}
             }
 
             // Strip residual markdown, code, links, timecodes, and stage directions
@@ -3106,6 +3532,11 @@ Time management content here...`;
                 : ((thumbnails && Array.isArray(thumbnails.variations))
                     ? thumbnails.variations
                     : []);
+
+            // Pull out the HeyGen-ready dialogue from the main script so we
+            // can render it as its own tab (and so any future scrubbing on
+            // the server is reflected automatically).
+            const heygenText = extractHeyGenSection(mainScript);
             
             // Tab Headers
             html += '<div class="tab-header">';
@@ -3131,6 +3562,12 @@ Time management content here...`;
             if (shutterstockLinks.length > 0) {
                 html += '<button class="tab-button" onclick="switchTab(\'shutterstock\')">🎬 Shutterstock</button>';
             }
+
+            if (brollTable && typeof brollTable === 'string' && brollTable.trim()) {
+                html += '<button class="tab-button" onclick="switchTab(\'brollTable\')">📊 B-Roll Table</button>';
+            } else {
+                html += '<button class="tab-button" onclick="switchTab(\'brollTable\')" title="Load an existing B-Roll table .docx/.md">📊 B-Roll Table <span style=\"opacity:.6;font-size:11px;\">(load)</span></button>';
+            }
             
             if (chapterComparisons && chapterComparisons.length > 0) {
                 html += '<button class="tab-button" onclick="switchTab(\'comparisons\')">📊 Comparisons</button>';
@@ -3152,16 +3589,18 @@ Time management content here...`;
                 html += '<button class="tab-button" onclick="switchTab(\'curl\')">🚀 Curl Commands</button>';
             }
 
+            // HeyGen-ready dialogue (only if we found a HEYGEN section)
+            if (heygenText) {
+                html += '<button class="tab-button" onclick="switchTab(\'heygen\')">🎬 HeyGen Script</button>';
+            }
+
             // YouTube Details tab
             if (youtubeDetails) {
                 html += '<button class="tab-button" onclick="switchTab(\'youtubeDetails\')">📺 YouTube Details</button>';
+            } else {
+                html += '<button class="tab-button" onclick="switchTab(\'youtubeDetails\')" title="Load an existing YouTube upload details .docx/.md">📺 YouTube Details <span style=\"opacity:.6;font-size:11px;\">(load)</span></button>';
             }
-
-            // B-Roll Table tab (separate, focused view of the table)
-            if (brollTable && typeof brollTable === 'string' && brollTable.trim().length > 0) {
-                html += '<button class="tab-button" onclick="switchTab(\'brollTable\')">📋 B-Roll Table</button>';
-            }
-
+            
             html += '</div>'; // End tab-header
             
             // Tab Contents
@@ -3211,6 +3650,23 @@ Time management content here...`;
                 html += '<div id="shutterstockTab" class="tab-content">';
                 html += renderShutterstockLinks(shutterstockLinks);
                 html += '</div>';
+            }
+
+            // B-Roll Table Tab — formatted markdown table + Save-as-Word
+            // Always render the tab so the user can load an existing B-Roll table doc into it.
+            {
+                const _hasBroll = brollTable && typeof brollTable === 'string' && brollTable.trim();
+                html += '<div id="brollTableTab" class="tab-content">';
+                html += '<h3>📊 B-Roll Search Terms Table</h3>';
+                html += '<div style="margin-bottom: 15px; display: flex; gap: 10px; flex-wrap: wrap;">';
+                html += '<button onclick="loadBrollTableFromFile()" class="toolbar-btn" style="display: flex;" title="Load an existing B-Roll table .docx or .md"><span class="toolbar-icon">📂</span><span class="toolbar-text">Load .docx/.md</span></button>';
+                html += '<button onclick="copyBrollTableMarkdown()" class="toolbar-btn" style="display: flex;"><span class="toolbar-icon">📋</span><span class="toolbar-text">Copy Markdown</span></button>';
+                html += '<button onclick="downloadBrollTableMarkdown()" class="toolbar-btn" style="display: flex;"><span class="toolbar-icon">💾</span><span class="toolbar-text">Download .md</span></button>';
+                html += '<button onclick="saveBrollTableAsWord()" class="toolbar-btn" style="display: flex;"><span class="toolbar-icon">💾</span><span class="toolbar-text">Save as Word</span></button>';
+                html += '</div>';
+                html += '<div class="markdown-content" id="brollTableContent">' + (_hasBroll ? '' : '<p style="color:#94a3b8;">No B-Roll table yet. Click <strong>📂 Load .docx/.md</strong> to load an existing one, or run the workflow with <em>B-Roll Table</em> checked.</p>') + '</div>';
+                html += '</div>';
+                if (_hasBroll) { window._currentBrollTable = brollTable; }
             }
             
             // Chapter Comparisons Tab
@@ -3271,6 +3727,22 @@ Time management content here...`;
                 html += '</div>';
             }
             
+            // HeyGen Script Tab (dialogue-only, no headings/title)
+            if (heygenText) {
+                html += '<div id="heygenTab" class="tab-content">';
+                html += '<h3 style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">'
+                      + '<span>🎬 HeyGen Script</span>'
+                      + heygenDurationBadge(heygenText, '#8b5cf6')
+                      + '</h3>';
+                html += '<p style="color:#94a3b8; margin-bottom:10px;">Dialogue only — no title, chapter headings, hooks, or stage directions. Paste straight into HeyGen.</p>';
+                html += '<div style="margin-bottom:10px; display:flex; gap:10px; flex-wrap:wrap;">';
+                html += '<button onclick="copyHeyGenToClipboard()" class="toolbar-btn" style="display:flex;"><span class="toolbar-icon">📋</span><span class="toolbar-text">Copy</span></button>';
+                html += '<button onclick="downloadHeyGenText()" class="toolbar-btn" style="display:flex;"><span class="toolbar-icon">💾</span><span class="toolbar-text">Download .txt</span></button>';
+                html += '</div>';
+                html += `<textarea id="heygenScriptTextarea" readonly style="width:100%; min-height:480px; padding:14px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-family:'SF Mono', Menlo, monospace; font-size:13px; line-height:1.55; white-space:pre-wrap;">${escapeHtml(heygenText)}</textarea>`;
+                html += '</div>';
+            }
+
             // Curl Commands Tab
             if (curlCommands) {
                 html += '<div id="curlTab" class="tab-content">';
@@ -3348,33 +3820,23 @@ Time management content here...`;
                 html += '</div>';
             }
             
-            // YouTube Details Tab
-            if (youtubeDetails) {
+            // YouTube Details Tab — always render so an existing details doc can be loaded.
+            {
+                const _hasYt = !!youtubeDetails;
                 html += '<div id="youtubeDetailsTab" class="tab-content">';
                 html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">';
                 html += '<h3 style="margin:0;">📺 YouTube Upload Details</h3>';
-                html += '<div style="display:flex; gap:8px;">';
+                html += '<div style="display:flex; gap:8px; flex-wrap:wrap;">';
+                html += '<button onclick="loadYouTubeDetailsFromFile()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;" title="Load an existing YouTube details .docx or .md">📂 Load .docx/.md</button>';
+                html += '<button id="ytEditToggleBtn" onclick="toggleYouTubeDetailsEdit()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">✏️ Edit</button>';
                 html += '<button onclick="copyYouTubeDetails()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">📋 Copy All</button>';
                 html += '<button onclick="saveYouTubeDetailsAsWord()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">💾 Save as Word</button>';
+                html += '<button onclick="openPublishToYouTube()" style="background:#dc2626; color:#fff; border:1px solid #b91c1c; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:600;" title="Publish the finished video to the AI for Roz YouTube channel">🚀 Publish to YouTube</button>';
                 html += '</div>';
                 html += '</div>';
-                html += `<div class="markdown-content" id="youtubeDetailsContent"></div>`;
-                html += '</div>';
-            }
-
-            // B-Roll Table Tab (focused, formatted view of the broll table)
-            if (brollTable && typeof brollTable === 'string' && brollTable.trim().length > 0) {
-                html += '<div id="brollTableTab" class="tab-content">';
-                html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">';
-                html += '<h3 style="margin:0;">📋 B-Roll Table</h3>';
-                html += '<div style="display:flex; gap:8px;">';
-                html += '<button onclick="copyBrollTable()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">📋 Copy Markdown</button>';
-                html += '<button onclick="downloadBrollTable()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">💾 Download .md</button>';
-                html += '<button onclick="saveBrollTableAsWord()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:500;">💾 Save as Word</button>';
-                html += '</div>';
-                html += '</div>';
-                html += '<p style="color:#94a3b8; margin-bottom:12px; font-size:0.9em;">Saved server-side at <code>{output_dir}/broll/broll_table.md</code> alongside generated B-roll videos.</p>';
-                html += `<div class="markdown-content" id="brollTableContent"></div>`;
+                // Two views: rendered preview (default) and a textarea editor toggled with the Edit button.
+                html += '<div class="markdown-content" id="youtubeDetailsContent">' + (_hasYt ? '' : '<p style="color:#94a3b8;">No YouTube details yet. Click <strong>📂 Load .docx/.md</strong> to load an existing details document, or run the workflow with <em>YouTube Details</em> checked.</p>') + '</div>';
+                html += '<textarea id="youtubeDetailsEditor" oninput="onYouTubeDetailsEdited(this.value)" style="display:none; width:100%; min-height:420px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:12px; font-family: Menlo, monospace; font-size: 13px; line-height: 1.5;"></textarea>';
                 html += '</div>';
             }
 
@@ -3403,14 +3865,14 @@ Time management content here...`;
                     scriptInputSection.style.display = 'none';
                     topicInputSection.style.display = 'block';
                     primaryBtn.onclick = processWorkflow;
-                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Generate</span>';
+                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Generate Script</span>';
                     primaryBtn.title = 'Generate selected outputs from topic';
                 } else {
                     // Script must be provided, show script input
                     scriptInputSection.style.display = 'block';
                     topicInputSection.style.display = 'none';
                     primaryBtn.onclick = processWorkflow;
-                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Process</span>';
+                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Process Updated Script</span>';
                     primaryBtn.title = 'Process script with selected outputs';
                 }
             }
@@ -3436,9 +3898,10 @@ Time management content here...`;
                 'checkHookSummary',
                 'checkFlowAnalysis',
                 'checkThumbnails',
-                'checkDemoScript'
+                'checkDemoScript',
+                'checkShortenScript'
             ];
-            
+
             checkboxes.forEach(id => {
                 const checkbox = document.getElementById(id);
                 if (checkbox) {
@@ -3460,6 +3923,9 @@ Time management content here...`;
         }
 
         async function processWorkflow() {
+            // Gate: require an Output Directory before any workflow step runs.
+            const ok = await ensureOutputDirSet('generating the script');
+            if (!ok) return;
             // New unified workflow handler based on checkboxes
             const scriptChecked = document.getElementById('checkScript')?.checked || false;
             
@@ -3473,11 +3939,12 @@ Time management content here...`;
             const flowAnalysisChecked = document.getElementById('checkFlowAnalysis')?.checked || false;
             const thumbnailsChecked = document.getElementById('checkThumbnails')?.checked || false;
             const demoChecked = document.getElementById('checkDemoScript')?.checked || false;
+            const shortenChecked = document.getElementById('checkShortenScript')?.checked || false;
             
             // Validate: at least one checkbox must be selected
             if (!scriptChecked && !youtubeChecked && !heygenChecked && 
                 !brollChecked && !brollImagesChecked && !grokVideosChecked &&
-                !hookSummaryChecked && !flowAnalysisChecked && !thumbnailsChecked && !demoChecked) {
+                !hookSummaryChecked && !flowAnalysisChecked && !thumbnailsChecked && !demoChecked && !shortenChecked) {
                 alert('Please select at least one output to generate!');
                 return;
             }
@@ -3519,7 +3986,9 @@ Time management content here...`;
                 hook_summary: document.getElementById('checkHookSummary')?.checked || false,
                 flow_analysis: document.getElementById('checkFlowAnalysis')?.checked || false,
                 thumbnails: document.getElementById('checkThumbnails')?.checked || false,
-                demo: document.getElementById('checkDemoScript')?.checked || false
+                demo: document.getElementById('checkDemoScript')?.checked || false,
+                shorten_script: document.getElementById('checkShortenScript')?.checked || false,
+                shorten_percent: document.getElementById('shortenPercent')?.value || '25'
             };
             
             // Get metadata
@@ -3558,7 +4027,11 @@ Time management content here...`;
                         heygen_template_id: heygenTemplateId,
                         heygen_api_key: heygenApiKey,
                         heygen_voice_id: heygenVoiceId,
-                        grok_api_key: grokApiKey
+                        grok_api_key: grokApiKey,
+                        // Pre-loaded artifacts let the backend skip the corresponding
+                        // agents (Load .docx/.md from the YouTube / B-Roll tabs).
+                        youtube_details_override: window._currentYoutubeDetails || null,
+                        broll_table_override: window._currentBrollTable || null
                     })
                 });
                 
@@ -3639,6 +4112,22 @@ Time management content here...`;
                         window.currentProcessingSessionId = null;
                         const processedScript = message.script || '';
                         const scriptTitle = message.script_title || 'Processed Script';
+
+                        // HOOK-ONLY MODE: backend generated 3 hook options and is
+                        // waiting for the user to pick one. Open the picker modal
+                        // instead of rendering script output. Clear the in-progress
+                        // UI first so the spinner doesn't hang while the modal is up.
+                        if (message.awaiting_hook_selection && Array.isArray(message.hooks) && message.hooks.length > 0) {
+                            try {
+                                addProgressMessage('🎯 Hook options generated — pick one to finalize.', 'success');
+                                updateFooterProgress(100, '🎯 Pick a hook');
+                                preserveDebugLog();
+                                if (progressDiv) progressDiv.style.display = 'none';
+                            } catch (_e) { /* non-fatal */ }
+                            openHookPickerModal(message.hooks, scriptTitle, message.original_script || '', message.hook_labels || []);
+                            return;
+                        }
+
                         const thumbnails = (message.thumbnails && message.thumbnails.length > 0)
                             ? message.thumbnails
                             : ((message.thumbnail_results && message.thumbnail_results.variations)
@@ -3681,7 +4170,6 @@ Time management content here...`;
                             const brollTable = brollTableRoot;
                             const youtubeDetails = message.youtube_details || null;
                             window._currentYoutubeDetails = youtubeDetails;
-                            window._currentBrollTable = brollTable || '';
                             const rowsForSelection = (Array.isArray(brollRows) && brollRows.length > 0)
                                 ? brollRows
                                 : parseBrollRowsFromTable(brollTable);
@@ -3922,7 +4410,9 @@ Time management content here...`;
                     flow_analysis: document.getElementById('checkFlowAnalysis')?.checked || false,
                     thumbnails: document.getElementById('checkThumbnails')?.checked || false,
                     demo: document.getElementById('checkDemoScript')?.checked || false,
-                    all: document.getElementById('checkAll')?.checked || false
+                    all: document.getElementById('checkAll')?.checked || false,
+                    shorten_script: document.getElementById('checkShortenScript')?.checked || false,
+                    shorten_percent: document.getElementById('shortenPercent')?.value || '25'
                 };
                 const grokApiKey = (document.getElementById('grokApiKey')?.value || '').trim();
                 
@@ -4039,6 +4529,25 @@ Time management content here...`;
                         }
                         window.currentProcessingSessionId = null;
                         finalScript = message.script || '';
+
+                        // HOOK-ONLY MODE: backend generated 3 hook options and is
+                        // waiting for the user to pick one. Open the picker modal
+                        // instead of rendering script output. Clear the in-progress
+                        // UI first so the spinner doesn't hang while the modal is up.
+                        if (message.awaiting_hook_selection && Array.isArray(message.hooks) && message.hooks.length > 0) {
+                            try {
+                                addProgressMessage('🎯 Hook options generated — pick one to finalize.', 'success');
+                                updateFooterProgress(100, '🎯 Pick a hook');
+                                preserveDebugLog();
+                                if (progressDiv) progressDiv.style.display = 'none';
+                            } catch (_e) { /* non-fatal */ }
+                            const scriptTitleForHook = message.script_title
+                                || document.getElementById('createTopic')?.value.trim()
+                                || 'Processed Script';
+                            openHookPickerModal(message.hooks, scriptTitleForHook, message.original_script || '', message.hook_labels || []);
+                            return;
+                        }
+
                         const thumbnails = (message.thumbnails && message.thumbnails.length > 0)
                             ? message.thumbnails
                             : ((message.thumbnail_results && message.thumbnail_results.variations)
@@ -4064,7 +4573,6 @@ Time management content here...`;
                         const brollTable = message.broll_table || '';
                         const youtubeDetails = message.youtube_details || null;
                         window._currentYoutubeDetails = youtubeDetails;
-                        window._currentBrollTable = brollTable || '';
                         const rowsForSelection = (Array.isArray(brollRows) && brollRows.length > 0)
                             ? brollRows
                             : parseBrollRowsFromTable(brollTable);
@@ -4451,10 +4959,33 @@ Time management content here...`;
             }
         }
 
+        // HeyGen script tab helpers
+        function copyHeyGenToClipboard() {
+            const ta = document.getElementById('heygenScriptTextarea');
+            if (!ta || !ta.value) { alert('No HeyGen script to copy.'); return; }
+            navigator.clipboard.writeText(ta.value).then(
+                () => { /* success */ },
+                () => { try { ta.select(); document.execCommand('copy'); } catch (_) {} }
+            );
+        }
+
+        function downloadHeyGenText() {
+            const ta = document.getElementById('heygenScriptTextarea');
+            if (!ta || !ta.value) { alert('No HeyGen script to download.'); return; }
+            const blob = new Blob([ta.value], { type: 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'heygen_script.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
+
         // Download curl commands file
         function downloadCurlCommands() {
             const curlContent = window.currentCurlCommands;
-            
             if (!curlContent) {
                 alert('❌ No curl commands available to download');
                 return;
@@ -4813,7 +5344,10 @@ Time management content here...`;
         // Execute selected curl commands
         // Public entry: opens the HeyGen template picker FIRST so the user can
         // confirm or change the template, then runs the actual execute impl.
+        // selectHeyGenTemplate() will rewrite displayed curls to the new ID,
+        // so by the time _executeSelectedCurlsImpl() runs the curls are correct.
         async function executeSelectedCurls() {
+            console.log('[heygen-picker] executeSelectedCurls clicked');
             const checkboxes = document.querySelectorAll('.curl-checkbox');
             const selectedIndices = [];
             checkboxes.forEach((cb, index) => { if (cb.checked) selectedIndices.push(index); });
@@ -4821,18 +5355,23 @@ Time management content here...`;
                 alert('⚠️ Please select at least one curl command to execute');
                 return;
             }
+            // Mark execute-mode and show the template picker; footer buttons drive next step.
             window._heygenExecuteAfterPick = true;
+            console.log('[heygen-picker] _heygenExecuteAfterPick set to true; opening picker');
             try { browseHeyGenTemplates(); } catch (e) { console.warn('browseHeyGenTemplates failed', e); }
             const footer = document.getElementById('heygenTemplateModalFooter');
             if (footer) footer.style.display = 'flex';
         }
 
+        // Footer button: keep current template, close modal, run execution.
         function useCurrentTemplateAndExecute() {
             closeHeyGenModal();
             window._heygenExecuteAfterPick = false;
             _executeSelectedCurlsImpl();
         }
 
+        // Rewrite every displayed curl command + cached copy so the URL points
+        // at the new template ID. Called from selectHeyGenTemplate().
         function applyTemplateIdToCurls(newTemplateId) {
             if (!newTemplateId) return;
             const re = /\/v2\/template\/[A-Za-z0-9_-]+\/generate/g;
@@ -5105,6 +5644,9 @@ Time management content here...`;
         
         // Download HeyGen video function
         async function downloadHeyGenVideo(videoUrl, videoId, chapterName) {
+            // Gate: HeyGen video downloads land under the configured output dir.
+            const __okOD = await ensureOutputDirSet('downloading HeyGen videos');
+            if (!__okOD) return;
             try {
                 const scriptTitle = window.currentScriptTitle || '';
                 
@@ -5411,23 +5953,28 @@ Thank you for watching!`;
                 const line = raw.replace(/\s+$/g, '');
                 const trimmed = line.trim();
                 if (trimmed === '') { flushPara(); continue; }
+                // Separator lines (---, ___, ===) -> <hr>
                 if (/^[_\-=]{3,}$/.test(trimmed)) { flushPara(); out.push('<hr>'); continue; }
                 let m;
+                // Heading: Chapter N - Title  OR  ## Chapter N ...
                 if ((m = trimmed.match(/^(?:#+\s*)?(?:Heading:\s*)?(Chapter\s+\d+[\s\S]*)$/i))) {
                     flushPara();
                     out.push('<h2>' + escapeHtml(m[1]) + '</h2>');
                     continue;
                 }
+                // Host:  or **Host:**  (standalone)
                 if (/^(?:\*\*)?Host:(?:\*\*)?\s*$/i.test(trimmed)) {
                     flushPara();
                     out.push('<h3>Host:</h3>');
                     continue;
                 }
+                // VISUAL CUE: ...   or   **VISUAL CUE:** ...
                 if ((m = trimmed.match(/^(?:\*\*)?VISUAL CUE:(?:\*\*)?\s*(.*)$/i))) {
                     flushPara();
                     out.push('<h4>🎬 VISUAL CUE: ' + escapeHtml(m[1]) + '</h4>');
                     continue;
                 }
+                // Plain prose
                 para.push(line);
             }
             flushPara();
@@ -6026,6 +6573,7 @@ Thank you for watching!`;
         }
 
         async function _pollUploadJob(jobId, fileLabel) {
+            // Poll every 1s until state is done or error.
             const startedAt = Date.now();
             while (true) {
                 let snap = null;
@@ -6043,7 +6591,7 @@ Thank you for watching!`;
                         const elapsed = Math.round((Date.now() - startedAt) / 1000);
                         let etaTxt = '';
                         if (dur && out > 1) {
-                            const rate = out / Math.max(1, elapsed);
+                            const rate = out / Math.max(1, elapsed); // src-secs encoded per real-sec
                             const remaining = Math.max(0, (dur - out) / Math.max(0.01, rate));
                             etaTxt = ` · ETA ${_fmtSecs(remaining)}`;
                         }
@@ -6093,11 +6641,15 @@ Thank you for watching!`;
                     );
                     if (!res.ok || !res.data.success || !res.data.job_id) {
                         failed++;
-                        const err = (res.data && res.data.error) || `HTTP ${res.status}`;
+                        const err = (res.data && res.data.error)
+                            || (res.status === 413
+                                ? `File too large (${(file.size/1024/1024/1024).toFixed(2)} GiB). Increase MAX_UPLOAD_GB on the server.`
+                                : `HTTP ${res.status}`);
                         if (status) {
                             status.style.color = '#f87171';
                             status.textContent = `❌ Upload failed for ${file.name}: ${err}`;
                         }
+                        alert(`❌ Upload failed for ${file.name}\n\n${err}`);
                         _setUploadProgress(null);
                         continue;
                     }
@@ -6173,14 +6725,42 @@ Thank you for watching!`;
                     const _p = _palettes[_h % _palettes.length];
                     const thumbBox = document.createElement('div');
                     thumbBox.className = 'vg-thumb';
+                    // Gradient is always set as a fallback behind the poster/video frame.
+                    thumbBox.style.background = 'linear-gradient(135deg, ' + _p[0] + ' 0%, ' + _p[1] + ' 50%, ' + _p[2] + ' 100%)';
                     if (v.poster_url) {
                         thumbBox.style.backgroundImage = 'url("' + v.poster_url + '")';
-                    } else {
-                        thumbBox.style.background = 'linear-gradient(135deg, ' + _p[0] + ' 0%, ' + _p[1] + ' 50%, ' + _p[2] + ' 100%)';
+                    } else if (v.stream_url) {
+                        // No poster sidecar in blob storage — render the first frame
+                        // of the video itself by loading just metadata + ~0.5s.
+                        const vEl = document.createElement('video');
+                        vEl.muted = true;
+                        vEl.playsInline = true;
+                        vEl.preload = 'metadata';
+                        vEl.src = v.stream_url + (v.stream_url.indexOf('#') === -1 ? '#t=0.5' : '');
+                        vEl.style.position = 'absolute';
+                        vEl.style.inset = '0';
+                        vEl.style.width = '100%';
+                        vEl.style.height = '100%';
+                        vEl.style.objectFit = 'cover';
+                        vEl.style.pointerEvents = 'none';
+                        thumbBox.appendChild(vEl);
                     }
                     const play = document.createElement('div');
                     play.className = 'vg-play';
                     thumbBox.appendChild(play);
+
+                    // Delete (🗑️) button — top-right of thumb
+                    const delBtn = document.createElement('button');
+                    delBtn.type = 'button';
+                    delBtn.title = 'Delete this video from the gallery';
+                    delBtn.textContent = '🗑️';
+                    delBtn.style.cssText = 'position:absolute;top:6px;right:6px;z-index:5;background:rgba(15,23,42,0.85);color:#f87171;border:1px solid #7f1d1d;border-radius:6px;width:30px;height:30px;font-size:14px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;';
+                    delBtn.onclick = async (ev) => {
+                        ev.stopPropagation();
+                        await deleteGalleryVideo(v);
+                    };
+                    thumbBox.appendChild(delBtn);
+
                     card.appendChild(thumbBox);
 
                     const meta = document.createElement('div');
@@ -6206,6 +6786,32 @@ Thank you for watching!`;
             }
         }
 
+        async function deleteGalleryVideo(v) {
+            if (!v || !v.rel_path) {
+                alert('Cannot delete: missing video path.');
+                return;
+            }
+            const label = v.title || v.filename || v.rel_path;
+            if (!confirm(`Delete "${label}" from the Video Gallery?\n\nThis will remove the video from Azure Blob storage (or the local gallery folder) and CANNOT be undone.`)) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/finished-videos/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rel_path: v.rel_path }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    alert('❌ Delete failed: ' + (data.error || `HTTP ${res.status}`));
+                    return;
+                }
+                await loadVideoGallery();
+            } catch (err) {
+                alert('❌ Delete failed: ' + err.message);
+            }
+        }
+
         function playGalleryVideo(v) {
             const modal = document.getElementById('videoPlayerModal');
             const titleEl = document.getElementById('videoPlayerTitle');
@@ -6215,7 +6821,7 @@ Thank you for watching!`;
             videoEl.src = v.stream_url;
             modal.style.display = 'flex';
             const tryPlay = videoEl.play();
-            if (tryPlay && tryPlay.catch) tryPlay.catch(() => {});
+            if (tryPlay && tryPlay.catch) tryPlay.catch(() => { /* user gesture required, controls available */ });
         }
 
         function closeVideoPlayer() {
@@ -6692,6 +7298,160 @@ Thank you for watching!`;
             }
         }
 
+        // ---- Hook Picker modal (hook-only mode) ----
+        // Opened when the user runs hook generation by itself. Lets them pick
+        // one of the three generated hooks and POSTs to /api/finalize-hook to
+        // produce a final script with a single **🎯 FINAL HOOK:** section.
+        function openHookPickerModal(hooks, scriptTitle, originalScript, hookLabels) {
+            // Tear down any previous instance
+            const prev = document.getElementById('hookPickerModal');
+            if (prev) prev.remove();
+
+            const modal = document.createElement('div');
+            modal.id = 'hookPickerModal';
+            modal.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:10000; display:flex; align-items:center; justify-content:center; padding:20px;';
+
+            const inner = document.createElement('div');
+            inner.style.cssText = 'background:#0f172a; border:1px solid #334155; border-radius:8px; max-width:900px; width:100%; max-height:90vh; overflow:auto; padding:20px; color:#e2e8f0; font-family: ui-sans-serif, system-ui;';
+
+            let html = '<h2 style="margin:0 0 4px 0; color:#10b981;">🎯 Pick Your Opening Hook</h2>';
+            html += '<p style="margin:0 0 16px 0; color:#94a3b8; font-size:0.9em;">'
+                  + 'Select one to add as the <b>FINAL HOOK:</b> section in your script. '
+                  + 'The previously chosen hook (if any) will be replaced.</p>';
+
+            const labels = Array.isArray(hookLabels) ? hookLabels : [];
+            (hooks || []).forEach((hookText, i) => {
+                const words = (hookText || '').trim().split(/\s+/).filter(Boolean).length;
+                const seconds = Math.round((words / 150) * 60);
+                const mmss = Math.floor(seconds / 60) + ':' + (seconds % 60 < 10 ? '0' : '') + (seconds % 60);
+                const labelRaw = (labels[i] || ('OPTION ' + (i + 1)));
+                const isCurrent = /current/i.test(labelRaw);
+                const labelColor = isCurrent ? '#fbbf24' : '#38bdf8';
+                html += '<label style="display:block; margin-bottom:12px; padding:12px; background:'
+                      + (isCurrent ? '#1f2937' : '#1e293b')
+                      + '; border:1px solid '
+                      + (isCurrent ? '#fbbf24' : '#334155')
+                      + '; border-radius:6px; cursor:pointer;">'
+                      + '<div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">'
+                      +   '<input type="radio" name="hookPickerChoice" value="' + i + '"' + (i === 0 ? ' checked' : '') + ' style="margin:0;">'
+                      +   '<b style="color:' + labelColor + ';">' + escapeHtml(String(labelRaw).toUpperCase()) + '</b>'
+                      +   '<span style="color:#94a3b8; font-size:0.85em;">~' + mmss + ' · ' + words + ' words</span>'
+                      + '</div>'
+                      + '<div style="white-space:pre-wrap; color:#e2e8f0; font-size:0.95em; line-height:1.5;">'
+                      +   escapeHtml(hookText)
+                      + '</div>'
+                      + '</label>';
+            });
+
+            html += '<div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">'
+                  + '<button id="hookPickerCancelBtn" style="padding:8px 16px; background:#334155; color:#e2e8f0; border:none; border-radius:4px; cursor:pointer;">Cancel</button>'
+                  + '<button id="hookPickerApplyBtn" style="padding:8px 16px; background:linear-gradient(135deg,#10b981,#059669); color:white; border:none; border-radius:4px; cursor:pointer; font-weight:600;">✅ Use This Hook</button>'
+                  + '</div>'
+                  + '<div id="hookPickerStatus" style="margin-top:10px; font-size:0.85em; color:#94a3b8;"></div>';
+
+            inner.innerHTML = html;
+            modal.appendChild(inner);
+            document.body.appendChild(modal);
+
+            document.getElementById('hookPickerCancelBtn').addEventListener('click', () => {
+                modal.remove();
+            });
+
+            document.getElementById('hookPickerApplyBtn').addEventListener('click', async () => {
+                const choice = document.querySelector('input[name="hookPickerChoice"]:checked');
+                if (!choice) return;
+                const idx = parseInt(choice.value, 10);
+                const chosenText = (hooks[idx] || '').trim();
+                const status = document.getElementById('hookPickerStatus');
+                status.textContent = '⏳ Saving final script…';
+                status.style.color = '#94a3b8';
+
+                try {
+                    const resp = await fetch('/api/finalize-hook', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            hook_text: chosenText,
+                            script_title: scriptTitle || 'Untitled Script',
+                            original_script: originalScript || ''
+                        })
+                    });
+                    const data = await resp.json();
+                    if (!data.success) {
+                        status.textContent = '❌ ' + (data.error || 'Failed to save');
+                        status.style.color = '#ef4444';
+                        return;
+                    }
+                    status.textContent = '✅ Saved. Updating script…';
+                    status.style.color = '#10b981';
+
+                    // Replace the script input with the final output and close.
+                    const ta = document.getElementById('scriptInput');
+                    if (ta) {
+                        ta.value = data.script || '';
+                        if (typeof updateScriptInputDurationBadge === 'function') {
+                            updateScriptInputDurationBadge();
+                        }
+                        if (typeof renderScriptInputPreview === 'function') {
+                            renderScriptInputPreview();
+                        }
+                        if (typeof switchScriptInputTab === 'function') {
+                            switchScriptInputTab('preview');
+                        }
+                    }
+
+                    // Also render the final script in the bottom results area
+                    // so the user can see it (matches the normal processing flow).
+                    try {
+                        window.currentScript = data.script || '';
+                        window.currentScriptTitle = data.script_title || scriptTitle;
+                        const resultDiv = document.getElementById('result');
+                        if (resultDiv && typeof createTabbedInterface === 'function') {
+                            const tabbedHTML = createTabbedInterface(
+                                data.script || '',
+                                null, [], null, null, null, null,
+                                null, null, null, null, null, '', null
+                            );
+                            resultDiv.innerHTML =
+                                '<h3>🎯 Final Hook Applied</h3>'
+                                + '<p><strong>Title:</strong> '
+                                + (data.script_title || scriptTitle || 'Script')
+                                + '</p>' + tabbedHTML;
+                            resultDiv.className = 'result';
+                            resultDiv.style.display = 'block';
+                            setTimeout(() => {
+                                const contentDiv = document.getElementById('mainScriptContent');
+                                if (contentDiv) {
+                                    contentDiv.setAttribute('data-original-markdown', data.script || '');
+                                }
+                                if (typeof renderMarkdownContent === 'function') {
+                                    renderMarkdownContent(data.script || '', null);
+                                }
+                                resultDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }, 150);
+                            // Reveal common toolbar buttons.
+                            ['wordBtn', 'markdownBtn', 'saveBtn'].forEach(id => {
+                                const el = document.getElementById(id);
+                                if (el) el.style.display = 'inline-block';
+                            });
+                        }
+                    } catch (_e) { /* non-fatal render error */ }
+
+                    addProgressMessage('🎯 FINAL HOOK applied to script', 'success');
+                    if (data.markdown_path) {
+                        addProgressMessage('💾 Saved → ' + data.markdown_path, 'info');
+                    }
+                    setTimeout(() => modal.remove(), 600);
+                } catch (e) {
+                    status.textContent = '❌ ' + (e.message || e);
+                    status.style.color = '#ef4444';
+                }
+            });
+        }
+
+        // Minimal HTML escaper for safe text injection in hook picker.
+        // (Reuses the project-wide escapeHtml defined earlier in this file.)
+
         // ---- API Keys modal (Google / HeyGen / Grok) ----
         function openApiKeysModal() {
             const modal = document.getElementById('apiKeysModal');
@@ -6947,9 +7707,44 @@ Thank you for watching!`;
             if (input) setTimeout(() => input.focus(), 50);
         }
 
+        // Promise-based gate: ensures an Output Directory is set before
+        // proceeding with an operation that needs one (Generate Script,
+        // HeyGen actions, Save Outputs, DaVinci project creation, etc.).
+        //   - If output_dir is already set, resolves true immediately.
+        //   - Otherwise opens the modal and resolves true after Save,
+        //     or false if the user closes/cancels without saving.
+        async function ensureOutputDirSet(reasonLabel) {
+            try {
+                const resp = await fetch('/api/output-dir');
+                const data = await resp.json();
+                const current = (data && data.success && (data.output_dir || '').trim()) || '';
+                if (current) {
+                    window.currentOutputDirBase = current;
+                    window.currentOutputDir = current;
+                    return true;
+                }
+            } catch (e) {
+                // Fall through to prompt.
+            }
+            return new Promise(async (resolve) => {
+                await openOutputDirModal();
+                const status = document.getElementById('outputDirModalStatus');
+                if (status && reasonLabel) {
+                    status.style.color = '#fbbf24';
+                    status.textContent = `⚠️ Set an Output Directory before ${reasonLabel}.`;
+                }
+                window.__outputDirGateResolve = (ok) => {
+                    window.__outputDirGateResolve = null;
+                    resolve(!!ok);
+                };
+            });
+        }
+
         function closeOutputDirModal() {
             const modal = document.getElementById('outputDirModal');
             if (modal) modal.style.display = 'none';
+            // If a gate is awaiting this modal, treat close-without-save as cancel.
+            if (window.__outputDirGateResolve) window.__outputDirGateResolve(false);
         }
 
         async function saveOutputDir() {
@@ -6974,7 +7769,17 @@ Thank you for watching!`;
                 refreshOutputDirPreview();
                 status.style.color = '#34d399';
                 status.textContent = '✅ Saved: ' + (data.output_dir || '(cleared)');
-                setTimeout(closeOutputDirModal, 800);
+                // Resolve any awaiting gate (true only if a non-empty path was saved).
+                if (window.__outputDirGateResolve) {
+                    const ok = !!(data.output_dir || '').trim();
+                    const resolver = window.__outputDirGateResolve;
+                    window.__outputDirGateResolve = null;
+                    resolver(ok);
+                }
+                setTimeout(() => {
+                    const modal = document.getElementById('outputDirModal');
+                    if (modal) modal.style.display = 'none';
+                }, 800);
             } catch (err) {
                 status.style.color = '#f87171';
                 status.textContent = '❌ ' + err.message;
@@ -7091,11 +7896,9 @@ Thank you for watching!`;
 
         async function saveAllOutputs(silent) {
             if (!window.currentOutputDir) {
-                if (!silent) {
-                    alert('Set an Output Directory first (📁 Output Dir button).');
-                    openOutputDirModal();
-                }
-                return;
+                if (silent) return;
+                const ok = await ensureOutputDirSet('saving documents');
+                if (!ok) return;
             }
             const payload = _collectCurrentOutputs();
             try {
@@ -7135,6 +7938,160 @@ Thank you for watching!`;
         }
 
         document.addEventListener('DOMContentLoaded', loadOutputDir);
+
+        // ============================================================
+        // Icon-only mode for the WORKFLOW CHECKBOX ROW only.
+        // Splits each checkbox label into emoji + text, hides the text,
+        // shows it as a tooltip on hover. Does NOT touch any <button>.
+        // ============================================================
+        (function () {
+            const STYLE_ID = 'sc-checkbox-iconify-style';
+            if (!document.getElementById(STYLE_ID)) {
+                const s = document.createElement('style');
+                s.id = STYLE_ID;
+                s.textContent = `
+                    /* Shrink the checkbox row container so labels are not stretched
+                       by the grid; let them flow inline and size to content. */
+                    .sc-checkbox-row { display: flex !important; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+                    .sc-checkbox-iconify {
+                        padding: 6px 10px !important;
+                        width: auto !important;
+                        flex: 0 0 auto;
+                        transition: background 0.12s ease;
+                        min-height: 40px;
+                        align-items: center;
+                    }
+                    /* Text reveal: inherits the label's original 0.8em sizing. */
+                    .sc-checkbox-iconify .sc-cb-text {
+                        display: none;
+                    }
+                    .sc-checkbox-iconify:hover .sc-cb-text,
+                    .sc-checkbox-iconify:focus-within .sc-cb-text { display: inline; margin-left: 6px; }
+                    .sc-checkbox-iconify:hover { background: #273449 !important; }
+                `;
+                document.head.appendChild(s);
+            }
+
+            const EMOJI_RE = /^(?:\p{Extended_Pictographic}(?:\u200D\p{Extended_Pictographic})*[\uFE0E\uFE0F]?[\u{1F3FB}-\u{1F3FF}]?\s*)+/u;
+
+            // The 12 workflow checkboxes we want to iconify.
+            const CHECKBOX_IDS = [
+                'checkScript', 'checkYouTubeDetails', 'checkHeyGenReady',
+                'checkBRollTable', 'checkBRollImages', 'checkGrokVideos',
+                'checkHookSummary', 'checkShortenScript', 'checkFlowAnalysis',
+                'checkThumbnails', 'checkDemoScript',
+            ];
+
+            function iconifyLabel(label) {
+                if (!label || label.dataset.scIconified === '1') return;
+                // Find the FIRST <span> child that contains the emoji+text label.
+                const spans = label.querySelectorAll(':scope > span');
+                for (const span of spans) {
+                    const txt = span.textContent || '';
+                    const m = txt.match(EMOJI_RE);
+                    if (!m) continue;
+                    const emoji = m[0].trim();
+                    const rest = txt.slice(m[0].length).trim();
+                    if (!rest) break; // already icon-only
+                    span.textContent = emoji;
+                    // Inline !important is the only way to override the
+                    // inline font-size:0.8em !important on these spans.
+                    span.style.setProperty('font-size', '24px', 'important');
+                    span.style.setProperty('line-height', '1', 'important');
+                    const tail = document.createElement('span');
+                    tail.className = 'sc-cb-text';
+                    tail.textContent = ' ' + rest;
+                    span.parentNode.insertBefore(tail, span.nextSibling);
+                    // Tooltip on the whole label, preserving any existing title.
+                    if (!label.getAttribute('title')) {
+                        label.setAttribute('title', rest);
+                    }
+                    break;
+                }
+                label.classList.add('sc-checkbox-iconify');
+                label.dataset.scIconified = '1';
+            }
+
+            function applyAll() {
+                CHECKBOX_IDS.forEach(id => {
+                    const cb = document.getElementById(id);
+                    if (!cb) return;
+                    const lbl = cb.closest('label');
+                    if (lbl) {
+                        iconifyLabel(lbl);
+                        // Tag the parent grid container exactly once so its
+                        // CSS switches from "grid auto-fit minmax(100px,1fr)"
+                        // (which stretches every label) to a flex row that
+                        // sizes each pill to content.
+                        const grid = lbl.parentElement;
+                        if (grid && !grid.classList.contains('sc-checkbox-row')) {
+                            grid.classList.add('sc-checkbox-row');
+                        }
+                    }
+                });
+            }
+
+            applyAll();
+            // Re-apply if the DOM changes (defensive).
+            const obs = new MutationObserver(applyAll);
+            obs.observe(document.body, { childList: true, subtree: true });
+        })();
+
+        // ============================================================
+        // Icon-only mode for the HeyGen CONFIG TOOLBAR buttons only.
+        // (Browse / Details / Voices / Test Generate / API Keys)
+        // Does NOT touch dialog/modal/sidebar/inline-action buttons.
+        // ============================================================
+        (function () {
+            const STYLE_ID = 'sc-toolbar-iconify-style';
+            if (!document.getElementById(STYLE_ID)) {
+                const s = document.createElement('style');
+                s.id = STYLE_ID;
+                s.textContent = `
+                    .sc-toolbar-iconify .sc-btn-label { display: none; }
+                    .sc-toolbar-iconify:hover .sc-btn-label,
+                    .sc-toolbar-iconify:focus-visible .sc-btn-label { display: inline; margin-left: 6px; }
+                `;
+                document.head.appendChild(s);
+            }
+
+            const EMOJI_RE = /^(?:\p{Extended_Pictographic}(?:\u200D\p{Extended_Pictographic})*[\uFE0E\uFE0F]?[\u{1F3FB}-\u{1F3FF}]?\s*)+/u;
+
+            function iconifyButton(btn) {
+                if (!btn || btn.dataset.scToolbarIcon === '1') return;
+                const raw = (btn.textContent || '').trim();
+                if (!raw) { btn.dataset.scToolbarIcon = '1'; return; }
+                const m = raw.match(EMOJI_RE);
+                if (!m) { btn.dataset.scToolbarIcon = '1'; return; }
+                const emoji = m[0].trim();
+                const rest = raw.slice(m[0].length).trim();
+                if (!rest) { btn.dataset.scToolbarIcon = '1'; return; }
+                if (!btn.getAttribute('title')) btn.setAttribute('title', rest);
+                // Rebuild: leading emoji text node + hidden label span.
+                btn.textContent = '';
+                btn.appendChild(document.createTextNode(emoji));
+                const span = document.createElement('span');
+                span.className = 'sc-btn-label';
+                span.textContent = ' ' + rest;
+                btn.appendChild(span);
+                btn.classList.add('sc-toolbar-iconify');
+                btn.dataset.scToolbarIcon = '1';
+            }
+
+            function applyToolbar() {
+                // Anchor on the HeyGen Template ID input — its parent form-group
+                // is the toolbar row we want to compress.
+                const anchor = document.getElementById('heygenTemplateId');
+                if (!anchor) return;
+                const row = anchor.closest('.form-group');
+                if (!row) return;
+                row.querySelectorAll(':scope button').forEach(iconifyButton);
+            }
+
+            applyToolbar();
+            const obs2 = new MutationObserver(applyToolbar);
+            obs2.observe(document.body, { childList: true, subtree: true });
+        })();
     </script>
     
     <!-- HeyGen Template Details Modal -->
@@ -7162,7 +8119,7 @@ Thank you for watching!`;
             </div>
             <div id="heygenTemplateModalFooter" style="display:flex; padding:12px 20px; border-top:1px solid #334155; gap:8px; justify-content:flex-end;">
                 <button type="button" onclick="closeHeyGenModal()" style="padding:8px 14px; background:#334155; color:#e2e8f0; border:none; border-radius:6px; cursor:pointer; font-size:0.85em;">Cancel</button>
-                <button onclick="useCurrentTemplateAndExecute()" style="padding:8px 14px; background:linear-gradient(135deg,#10b981,#059669); color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:0.85em; font-weight:600;">▶️ Use Current Template &amp; Execute</button>
+                <button type="button" onclick="useCurrentTemplateAndExecute()" style="padding:8px 14px; background:linear-gradient(135deg,#10b981,#059669); color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:0.85em; font-weight:600;">▶️ Use Current Template &amp; Execute</button>
             </div>
         </div>
     </div>
@@ -7219,28 +8176,36 @@ Thank you for watching!`;
     }
 
     function selectHeyGenTemplate(tid) {
+        console.log('[heygen-picker] selectHeyGenTemplate', tid, 'execAfterPick=', window._heygenExecuteAfterPick);
         document.getElementById('heygenTemplateId').value = tid;
+        // Keep displayed curl commands in sync with the chosen template.
         try { applyTemplateIdToCurls(tid); } catch (e) { console.warn('applyTemplateIdToCurls failed', e); }
+        // Capture flag BEFORE close (close resets it).
         const shouldExecute = !!window._heygenExecuteAfterPick;
         closeHeyGenModal();
+        console.log('[heygen-picker] shouldExecute=', shouldExecute, 'impl typeof=', typeof _executeSelectedCurlsImpl);
         if (shouldExecute) {
-            try { _executeSelectedCurlsImpl(); } catch (e) { console.error('execute impl failed', e); }
+            try {
+                if (typeof _executeSelectedCurlsImpl !== 'function') {
+                    console.error('[heygen-picker] _executeSelectedCurlsImpl missing on window');
+                    alert('Internal error: execute impl not found. Hard-refresh the page (Cmd+Shift+R).');
+                    return;
+                }
+                _executeSelectedCurlsImpl();
+            } catch (e) { console.error('execute impl failed', e); alert('Execute failed: ' + e.message); }
         }
     }
 
     function closeHeyGenModal() {
         const m = document.getElementById('heygenTemplateModal');
         if (m) m.style.display = 'none';
-        // Cancel / X / backdrop / Esc all cancel execute-after-pick.
+        // Clicking Cancel / X / backdrop / Esc all cancel execute-after-pick.
         window._heygenExecuteAfterPick = false;
     }
 
     // Close modal on backdrop click
     document.getElementById('heygenTemplateModal').addEventListener('click', function(e) {
         if (e.target === this) closeHeyGenModal();
-    });
-    document.getElementById('heygenDetailModal').addEventListener('click', function(e) {
-        if (e.target === this) closeHeyGenDetailModal();
     });
 
     // Esc closes the HeyGen template picker (or details modal) when open.
@@ -7255,6 +8220,9 @@ Thank you for watching!`;
         if (d && d.style.display && d.style.display !== 'none') {
             try { closeHeyGenDetailModal(); } catch (_) { d.style.display = 'none'; }
         }
+    });
+    document.getElementById('heygenDetailModal').addEventListener('click', function(e) {
+        if (e.target === this) closeHeyGenDetailModal();
     });
 
     function viewHeyGenTemplateDetails() {
@@ -7653,6 +8621,914 @@ Thank you for watching!`;
             resultEl.style.borderColor = '#f87171';
         });
     }
+    </script>
+
+    <!-- ============================================================
+         Publish to YouTube modal (AI for Roz channel)
+         ============================================================ -->
+    <div id="publishYouTubeModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:flex-start; justify-content:center; overflow-y:auto; padding:40px 20px;">
+      <div style="background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:10px; max-width:780px; width:100%; padding:24px; box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <h3 style="margin:0;">🚀 Publish to YouTube — AI for Roz</h3>
+          <button onclick="closePublishToYouTube()" style="background:transparent; color:#94a3b8; border:none; font-size:24px; cursor:pointer;">×</button>
+        </div>
+
+        <div id="ytAuthBanner" style="display:none; background:#7c2d12; color:#fed7aa; padding:10px 12px; border-radius:6px; margin-bottom:14px; font-size:13px;"></div>
+
+        <style>
+          .yt-acc { background:#0b1220; border:1px solid #334155; border-radius:8px; margin-bottom:10px; overflow:hidden; }
+          .yt-acc > summary { cursor:pointer; padding:10px 14px; font-weight:600; list-style:none; user-select:none;
+                              display:flex; align-items:center; gap:8px; background:#1e293b; color:#e2e8f0; }
+          .yt-acc > summary::-webkit-details-marker { display:none; }
+          .yt-acc > summary::before { content:'▶'; font-size:10px; color:#94a3b8; transition:transform .15s; display:inline-block; }
+          .yt-acc[open] > summary::before { transform:rotate(90deg); }
+          .yt-acc > summary:hover { background:#273449; }
+          .yt-acc-body { padding:12px 14px; }
+          .yt-acc-sub { font-weight:400; font-size:12px; color:#94a3b8; margin-left:auto; }
+        </style>
+
+        <details class="yt-acc" open>
+          <summary>🎬 Video file <span class="yt-acc-sub" id="ytVideoSummary"></span></summary>
+          <div class="yt-acc-body">
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <input id="ytVideoPath" type="text" placeholder="/full/path/to/finished-video.mp4"
+                     style="flex:1; min-width:240px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 10px; border-radius:6px; font-family:monospace; font-size:12px;">
+              <button onclick="browseForYouTubeVideo()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px 12px; border-radius:6px; cursor:pointer;" title="Browse for a video file on disk">📂 Browse</button>
+            </div>
+            <div id="ytVideoPreviewWrap" style="display:none; margin-top:8px;">
+              <video id="ytVideoPreview" controls preload="metadata" muted
+                     style="width:100%; max-height:240px; background:#000; border:1px solid #334155; border-radius:6px;"></video>
+              <div id="ytVideoPreviewMeta" style="font-size:11px; color:#64748b; margin-top:4px;"></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="yt-acc">
+          <summary>🔒 Visibility &amp; audience <span class="yt-acc-sub" id="ytVisibilitySummary">Private · Not for kids · Notify subs</span></summary>
+          <div class="yt-acc-body">
+            <div style="margin-bottom:14px;">
+              <label style="display:block; font-weight:600; margin-bottom:6px;">Privacy <span style="color:#fca5a5; font-weight:400; font-size:12px;">(public toggle is done in YouTube Studio)</span></label>
+              <select id="ytPrivacy" style="width:100%; height:auto; box-sizing:border-box; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px; font-size:14px; line-height:1.4;">
+                <option value="private" selected>Private (recommended — review before going public)</option>
+                <option value="unlisted">Unlisted (anyone with the link)</option>
+              </select>
+            </div>
+            <div style="margin-bottom:14px;">
+              <label style="display:block; font-weight:600; margin-bottom:6px;">Audience</label>
+              <select id="ytMadeForKids" style="width:100%; height:auto; box-sizing:border-box; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px; font-size:14px; line-height:1.4;">
+                <option value="false">Not made for kids</option>
+                <option value="true">Made for kids</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block; font-weight:600; margin-bottom:6px;">
+                <input type="checkbox" id="ytNotifySubs" checked> Notify subscribers
+              </label>
+            </div>
+          </div>
+        </details>
+
+        <details class="yt-acc" open>
+          <summary>📝 Video details <span class="yt-acc-sub" id="ytDetailsSummary">title, description, tags, hashtags, category</span></summary>
+          <div class="yt-acc-body">
+            <div style="margin-bottom:10px;">
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">Title (max 100) — you set this</label>
+              <input id="ytTitle" type="text" maxlength="100" placeholder="Enter the video title for YouTube…"
+                     style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+            </div>
+            <div style="margin-bottom:10px;">
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">Description (max 5000)</label>
+              <textarea id="ytDescription" rows="8" maxlength="5000"
+                        style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px; font-family:inherit;"></textarea>
+            </div>
+            <div style="margin-bottom:10px;">
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">
+                Tags (comma-separated). Tip: for multi-word phrases use
+                <strong>hyphens</strong> instead of spaces, e.g.
+                <code>ai-myths, generative-ai, prompt-engineering</code> —
+                YouTube treats hyphenated tokens as a single keyword.
+              </label>
+              <input id="ytTags" type="text"
+                     style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+            </div>
+            <div style="margin-bottom:10px;">
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">
+                Hashtags (comma or space-separated, e.g. <code>AI, Roz, vibecoding</code>) — appended to the description; first 3 appear above the title
+              </label>
+              <input id="ytHashtags" type="text" placeholder="AI, Roz, vibecoding"
+                     style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+            </div>
+            <div>
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">YouTube Category ID</label>
+              <select id="ytCategoryId" style="width:100%; height:auto; box-sizing:border-box; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px; font-size:14px; line-height:1.4;">
+                <option value="27">27 — Education</option>
+                <option value="28">28 — Science &amp; Technology</option>
+                <option value="26">26 — Howto &amp; Style</option>
+                <option value="22">22 — People &amp; Blogs</option>
+                <option value="24">24 — Entertainment</option>
+                <option value="25">25 — News &amp; Politics</option>
+              </select>
+            </div>
+          </div>
+        </details>
+
+        <details class="yt-acc">
+          <summary>⚙️ Advanced settings <span class="yt-acc-sub" id="ytAdvancedSummary">Synthetic: yes · en-US · embed on</span></summary>
+          <div class="yt-acc-body">
+            <div style="margin-bottom:12px;">
+              <label style="display:block; font-weight:600; margin-bottom:6px;">
+                <input type="checkbox" id="ytSyntheticMedia" checked>
+                Altered content (synthetic media disclosure)
+              </label>
+              <div style="font-size:11px; color:#94a3b8; margin-left:22px;">
+                Required by YouTube for AI-cloned voices / synthetic avatars.
+                Sets <code>status.containsSyntheticMedia = true</code>.
+              </div>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+              <div style="flex:1; min-width:160px;">
+                <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">Video language (metadata)</label>
+                <input id="ytDefaultLanguage" type="text" value="en-US"
+                       style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+              </div>
+              <div style="flex:1; min-width:160px;">
+                <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">Spoken-audio language</label>
+                <input id="ytDefaultAudioLanguage" type="text" value="en-US"
+                       style="width:100%; background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+              </div>
+            </div>
+            <div style="margin-bottom:12px;">
+              <label style="display:block; font-size:12px; color:#94a3b8; margin-bottom:4px;">Recording date</label>
+              <input id="ytRecordingDate" type="date"
+                     style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:8px; border-radius:6px;">
+            </div>
+            <div style="margin-bottom:12px;">
+              <label style="display:block; font-weight:600; margin-bottom:6px;">
+                <input type="checkbox" id="ytEmbeddable" checked> Allow embedding
+              </label>
+            </div>
+
+            <div style="margin-top:14px; padding:10px 12px; background:#0b1220; border:1px solid #334155; border-radius:6px;">
+              <div style="font-weight:600; margin-bottom:6px;">🎙️ Captions (.srt)</div>
+              <div style="font-size:12px; color:#94a3b8; margin-bottom:8px;">
+                Generate a YouTube-uploadable <code>.srt</code> from the
+                video's audio using local Whisper. The DaVinci timeline is
+                <strong>not</strong> modified — you upload the file in
+                YouTube Studio → Subtitles.
+              </div>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <button onclick="generateYouTubeSrt()" id="ytSrtBtn"
+                        style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">
+                  Generate captions (.srt)
+                </button>
+                <select id="ytSrtModel" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:6px; font-size:12px; height:auto;">
+                  <option value="tiny">tiny (fastest, low quality)</option>
+                  <option value="base">base</option>
+                  <option value="small">small</option>
+                  <option value="medium" selected>medium (recommended)</option>
+                  <option value="large">large (slowest, best)</option>
+                </select>
+                <span id="ytSrtStatus" style="font-size:12px; color:#94a3b8;"></span>
+              </div>
+            </div>
+
+            <details style="margin-top:14px; background:#0b1220; border:1px solid #334155; border-radius:6px;">
+              <summary style="cursor:pointer; padding:8px 12px; font-size:12px; color:#fbbf24;">
+                ⚠️ Settings that the YouTube Data API does NOT expose (must be set in YouTube Studio after upload)
+              </summary>
+              <div style="padding:10px 14px; font-size:12px; color:#94a3b8; line-height:1.6;">
+                These fields exist only in YouTube Studio — there is no public
+                API to set them. After publishing, open the video in Studio
+                and configure:
+                <ul style="margin:6px 0 0 16px; padding:0;">
+                  <li>Shorts sampling (Allow / Don't allow)</li>
+                  <li>Comments — Allow all / Hold for review / Disable</li>
+                  <li>Comment ranking — Top comments / Newest</li>
+                  <li>Automatic chapters — On / Off</li>
+                  <li>Caption certification</li>
+                  <li>Self-rated content categories (Inappropriate language, Adult content, Violence, Harmful or dangerous acts, Hateful & derogatory content, Recreational drugs, Firearms, Controversial issues, Tobacco)</li>
+                </ul>
+                Title / description / tags / category / thumbnail / playlists /
+                privacy / made-for-kids / synthetic media / language /
+                recording date / embedding ARE handled here automatically.
+              </div>
+            </details>
+            <details style="margin-top:8px; background:#0b1220; border:1px solid #334155; border-radius:6px;">
+              <summary style="cursor:pointer; padding:8px 12px; font-size:12px; color:#fbbf24;">
+                🃏 Cards (also Studio-only)
+              </summary>
+              <div style="padding:10px 14px; font-size:12px; color:#94a3b8; line-height:1.6;">
+                The YouTube Data API has no endpoint for in-video cards
+                (link to playlist / video / channel). You must add cards
+                manually in YouTube Studio → Editor → Cards. Playlists you
+                might want to link can be loaded via the Playlists section
+                above (their IDs / titles will be in the publish result for
+                copy-paste).
+              </div>
+            </details>
+          </div>
+        </details>
+
+        <details class="yt-acc">
+          <summary>🖼️ Thumbnail <span class="yt-acc-sub" id="ytThumbSummary">none selected</span></summary>
+          <div class="yt-acc-body">
+            <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">
+              From <code>&lt;project&gt;/thumbnails/</code> next to the selected video, or browse to upload.
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
+              <button onclick="browseForYouTubeThumbnail()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;" title="Upload a thumbnail image (PNG/JPG, &lt; 2 MB)">📂 Browse for Thumbnail…</button>
+              <span id="ytThumbBrowseStatus" style="font-size:12px; color:#94a3b8;"></span>
+            </div>
+            <input id="ytThumbFileInput" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" style="display:none;">
+            <div id="ytThumbStatus" style="font-size:12px; color:#64748b; margin-bottom:6px;">Pick a video to load thumbnails…</div>
+            <div id="ytThumbGallery" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:8px;"></div>
+            <input id="ytThumbnailPath" type="hidden" value="">
+            <div id="ytThumbPreviewWrap" style="display:none; margin-top:8px;">
+              <div style="font-size:11px; color:#94a3b8; margin-bottom:4px;">Selected thumbnail preview:</div>
+              <img id="ytThumbPreview" alt="thumbnail preview"
+                   style="max-width:320px; max-height:180px; background:#000; border:1px solid #334155; border-radius:6px; display:block;">
+              <div id="ytThumbPreviewMeta" style="font-size:11px; color:#64748b; margin-top:4px;"></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="yt-acc">
+          <summary>📋 Playlists <span class="yt-acc-sub" id="ytPlaylistSummary">none selected</span></summary>
+          <div class="yt-acc-body">
+            <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">
+              The video will be added to every playlist you check.
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
+              <button onclick="loadYouTubePlaylists()" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;" title="Fetch the list of playlists on this channel">📋 Load Playlists from My Channel</button>
+              <input id="ytPlaylistFilter" type="text" placeholder="Filter…" style="flex:1; min-width:120px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:6px 8px; font-size:12px; height:auto; display:none;">
+              <span id="ytPlaylistStatus" style="font-size:12px; color:#94a3b8;">Click to load (will trigger OAuth re-consent on first use)</span>
+            </div>
+            <div id="ytPlaylistList" style="max-height:200px; overflow-y:auto; background:#0f172a; border:1px solid #334155; border-radius:6px; padding:6px; display:none;"></div>
+          </div>
+        </details>
+
+        <div id="ytProgressWrap" style="display:none; margin:16px 0;">
+          <div style="background:#1e293b; border-radius:6px; overflow:hidden; height:20px;">
+            <div id="ytProgressBar" style="background:#dc2626; height:100%; width:0%; transition:width .3s;"></div>
+          </div>
+          <div id="ytProgressText" style="margin-top:6px; font-size:12px; color:#94a3b8;">Preparing…</div>
+        </div>
+
+        <div id="ytResult" style="display:none; margin:14px 0; padding:12px; background:#064e3b; border:1px solid #10b981; border-radius:6px; color:#d1fae5;"></div>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+          <button onclick="closePublishToYouTube()" style="background:#334155; color:#e2e8f0; border:none; padding:10px 18px; border-radius:6px; cursor:pointer;">Cancel</button>
+          <button id="ytPublishBtn" onclick="submitPublishToYouTube()" style="background:#dc2626; color:#fff; border:none; padding:10px 22px; border-radius:6px; cursor:pointer; font-weight:600;">🚀 Publish</button>
+        </div>
+
+        <div style="margin-top:14px; padding-top:10px; border-top:1px solid #334155; font-size:12px; color:#94a3b8; text-align:center;">
+          📖 Reference:
+          <a href="https://support.google.com/youtube/answer/11913617?hl=en&amp;co=GENIE.Platform%3DDesktop"
+             target="_blank" rel="noopener"
+             style="color:#60a5fa; text-decoration:underline;">
+            YouTube — Required disclosures for altered or synthetic content
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // ===== YouTube publishing =====
+      async function openPublishToYouTube() {
+        const md = window._currentYoutubeDetails || '';
+        if (!md) {
+          alert('No YouTube details available. Generate them first.');
+          return;
+        }
+        // Reset UI.
+        document.getElementById('ytResult').style.display = 'none';
+        document.getElementById('ytProgressWrap').style.display = 'none';
+        document.getElementById('ytProgressBar').style.width = '0%';
+        document.getElementById('ytPublishBtn').disabled = false;
+        document.getElementById('ytPublishBtn').innerHTML = '🚀 Publish';
+
+        // Show modal.
+        document.getElementById('publishYouTubeModal').style.display = 'flex';
+
+        // Check OAuth status.
+        try {
+          const auth = await fetch('/api/youtube/auth-status').then(r => r.json());
+          const banner = document.getElementById('ytAuthBanner');
+          if (!auth.has_client_secret) {
+            banner.style.display = 'block';
+            banner.innerHTML =
+              '⚠️ <strong>One-time setup needed.</strong> Place your Google OAuth ' +
+              '"Desktop app" client_secret JSON at: <code>' + auth.client_secret_path + '</code>. ' +
+              'Then click Publish to authorize the AI for Roz channel.';
+          } else if (!auth.is_authorized) {
+            banner.style.display = 'block';
+            banner.innerHTML =
+              'ℹ️ First publish will open a browser window to authorize christian.thilmany@gmail.com. ' +
+              'After authorization the token is cached at <code>' + auth.token_path + '</code>.';
+          } else {
+            banner.style.display = 'none';
+          }
+        } catch (e) { /* non-fatal */ }
+
+        // Parse metadata preview.
+        try {
+          const r = await fetch('/api/youtube/preview-metadata', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({youtube_details_md: md})
+          });
+          const j = await r.json();
+          if (j.success) {
+            // Default title from the parsed YouTube details document; user can edit.
+            document.getElementById('ytTitle').value = j.metadata.title || '';
+            document.getElementById('ytDescription').value = j.metadata.description || '';
+            document.getElementById('ytTags').value = (j.metadata.tags || []).join(', ');
+            // Hashtags are also user-entered (start blank).
+            document.getElementById('ytHashtags').value = '';
+            const cat = j.metadata.category_id || '28';
+            const sel = document.getElementById('ytCategoryId');
+            // Add option if not present.
+            if (!Array.from(sel.options).some(o => o.value === cat)) {
+              const opt = document.createElement('option');
+              opt.value = cat;
+              opt.textContent = cat;
+              sel.appendChild(opt);
+            }
+            sel.value = cat;
+            document.getElementById('ytMadeForKids').value = j.metadata.made_for_kids ? 'true' : 'false';
+          }
+        } catch (e) {
+          alert('Could not parse YouTube details: ' + e.message);
+        }
+
+        // Reset thumbnail selection.
+        document.getElementById('ytThumbnailPath').value = '';
+        document.getElementById('ytThumbGallery').innerHTML = '';
+        document.getElementById('ytThumbStatus').textContent = 'Pick a video to load thumbnails…';
+        document.getElementById('ytThumbBrowseStatus').textContent = '';
+        _setYouTubeThumbPreview('');
+        _setYouTubeVideoPreview(document.getElementById('ytVideoPath').value.trim());
+
+        // Reset playlist picker.
+        window._ytPlaylistsCache = null;
+        const plList = document.getElementById('ytPlaylistList');
+        plList.innerHTML = '';
+        plList.style.display = 'none';
+        const plFilter = document.getElementById('ytPlaylistFilter');
+        plFilter.value = '';
+        plFilter.style.display = 'none';
+        document.getElementById('ytPlaylistStatus').textContent =
+          'Click to load (will trigger OAuth re-consent on first use)';
+
+        // React to manual edits of the path field.
+        const pathInput = document.getElementById('ytVideoPath');
+        pathInput.oninput = () => {
+          const v = pathInput.value.trim();
+          loadYouTubeThumbnails(v);
+          _setYouTubeVideoPreview(v);
+        };
+
+        // Auto-load thumbnails for the current path if one was prefilled.
+        const curPath = pathInput.value.trim();
+        if (curPath) loadYouTubeThumbnails(curPath);
+
+        // Default the Recording date to today (YYYY-MM-DD).
+        try {
+          const recEl = document.getElementById('ytRecordingDate');
+          if (recEl && !recEl.value) {
+            const d = new Date();
+            const iso = d.getFullYear() + '-' +
+                        String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                        String(d.getDate()).padStart(2, '0');
+            recEl.value = iso;
+          }
+        } catch (e) { /* non-fatal */ }
+
+        updateYouTubeAccordionSummaries();
+      }
+
+      function closePublishToYouTube() {
+        document.getElementById('publishYouTubeModal').style.display = 'none';
+      }
+
+      // Generate an SRT caption file from the chosen video using the
+      // local Whisper CLI (server-side). Does NOT touch DaVinci.
+      async function generateYouTubeSrt() {
+        const videoPath = document.getElementById('ytVideoPath').value.trim();
+        if (!videoPath) {
+          alert('Pick a video file first.');
+          return;
+        }
+        const btn = document.getElementById('ytSrtBtn');
+        const status = document.getElementById('ytSrtStatus');
+        const model = document.getElementById('ytSrtModel').value;
+        btn.disabled = true;
+        const oldLabel = btn.textContent;
+        btn.textContent = '⏳ Transcribing… (this can take a while)';
+        status.textContent = 'Running whisper model "' + model + '"…';
+        try {
+          const r = await fetch('/api/youtube/generate-srt', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ video_path: videoPath, model: model, language: 'en' })
+          });
+          const j = await r.json();
+          if (!j.success) throw new Error(j.error || 'failed');
+          status.innerHTML = '✅ Saved <code>' + j.filename + '</code> ('
+            + (j.size_bytes/1024).toFixed(0) + ' KB) — '
+            + '<a href="#" onclick="revealYouTubeSrt(\'' + j.srt_path.replace(/'/g, "\\'") + '\'); return false;" style="color:#60a5fa;">Reveal in Finder</a>'
+            + ' — drag into YouTube Studio → Subtitles.';
+        } catch (e) {
+          status.innerHTML = '<span style="color:#fca5a5;">❌ ' + e.message + '</span>';
+        } finally {
+          btn.disabled = false;
+          btn.textContent = oldLabel;
+        }
+      }
+      async function revealYouTubeSrt(p) {
+        try {
+          await fetch('/api/youtube/reveal-path', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ path: p })
+          });
+        } catch (e) { /* ignore */ }
+      }
+
+      // Refresh the small "summary" text in each accordion header so the
+      // user can see selections without having to expand every section.
+      function _ytShortPath(p) {
+        if (!p) return '';
+        const parts = String(p).split('/');
+        return parts[parts.length - 1] || p;
+      }
+      function updateYouTubeAccordionSummaries() {
+        try {
+          // Video file
+          const vp = (document.getElementById('ytVideoPath')?.value || '').trim();
+          const vs = document.getElementById('ytVideoSummary');
+          if (vs) vs.textContent = vp ? _ytShortPath(vp) : 'no file selected';
+
+          // Visibility & audience
+          const priv = document.getElementById('ytPrivacy');
+          const kids = document.getElementById('ytMadeForKids');
+          const notify = document.getElementById('ytNotifySubs');
+          const visParts = [];
+          if (priv) visParts.push(priv.options[priv.selectedIndex]?.text.split(' ')[0] || priv.value);
+          if (kids) visParts.push(kids.value === 'true' ? 'For kids' : 'Not for kids');
+          if (notify) visParts.push(notify.checked ? 'Notify subs' : 'No notify');
+          const visEl = document.getElementById('ytVisibilitySummary');
+          if (visEl) visEl.textContent = visParts.join(' · ');
+
+          // Video details
+          const title = (document.getElementById('ytTitle')?.value || '').trim();
+          const cat = document.getElementById('ytCategoryId');
+          const catText = cat ? (cat.options[cat.selectedIndex]?.text || cat.value) : '';
+          const detEl = document.getElementById('ytDetailsSummary');
+          if (detEl) {
+            const t = title ? (title.length > 40 ? title.slice(0, 40) + '…' : title) : 'no title';
+            detEl.textContent = t + (catText ? ' · ' + catText : '');
+          }
+
+          // Thumbnail
+          const thumb = (document.getElementById('ytThumbnailPath')?.value || '').trim();
+          const thEl = document.getElementById('ytThumbSummary');
+          if (thEl) thEl.textContent = thumb ? _ytShortPath(thumb) : 'none selected';
+
+          // Advanced
+          const advEl = document.getElementById('ytAdvancedSummary');
+          if (advEl) {
+            const syn = document.getElementById('ytSyntheticMedia');
+            const lang = document.getElementById('ytDefaultLanguage');
+            const emb = document.getElementById('ytEmbeddable');
+            const parts = [];
+            parts.push('Synthetic: ' + (syn && syn.checked ? 'yes' : 'no'));
+            if (lang && lang.value.trim()) parts.push(lang.value.trim());
+            parts.push('embed ' + (emb && emb.checked ? 'on' : 'off'));
+            advEl.textContent = parts.join(' · ');
+          }
+
+          // Playlists
+          const checked = document.querySelectorAll('#ytPlaylistList input[type="checkbox"]:checked');
+          const plEl = document.getElementById('ytPlaylistSummary');
+          if (plEl) {
+            if (checked.length === 0) {
+              plEl.textContent = 'none selected';
+            } else if (checked.length === 1) {
+              const lbl = checked[0].closest('label')?.textContent?.trim() || '1 playlist';
+              plEl.textContent = (lbl.length > 40 ? lbl.slice(0, 40) + '…' : lbl);
+            } else {
+              plEl.textContent = checked.length + ' playlists selected';
+            }
+          }
+        } catch (e) { /* non-fatal */ }
+      }
+
+      // Wire up delegated listeners exactly once so any change inside the
+      // modal updates the accordion headers.
+      (function _initYTAccordionSummaryWiring() {
+        const modal = document.getElementById('publishYouTubeModal');
+        if (!modal || modal._ytSummaryWired) return;
+        modal._ytSummaryWired = true;
+        ['input', 'change'].forEach(evt =>
+          modal.addEventListener(evt, updateYouTubeAccordionSummaries, true));
+      })();
+
+      // Browse for a local video file using the OS native file picker
+      // (via the backend). The browser cannot expose real file paths for
+      // security reasons, so we ask the server to show an Open dialog and
+      // return the chosen path — nothing is uploaded.
+      async function browseForYouTubeVideo() {
+        try {
+          const r = await fetch('/api/youtube/pick-video-path');
+          const j = await r.json();
+          if (!j.success) {
+            if (j.cancelled) return;
+            throw new Error(j.error || 'pick failed');
+          }
+          document.getElementById('ytVideoPath').value = j.path;
+          loadYouTubeThumbnails(j.path);
+          _setYouTubeVideoPreview(j.path, j.size_bytes);
+        } catch (e) {
+          alert('Could not pick video file: ' + (e && e.message || e));
+        }
+      }
+
+      // Browse for a thumbnail image. Small enough that uploading is fine,
+      // but we use the native picker too and just send the path.
+      async function browseForYouTubeThumbnail() {
+        const status = document.getElementById('ytThumbBrowseStatus');
+        try {
+          const r = await fetch('/api/youtube/pick-thumbnail-path');
+          const j = await r.json();
+          if (!j.success) {
+            if (j.cancelled) return;
+            throw new Error(j.error || 'pick failed');
+          }
+          document.getElementById('ytThumbnailPath').value = j.path;
+          status.innerHTML = '✅ Selected <code>' + j.filename + '</code> ('
+            + (j.size_bytes/1024).toFixed(0) + ' KB)';
+          _setYouTubeThumbPreview(j.path, j.size_bytes);
+          document.querySelectorAll('#ytThumbGallery div[data-path]').forEach(el => {
+            el.style.borderColor = '#334155';
+            el.style.boxShadow = 'none';
+          });
+          updateYouTubeAccordionSummaries();
+        } catch (e) {
+          status.textContent = '';
+          alert('Could not pick thumbnail: ' + (e && e.message || e));
+        }
+      }
+
+      async function loadRecentYouTubeVideos() {
+        try {
+          const r = await fetch('/api/youtube/recent-videos').then(x => x.json());
+          const sel = document.getElementById('ytRecentVideos');
+          sel.innerHTML = '';
+          if (!r.success || !r.videos || r.videos.length === 0) {
+            sel.style.display = 'none';
+            return;
+          }
+          const placeholder = document.createElement('option');
+          placeholder.value = '';
+          placeholder.textContent = '— pick from ' + r.directory + ' —';
+          sel.appendChild(placeholder);
+          r.videos.forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v.path;
+            const sizeMb = (v.size_bytes / (1024 * 1024)).toFixed(1);
+            opt.textContent = v.name + '  (' + sizeMb + ' MB)';
+            sel.appendChild(opt);
+          });
+          sel.style.display = 'block';
+          // Wire change to refresh thumbnails as well.
+          sel.onchange = () => {
+            const v = sel.value;
+            document.getElementById('ytVideoPath').value = v;
+            loadYouTubeThumbnails(v);
+          };
+          // Pre-fill with most recent.
+          if (!document.getElementById('ytVideoPath').value) {
+            document.getElementById('ytVideoPath').value = r.videos[0].path;
+            sel.value = r.videos[0].path;
+          }
+          loadYouTubeThumbnails(document.getElementById('ytVideoPath').value);
+        } catch (e) { /* non-fatal */ }
+      }
+
+      // ---- Local file previews --------------------------------------------
+      // The browser can't load file:// URLs from an http page, so we route
+      // previews through the backend /api/youtube/local-preview endpoint
+      // (which is restricted to files under the user's home directory).
+      function _previewUrl(path) {
+        return '/api/youtube/local-preview?path=' + encodeURIComponent(path);
+      }
+
+      function _setYouTubeVideoPreview(path, sizeBytes) {
+        const wrap = document.getElementById('ytVideoPreviewWrap');
+        const vid = document.getElementById('ytVideoPreview');
+        const meta = document.getElementById('ytVideoPreviewMeta');
+        if (!path) {
+          wrap.style.display = 'none';
+          vid.removeAttribute('src');
+          vid.load();
+          meta.textContent = '';
+          return;
+        }
+        vid.src = _previewUrl(path);
+        vid.load();
+        wrap.style.display = 'block';
+        const fname = path.split('/').pop();
+        meta.textContent = fname + (typeof sizeBytes === 'number'
+          ? '  (' + (sizeBytes / (1024*1024)).toFixed(1) + ' MB)' : '');
+      }
+
+      function _setYouTubeThumbPreview(path, sizeBytes) {
+        const wrap = document.getElementById('ytThumbPreviewWrap');
+        const img = document.getElementById('ytThumbPreview');
+        const meta = document.getElementById('ytThumbPreviewMeta');
+        if (!path) {
+          wrap.style.display = 'none';
+          img.removeAttribute('src');
+          meta.textContent = '';
+          return;
+        }
+        img.src = _previewUrl(path);
+        wrap.style.display = 'block';
+        const fname = path.split('/').pop();
+        meta.textContent = fname + (typeof sizeBytes === 'number'
+          ? '  (' + (sizeBytes/1024).toFixed(0) + ' KB)' : '');
+      }
+
+      // ---- Playlist picker -------------------------------------------------      window._ytPlaylistsCache = null;
+
+      function _renderYouTubePlaylists(filter) {
+        const wrap = document.getElementById('ytPlaylistList');
+        const list = window._ytPlaylistsCache || [];
+        const f = (filter || '').toLowerCase().trim();
+        const filtered = f ? list.filter(p => (p.title || '').toLowerCase().includes(f)) : list;
+        if (filtered.length === 0) {
+          wrap.innerHTML = '<div style="padding:8px; color:#94a3b8; font-size:12px;">No playlists match.</div>';
+          return;
+        }
+        // Preserve checked state across filter changes.
+        const checked = new Set(
+          Array.from(wrap.querySelectorAll('input[type=checkbox]:checked'))
+            .map(cb => cb.value)
+        );
+        const html = filtered.map(p => {
+          const id = String(p.id).replace(/"/g, '&quot;');
+          const title = (p.title || '(untitled)')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const meta = (p.privacy_status || '') + ' · ' + (p.item_count || 0) + ' videos';
+          const isChecked = checked.has(p.id) ? 'checked' : '';
+          return '<label style="display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:4px; cursor:pointer; font-size:13px;" '
+               + 'onmouseover="this.style.background=\'#1e293b\'" onmouseout="this.style.background=\'transparent\'">'
+               + '<input type="checkbox" value="' + id + '" ' + isChecked + ' style="margin:0;">'
+               + '<span style="flex:1; color:#e2e8f0;">' + title + '</span>'
+               + '<span style="font-size:11px; color:#64748b;">' + meta + '</span>'
+               + '</label>';
+        }).join('');
+        wrap.innerHTML = html;
+      }
+
+      async function loadYouTubePlaylists() {
+        const status = document.getElementById('ytPlaylistStatus');
+        const wrap = document.getElementById('ytPlaylistList');
+        const filterInp = document.getElementById('ytPlaylistFilter');
+        status.textContent = 'Loading… (browser auth may pop up on first run)';
+        try {
+          const r = await fetch('/api/youtube/playlists');
+          const j = await r.json();
+          if (!j.success) throw new Error(j.error || 'failed');
+          window._ytPlaylistsCache = j.playlists || [];
+          status.innerHTML = 'Loaded <strong>' + window._ytPlaylistsCache.length
+            + '</strong> playlist(s). Check any to add the video to.';
+          wrap.style.display = 'block';
+          filterInp.style.display = 'inline-block';
+          filterInp.oninput = () => _renderYouTubePlaylists(filterInp.value);
+          _renderYouTubePlaylists('');
+        } catch (e) {
+          status.textContent = 'Could not load playlists: ' + (e && e.message || e);
+        }
+      }
+
+      function _selectedPlaylistIds() {
+        const wrap = document.getElementById('ytPlaylistList');
+        return Array.from(wrap.querySelectorAll('input[type=checkbox]:checked'))
+          .map(cb => cb.value);
+      }
+
+      async function loadYouTubeThumbnails(videoPath) {        const gallery = document.getElementById('ytThumbGallery');
+        const status = document.getElementById('ytThumbStatus');
+        const hidden = document.getElementById('ytThumbnailPath');
+        gallery.innerHTML = '';
+        hidden.value = '';
+        if (!videoPath) {
+          status.textContent = 'Pick a video to load thumbnails…';
+          return;
+        }
+        status.textContent = 'Loading thumbnails…';
+        try {
+          const r = await fetch('/api/youtube/thumbnails?video_path='
+                                + encodeURIComponent(videoPath))
+            .then(x => x.json());
+          if (!r.success) {
+            status.textContent = 'Could not load thumbnails: ' + (r.error || 'unknown');
+            return;
+          }
+          if (!r.thumbnails || r.thumbnails.length === 0) {
+            status.textContent = 'No thumbnails found in ' + r.directory
+              + ' (drop PNG/JPG files there to enable selection).';
+            return;
+          }
+          status.innerHTML = 'Found <strong>' + r.thumbnails.length
+            + '</strong> thumbnail(s) in <code>' + r.directory + '</code>. Click to select.';
+          r.thumbnails.forEach(t => {
+            const card = document.createElement('div');
+            card.style.cssText = 'cursor:pointer; border:2px solid #334155; border-radius:6px; '
+              + 'overflow:hidden; background:#1e293b; padding:4px;';
+            if (t.too_large) card.style.opacity = '0.5';
+            card.title = t.name + (t.too_large ? '  (over 2 MB — YouTube will reject)' : '');
+            card.dataset.path = t.path;
+            card.innerHTML =
+              '<img src="' + t.url + '" style="width:100%; height:90px; object-fit:cover; '
+              + 'border-radius:4px; display:block;">' +
+              '<div style="font-size:11px; color:#94a3b8; margin-top:4px; '
+              + 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">'
+              + t.name + '</div>';
+            card.onclick = () => {
+              if (t.too_large) {
+                alert('This thumbnail is over YouTube\'s 2 MB limit and will be rejected.');
+                return;
+              }
+              gallery.querySelectorAll('div[data-path]').forEach(el => {
+                el.style.borderColor = '#334155';
+                el.style.boxShadow = 'none';
+              });
+              card.style.borderColor = '#dc2626';
+              card.style.boxShadow = '0 0 0 2px rgba(220,38,38,0.4)';
+              hidden.value = t.path;
+              _setYouTubeThumbPreview(t.path);
+              updateYouTubeAccordionSummaries();
+            };
+            gallery.appendChild(card);
+          });
+        } catch (e) {
+          status.textContent = 'Failed to load thumbnails: ' + e.message;
+        }
+      }
+
+      async function submitPublishToYouTube() {
+        const videoPath = document.getElementById('ytVideoPath').value.trim();
+        if (!videoPath) {
+          alert('Please pick a video file to publish.');
+          return;
+        }
+        const titleVal = document.getElementById('ytTitle').value.trim();
+        if (!titleVal) {
+          alert('Please enter a title for the video.');
+          document.getElementById('ytTitle').focus();
+          return;
+        }
+        const md = window._currentYoutubeDetails || '';
+        const hashtagsRaw = document.getElementById('ytHashtags').value;
+        const hashtags = hashtagsRaw
+          .split(/[\s,]+/)
+          .map(s => s.replace(/^#+/, '').trim())
+          .filter(Boolean);
+        const overrides = {
+          title: titleVal,
+          description: document.getElementById('ytDescription').value,
+          tags: document.getElementById('ytTags').value.split(',').map(s => s.trim()).filter(Boolean),
+          hashtags: hashtags,
+          category_id: document.getElementById('ytCategoryId').value,
+          made_for_kids: document.getElementById('ytMadeForKids').value === 'true',
+          contains_synthetic_media: document.getElementById('ytSyntheticMedia').checked,
+          default_language: document.getElementById('ytDefaultLanguage').value.trim() || 'en-US',
+          default_audio_language: document.getElementById('ytDefaultAudioLanguage').value.trim() || 'en-US',
+          recording_date: (function () {
+            const d = document.getElementById('ytRecordingDate').value;
+            return d ? (d + 'T00:00:00Z') : null;
+          })(),
+          embeddable: document.getElementById('ytEmbeddable').checked
+        };
+        const body = {
+          video_path: videoPath,
+          youtube_details_md: md,
+          privacy_status: document.getElementById('ytPrivacy').value,
+          notify_subscribers: document.getElementById('ytNotifySubs').checked,
+          thumbnail_path: document.getElementById('ytThumbnailPath').value || null,
+          playlist_ids: _selectedPlaylistIds(),
+          overrides: overrides
+        };
+
+        // Hard guard: never let public slip through from the client.
+        if (body.privacy_status !== 'private' && body.privacy_status !== 'unlisted') {
+          alert('Privacy must be Private or Unlisted. Use YouTube Studio to publish publicly.');
+          return;
+        }
+
+        const btn = document.getElementById('ytPublishBtn');
+        btn.disabled = true;
+        btn.innerHTML = '⏳ Starting…';
+        document.getElementById('ytResult').style.display = 'none';
+        document.getElementById('ytProgressWrap').style.display = 'block';
+        document.getElementById('ytProgressBar').style.width = '0%';
+        document.getElementById('ytProgressText').textContent = 'Authorizing & uploading…';
+
+        let upload_id;
+        try {
+          const r = await fetch('/api/youtube/publish', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+          });
+          const j = await r.json();
+          if (!j.success) {
+            throw new Error(j.error || 'Publish failed');
+          }
+          upload_id = j.upload_id;
+        } catch (e) {
+          btn.disabled = false;
+          btn.innerHTML = '🚀 Publish';
+          document.getElementById('ytProgressWrap').style.display = 'none';
+          alert('❌ ' + e.message);
+          return;
+        }
+
+        // Poll status.
+        const poll = setInterval(async () => {
+          try {
+            const r = await fetch('/api/youtube/publish/status/' + upload_id).then(x => x.json());
+            if (!r.success) return;
+            const s = r.state || {};
+            if (typeof s.progress === 'number') {
+              document.getElementById('ytProgressBar').style.width = s.progress + '%';
+            }
+            document.getElementById('ytProgressText').textContent =
+              (s.status || 'working') + ' — ' + (s.progress || 0) + '%' +
+              (s.filename ? '  (' + s.filename + ')' : '');
+            if (s.status === 'complete') {
+              clearInterval(poll);
+              btn.disabled = false;
+              btn.innerHTML = '🚀 Publish';
+              const result = document.getElementById('ytResult');
+              result.style.display = 'block';
+              let extras = '';
+              if (s.thumbnail_set === true) {
+                extras += 'Thumbnail: <strong>✅ set</strong><br>';
+              } else if (s.thumbnail_error) {
+                extras += 'Thumbnail: <strong style="color:#fca5a5;">❌ failed</strong> — '
+                  + String(s.thumbnail_error).replace(/</g, '&lt;') + '<br>';
+                // Also pop up an alert so the user can't miss it.
+                setTimeout(() => alert('Thumbnail upload FAILED:\n\n'
+                  + s.thumbnail_error
+                  + '\n\nNote: YouTube custom thumbnails require a verified channel. '
+                  + 'Check https://www.youtube.com/verify if you see a 403 / youtubeSignupRequired error.'), 100);
+              } else if (document.getElementById('ytThumbnailPath').value) {
+                extras += 'Thumbnail: <strong style="color:#fbbf24;">⚠️ not set (no error reported)</strong><br>';
+              }
+              const added = (s.playlists_added || []).length;
+              const plErrs = s.playlist_errors || [];
+              if (added > 0) {
+                extras += 'Playlists added: <strong>' + added + '</strong><br>';
+              }
+              if (plErrs.length > 0) {
+                extras += 'Playlist errors: <strong style="color:#fca5a5;">' + plErrs.length + '</strong><br>';
+              }
+              result.innerHTML =
+                '✅ <strong>Published!</strong><br>' +
+                'Video: <a href="' + s.video_url + '" target="_blank" style="color:#fff; text-decoration:underline;">' + s.video_url + '</a><br>' +
+                'Studio: <a href="https://studio.youtube.com/video/' + s.video_id + '/edit" target="_blank" style="color:#fff; text-decoration:underline;">Edit in YouTube Studio</a><br>' +
+                extras +
+                'Privacy: <strong>' + (s.privacy_status || 'private') + '</strong> — review the upload before making it public.';
+
+              // Post-publish reminders dialog (Studio-only settings).
+              setTimeout(() => {
+                const studioUrl = 'https://studio.youtube.com/video/' + s.video_id + '/edit';
+                alert(
+                  '📋 BEFORE GOING PUBLIC — open YouTube Studio and verify:\n\n' +
+                  '  • Automatic chapters: TURN OFF\n' +
+                  '  • Shorts sampling: Allow\n' +
+                  '  • Comments: Allow all  +  ranking = Top comments\n' +
+                  '  • Self-rated content categories: all set to "None"\n' +
+                  '  • Captions: upload the .srt generated in the dialog\n' +
+                  '  • Cards: add manually in Studio → Editor → Cards\n\n' +
+                  'Studio link has been copied below — opening now.'
+                );
+                try { window.open(studioUrl, '_blank'); } catch (e) { /* ignore */ }
+              }, 200);
+            } else if (s.status === 'error') {
+              clearInterval(poll);
+              btn.disabled = false;
+              btn.innerHTML = '🚀 Publish';
+              alert('❌ Upload failed: ' + (s.error || 'unknown error'));
+              document.getElementById('ytProgressText').textContent = 'Failed';
+            }
+          } catch (e) { /* keep polling */ }
+        }, 1500);
+      }
     </script>
 
     <div class="footer">

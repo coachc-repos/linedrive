@@ -16,6 +16,7 @@ import uuid
 import asyncio
 import threading
 import logging
+import urllib.parse
 from datetime import datetime
 from io import BytesIO
 from flask import Flask, render_template, request, jsonify, Response, make_response, send_file, stream_with_context
@@ -147,6 +148,121 @@ def _get_run_output_dir(script_title: str, create: bool = True) -> Path:
     if create:
         run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
+
+
+def _save_broll_table_as_docx(broll_table_md: str, out_path: Path) -> bool:
+    """Render a B-roll markdown table to a Word document at out_path.
+
+    Strips ``` fences, finds the pipe-table block, builds a styled docx.
+    Any non-table preamble/tail (e.g. **Stock Footage Search String:** ...)
+    is added as bold/plain paragraphs. Returns True on success.
+    """
+    try:
+        from docx import Document
+        from docx.shared import Pt
+    except ImportError as e:
+        logger.error(f"❌ python-docx not available for broll docx: {e}")
+        return False
+
+    if not broll_table_md or not broll_table_md.strip():
+        logger.warning("⚠️ Empty broll table, skipping docx save")
+        return False
+
+    text = re.sub(r'^[ \t]*```[\w-]*[ \t]*$', '',
+                  broll_table_md, flags=re.MULTILINE)
+    lines = [ln.rstrip() for ln in text.replace('\r\n', '\n').split('\n')]
+
+    # Locate header + separator (any two consecutive lines starting with |
+    # where the second is a separator row).
+    header_idx = -1
+    for i in range(len(lines) - 1):
+        a = lines[i].strip()
+        b = lines[i + 1].strip()
+        if (a.startswith('|') and b.startswith('|')
+                and set(b.replace('|', '').strip()) <= set('-: ')):
+            header_idx = i
+            break
+
+    doc = Document()
+
+    def _add_paragraph(raw: str) -> None:
+        if not raw.strip():
+            return
+        p = doc.add_paragraph()
+        # Render **bold** spans inline.
+        parts = raw.split('**')
+        for idx, part in enumerate(parts):
+            if not part:
+                continue
+            run = p.add_run(part)
+            if idx % 2 == 1:
+                run.bold = True
+
+    if header_idx < 0:
+        # No table detected — just dump the text.
+        for ln in lines:
+            _add_paragraph(ln)
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            doc.save(str(out_path))
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to save broll docx: {e}")
+            return False
+
+    # Preamble (everything before the header)
+    for ln in lines[:header_idx]:
+        _add_paragraph(ln)
+
+    def _split_row(row: str):
+        cells = [c.strip() for c in row.split('|')]
+        if cells and not cells[0]:
+            cells = cells[1:]
+        if cells and not cells[-1]:
+            cells = cells[:-1]
+        return cells
+
+    headers = _split_row(lines[header_idx])
+    body_rows = []
+    j = header_idx + 2
+    while j < len(lines):
+        ln = lines[j].strip()
+        if not ln.startswith('|'):
+            break
+        cells = _split_row(ln)
+        if cells:
+            body_rows.append(cells)
+        j += 1
+
+    if headers and body_rows:
+        table = doc.add_table(rows=1 + len(body_rows), cols=len(headers))
+        try:
+            table.style = 'Light Grid Accent 1'
+        except Exception:
+            pass
+        for c, h in enumerate(headers):
+            cell = table.rows[0].cells[c]
+            cell.text = h
+            for para in cell.paragraphs:
+                for run in para.runs:
+                    run.bold = True
+        for r, row in enumerate(body_rows, start=1):
+            for c, val in enumerate(row):
+                if c < len(headers):
+                    table.rows[r].cells[c].text = val
+        doc.add_paragraph()
+
+    # Tail (everything after the table)
+    for ln in lines[j:]:
+        _add_paragraph(ln)
+
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(out_path))
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to save broll docx: {e}")
+        return False
 
 
 def _copy_to_output_subfolder(src, subfolder: str, script_title: Optional[str] = None) -> Optional[Path]:
@@ -285,8 +401,22 @@ def _sync_generated_media_to_project(project_path: Path) -> dict:
 # Import text processing functions
 
 app = Flask(__name__)
-# Allow large audio/video uploads (Whisper transcription, etc.) — 2 GB cap.
-app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024
+# Allow large audio/video uploads (Whisper transcription, gallery uploads, etc.)
+# — 16 GiB cap. Override with MAX_UPLOAD_GB env var if you need more/less.
+_max_upload_gb = int(os.environ.get("MAX_UPLOAD_GB", "16"))
+app.config["MAX_CONTENT_LENGTH"] = _max_upload_gb * 1024 * 1024 * 1024
+
+
+@app.errorhandler(413)
+def _too_large(_e):
+    """Return a JSON error for oversize uploads so the frontend can show it
+    instead of a silent HTML 413 page."""
+    from flask import jsonify as _jsonify
+    return _jsonify({
+        "success": False,
+        "error": (f"File exceeds the server upload limit of "
+                  f"{_max_upload_gb} GiB. Set MAX_UPLOAD_GB or compress the file."),
+    }), 413
 
 # ---------------------------------------------------------------------------
 # Optional token-based auth gate.
@@ -553,13 +683,28 @@ EMOTION_BY_VARIATION = {
 
 
 def _safe_title_for_paths(script_title: str) -> str:
-    """Normalize script title to filesystem-safe folder name used by generators."""
+    """Normalize script title to filesystem-safe folder/file name."""
     normalized = (script_title or '').strip()
     normalized = re.sub(r'^\s*#\s*', '', normalized)
     normalized = re.sub(r'^\s*Direct\s+Video\s*-\s*', '',
                         normalized, flags=re.IGNORECASE)
+    # Strip Visual Cue / Heading-style label prefixes that occasionally leak
+    # in when title extraction falls back to a non-title line.
+    normalized = re.sub(
+        r'^\s*(?:VISUAL\s*CUE|HEADING|VISUAL|B-?ROLL|HOOK|SUMMARY|HOST)\s*[:\-]\s*',
+        '', normalized, flags=re.IGNORECASE)
     safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '', normalized)
     safe_title = re.sub(r'\s+', '_', safe_title).strip('_.')
+    # macOS/APFS allows 255 bytes per path component but the script also
+    # appends suffixes ("_curls.sh", "_heygen_curls.json", etc.) so cap at
+    # 80 chars and trim back to a word boundary to keep names readable.
+    _MAX_COMPONENT = 80
+    if len(safe_title) > _MAX_COMPONENT:
+        _trim = safe_title[:_MAX_COMPONENT]
+        _last_us = _trim.rfind('_')
+        if _last_us > _MAX_COMPONENT // 2:
+            _trim = _trim[:_last_us]
+        safe_title = _trim.strip('_.') or safe_title[:_MAX_COMPONENT]
     return safe_title or "untitled_script"
 
 
@@ -1137,11 +1282,15 @@ class ProgressStreamer:
         if progress is None:
             return
 
+        # Treat progress<0 as a terminal failure so the SSE stream closes and
+        # the UI spinner stops (otherwise the client waits forever).
+        is_terminal = (progress == 100) or (progress is not None and progress < 0)
         update = {
             "message": message,
             "progress": progress,
             "timestamp": time.time(),
-            "done": progress == 100
+            "done": is_terminal,
+            "error": progress is not None and progress < 0,
         }
 
         try:
@@ -1149,9 +1298,9 @@ class ProgressStreamer:
                 f"🔍 send_update: putting message in queue for session {self.session_id}")
             self.queue.put(json.dumps(update))
             logger.info(f"🔍 send_update: message queued successfully")
-            if progress == 100:
+            if is_terminal:
                 logger.info(
-                    f"🔍 send_update: marking done=True for session {self.session_id}")
+                    f"🔍 send_update: marking done=True for session {self.session_id} (progress={progress})")
                 self.done = True
             logger.info(f"🔍 send_update: method completed successfully")
         except Exception as e:
@@ -1232,6 +1381,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                         tone=tone,
                         script_length=video_length,
                         max_chapters=1 if quick_test else 8,
+                        hook_summary=checkboxes.get("hook_summary", False),
                     ),
                     # 20 minutes - accounts for Script Writer (~5min) + Script Review (~12min)
                     timeout=1200
@@ -1293,15 +1443,8 @@ async def process_script_creation(session_id, topic, audience, tone,
             print(f"✅ Script Reviewed by Script Reviewer")
             print(f"✅ Sequential Workflow Completed Successfully")
 
-            # Add introduction to script content (EXACT COPY)
-            introduction = """Hi, I'm Roz's AI Digital Twin. She is a high-tech sales leader, bonafide tech nerd and busy Mom of two really incredible kids. She has spent her career in high-tech working to this moment and beyond and we are here to guide you through it. This is, AI with Roz.
-
----
-
-"""
-
-            # Combine introduction with script content (EXACT COPY)
-            raw_script_content = introduction + result["script_content"]
+            # Use script content directly (no boilerplate intro).
+            raw_script_content = result["script_content"]
 
             # Enhanced script with bold tool formatting (EXACT COPY - NO TIMEOUTS!)
             from console_ui.text_processing import (
@@ -1317,6 +1460,71 @@ async def process_script_creation(session_id, topic, audience, tone,
 
             # Use enhanced script as final content (EXACT COPY)
             final_script_content = enhanced_script_content
+
+            # OPTIONAL: Shorten script to fit requested video_length.
+            # Same logic as in process_existing_script — agent-based condense.
+            if checkboxes.get("shorten_script", False):
+                try:
+                    import re as _re_short
+                    _vl_match = _re_short.search(r"(\d+(?:\.\d+)?)", str(video_length or ""))
+                    _target_minutes = float(_vl_match.group(1)) if _vl_match else 10.0
+                    _wpm = 150
+                    _target_words = int(round(_target_minutes * _wpm))
+
+                    def _host_word_count_create(text: str) -> int:
+                        blocks = _re_short.findall(
+                            r"(?:^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*\**\s*([\s\S]*?)(?="
+                            r"\n\s*(?:#{1,6}\s+\S|(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|chapter\s+\d|visual\s+cue\s*:|b-?roll\s*:)|---+|===+)"
+                            r"|\Z)",
+                            text,
+                            flags=_re_short.IGNORECASE,
+                        )
+                        return sum(len(b.split()) for b in blocks)
+
+                    _before_host = _host_word_count_create(final_script_content)
+                    # If user picked a percent reduction, compute target from current host words.
+                    # Otherwise fall back to duration-derived target.
+                    _percent_raw = str(checkboxes.get("shorten_percent", "")).strip().lower()
+                    _target_words_override = None
+                    if _percent_raw and _percent_raw != "target":
+                        try:
+                            _pct = int(_percent_raw)
+                            if 0 < _pct < 100 and _before_host > 0:
+                                _target_words_override = int(round(_before_host * (1 - _pct / 100.0)))
+                        except Exception:
+                            _target_words_override = None
+                    _effective_target = _target_words_override if _target_words_override else _target_words
+                    streamer.send_update(
+                        f"✂️ Shortening to ~{_target_minutes:.0f} min (target ~{_effective_target} Host words, current {_before_host})",
+                        98,
+                    )
+                    if _before_host > _effective_target * 1.05:
+                        from linedrive_azure.agents.script_shorten_agent_client import (
+                            ScriptShortenAgentClient,
+                        )
+                        _agent = ScriptShortenAgentClient()
+                        _r = _agent.shorten_to_target(
+                            script_content=final_script_content,
+                            target_minutes=_target_minutes,
+                            wpm=_wpm,
+                            timeout=600,
+                            target_words_override=_target_words_override,
+                            reduction_percent=(int(_percent_raw) if _target_words_override else None),
+                            current_host_words=_before_host,
+                        )
+                        if _r.get("success") and _r.get("response"):
+                            _short = _r["response"].strip()
+                            _short = _re_short.sub(r"^```[a-zA-Z]*\n", "", _short)
+                            _short = _re_short.sub(r"\n```\s*$", "", _short)
+                            if _short:
+                                final_script_content = _short
+                                _after = _host_word_count_create(final_script_content)
+                                streamer.send_update(
+                                    f"✅ Shortened: Host words {_before_host} → {_after}",
+                                    98,
+                                )
+                except Exception as _se:
+                    logger.error(f"❌ Shorten (create flow) error: {_se}")
 
             # Use the user's requested topic for folder/file naming.
             # If topic is empty, fall back to a title extracted from the generated content.
@@ -1394,6 +1602,23 @@ async def process_script_creation(session_id, topic, audience, tone,
                         streamer.send_update(
                             "✅ B-roll table generated", 98.5)
 
+                        # Persist the raw broll table (md + docx) to {run}/broll/
+                        try:
+                            broll_dir = run_output_dir / "broll"
+                            broll_dir.mkdir(parents=True, exist_ok=True)
+                            broll_md_path = broll_dir / "broll_table.md"
+                            broll_md_path.write_text(
+                                broll_table, encoding="utf-8")
+                            print(
+                                f"💾 Saved broll table md → {broll_md_path}")
+                            broll_docx_path = broll_dir / "broll_table.docx"
+                            if _save_broll_table_as_docx(broll_table, broll_docx_path):
+                                print(
+                                    f"💾 Saved broll table docx → {broll_docx_path}")
+                        except Exception as save_err:
+                            print(
+                                f"⚠️ Failed to save broll table files: {save_err}")
+
                         # Append B-roll table to script
                         broll_section = f"\n\n{'=' * 80}\n"
                         broll_section += "# 🎬 B-ROLL SEARCH TERMS TABLE WITH TIMECODES\n"
@@ -1402,32 +1627,6 @@ async def process_script_creation(session_id, topic, audience, tone,
 
                         final_script_with_tools += broll_section
                         print("✅ B-roll table appended to script")
-
-                        # Persist the B-roll table next to the generated B-roll
-                        # videos so it lives alongside the media (per user request).
-                        try:
-                            broll_dir = run_output_dir / "broll"
-                            broll_dir.mkdir(parents=True, exist_ok=True)
-                            broll_md_path = broll_dir / "broll_table.md"
-                            broll_md_path.write_text(
-                                broll_table, encoding="utf-8")
-                            print(
-                                f"💾 Saved B-roll table → {broll_md_path}")
-                            try:
-                                streamer.send_update(
-                                    f"💾 Saved B-roll table → {broll_md_path}", 98.6)
-                            except Exception:
-                                pass
-                            # Also save a Word (.docx) copy with a real table.
-                            try:
-                                broll_docx_path = broll_dir / "broll_table.docx"
-                                _save_broll_table_as_docx(broll_table, broll_docx_path)
-                                print(f"💾 Saved B-roll table (Word) → {broll_docx_path}")
-                            except Exception as docx_err:
-                                print(f"⚠️ Failed to save broll_table.docx: {docx_err}")
-                        except Exception as save_tbl_err:
-                            print(
-                                f"⚠️ Failed to save broll_table.md: {save_tbl_err}")
 
                         # Generate EDL file for DaVinci Resolve
                         edl_content = None
@@ -1605,41 +1804,25 @@ async def process_script_creation(session_id, topic, audience, tone,
                         f"⏸️ Select B-roll rows for Grok generation ({total_rows} available)",
                         99
                     )
-                    # Persist a copy of the table next to broll videos.
-                    try:
-                        broll_dir = run_output_dir / "broll"
-                        broll_dir.mkdir(parents=True, exist_ok=True)
-                        broll_md_path = broll_dir / "broll_table.md"
-                        if not broll_md_path.exists():
-                            broll_md_path.write_text(
-                                broll_table, encoding="utf-8")
-                            print(
-                                f"💾 Saved B-roll table → {broll_md_path}")
-                        broll_docx_path = broll_dir / "broll_table.docx"
-                        if not broll_docx_path.exists():
-                            try:
-                                _save_broll_table_as_docx(broll_table, broll_docx_path)
-                                print(f"💾 Saved B-roll table (Word) → {broll_docx_path}")
-                            except Exception as docx_err:
-                                print(f"⚠️ Failed to save broll_table.docx (grok path): {docx_err}")
-                    except Exception as save_tbl_err:
-                        print(
-                            f"⚠️ Failed to save broll_table.md (grok path): {save_tbl_err}")
 
             # NEW: Generate HeyGen Ready Section (only if checkbox checked)
             if checkboxes.get("heygen", False):
                 try:
                     print("\n🎬 Generating HeyGen Ready section...")
-                    from console_ui.text_processing import extract_heygen_host_script
+                    from console_ui.text_processing import (
+                        extract_heygen_host_script,
+                        scrub_heygen_text,
+                    )
 
                     heygen_script = extract_heygen_host_script(
                         final_script_content)
 
-                    # Fallback: if no Host: markers found, use the script content directly
+                    # Fallback: if no Host: markers found, scrub the raw script
+                    # (strips title, metadata, chapter headings, stage directions, etc.)
                     if not heygen_script:
                         print(
-                            "⚠️ No Host: markers found - using full script for HeyGen section")
-                        heygen_script = final_script_content
+                            "⚠️ No Host: markers found - scrubbing full script for HeyGen section")
+                        heygen_script = scrub_heygen_text(final_script_content)
 
                     if heygen_script:
                         heygen_section = f"\n\n{'=' * 80}\n"
@@ -2087,9 +2270,16 @@ async def process_script_creation(session_id, topic, audience, tone,
 async def process_existing_script(
     session_id, script_content, audience, tone,
     video_length, checkboxes, heygen_template_id="",
-    heygen_api_key="", heygen_voice_id="", grok_api_key=""
+    heygen_api_key="", heygen_voice_id="", grok_api_key="",
+    youtube_details_override: Optional[str] = None,
+    broll_table_override: Optional[str] = None,
 ):
-    """Process existing script with progress updates"""
+    """Process existing script with progress updates.
+
+    youtube_details_override / broll_table_override let the caller pass
+    pre-loaded artifacts (e.g. from a .docx loaded into the bottom tabs)
+    so the corresponding agents are skipped entirely.
+    """
     import re
 
     logger.info(f"📝 SCRIPT PROCESSING STARTED: session={session_id}")
@@ -2099,6 +2289,21 @@ async def process_existing_script(
         return
 
     streamer = progress_streams[session_id]
+
+    # One-shot sanitizer: strip the legacy "Hi, I'm Roz's AI Digital Twin..."
+    # boilerplate intro (and its trailing `---` rule) from any uploaded /
+    # re-processed script so it doesn't keep propagating downstream.
+    if script_content:
+        _intro_re = re.compile(
+            r"^\s*Hi[, ]\s*I[\u2019']m\s+Roz['\u2019]s\s+AI\s+Digital\s+Twin\.[\s\S]*?This\s+is,?\s+AI\s+with\s+Roz\.\s*\n+"
+            r"(?:---+\s*\n+)?",
+            flags=re.IGNORECASE,
+        )
+        _new = _intro_re.sub("", script_content, count=1)
+        if _new != script_content:
+            logger.info(
+                "🧹 Stripped legacy 'AI Digital Twin' boilerplate intro from script_content")
+            script_content = _new.lstrip()
 
     try:
         # Initialize EDL variables
@@ -2136,11 +2341,15 @@ async def process_existing_script(
 
         # 1) Prefer an explicit "Heading:" line (first one wins), but skip
         #    chapter-style headings like "Heading: Chapter 1 - ..." so the
-        #    real script title (top-of-doc) can be used instead.
+        #    real script title (top-of-doc) can be used instead. Also skip
+        #    Visual Cue / B-Roll values that occasionally appear as the
+        #    first Heading: in malformed scripts.
         heading_match = None
         for _hm in re.finditer(r'^\s*Heading:\s*(.+)$', script_content, re.MULTILINE | re.IGNORECASE):
             _val = _hm.group(1).strip().strip('*').strip()
             if re.match(r'^chapter\s+\d+\b', _val, re.IGNORECASE):
+                continue
+            if re.match(r'^(?:visual\s*cue|b-?roll|host|hook|summary)\b', _val, re.IGNORECASE):
                 continue
             heading_match = _hm
             break
@@ -2154,6 +2363,7 @@ async def process_existing_script(
                 'hook summary', 'b-roll', 'broll', 'thumbnail', 'demo package',
                 'youtube details', 'heygen', 'curl commands',
                 'opening hook', 'hook options',
+                'final hook',
             )
             for m in re.finditer(r'^#+\s+(.+)$', script_content, re.MULTILINE):
                 candidate = m.group(1).strip()
@@ -2175,6 +2385,8 @@ async def process_existing_script(
                     # like '**Direct Video - Story Power with AI**' is usable.
                     line = re.sub(r'^[\*_]+\s*', '', line)
                     line = re.sub(r'\s*[\*_]+$', '', line)
+                    # Strip a leading 🎯 / 🎬 emoji + space (FINAL HOOK / OPENING HOOK markers).
+                    line = re.sub(r'^[\U0001F3AF\U0001F3AC]\s*', '', line)
                     line = line.strip()
                     if not line or line.startswith(('#', '-', '[')):
                         continue
@@ -2184,6 +2396,12 @@ async def process_existing_script(
                         continue
                     # Skip chapter headings
                     if re.match(r'^chapter\s+\d+\b', line, re.IGNORECASE):
+                        continue
+                    # Skip script-structure label lines that aren't titles.
+                    if re.match(
+                        r'^(?:visual\s*cue|b-?roll|host|hook|summary|heading|final\s+hook|opening\s+hook|option\s*\d+)\s*[:\-]?',
+                        line, re.IGNORECASE,
+                    ):
                         continue
                     script_title = line
                     logger.info(f"📰 ✅ Using line as title: '{script_title}'")
@@ -2267,6 +2485,102 @@ async def process_existing_script(
         hook_result = {}  # Initialize to empty dict to prevent undefined variable errors
         thumbnail_hook_text = ""
         thumbnail_hook_text_options: list[str] = []
+
+        # OPTIONAL: Shorten script to fit requested video length.
+        # When `shorten_script` is checked we call the script-review agent to
+        # condense the Host: dialogue down to ~target_minutes * wpm words.
+        if checkboxes.get("shorten_script", False):
+            try:
+                # Parse target minutes from video_length (e.g. "10 minutes")
+                _vl_match = re.search(r"(\d+(?:\.\d+)?)", str(video_length or ""))
+                _target_minutes = float(_vl_match.group(1)) if _vl_match else 10.0
+                _wpm = 150
+                _target_words = int(round(_target_minutes * _wpm))
+
+                def _host_word_count(text: str) -> int:
+                    blocks = re.findall(
+                        r"(?:^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*\**\s*([\s\S]*?)(?="
+                        r"\n\s*(?:#{1,6}\s+\S|(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|chapter\s+\d|visual\s+cue\s*:|b-?roll\s*:)|---+|===+)"
+                        r"|\Z)",
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+                    return sum(len(b.split()) for b in blocks)
+
+                _before_host_words = _host_word_count(cleaned_script)
+                # Resolve a target word count: percent (of current) takes precedence
+                # over the duration-derived target so the user can ask for e.g. "-25%".
+                _percent_raw = str(checkboxes.get("shorten_percent", "")).strip().lower()
+                _target_words_override = None
+                if _percent_raw and _percent_raw != "target":
+                    try:
+                        _pct = int(_percent_raw)
+                        if 0 < _pct < 100 and _before_host_words > 0:
+                            _target_words_override = int(round(_before_host_words * (1 - _pct / 100.0)))
+                    except Exception:
+                        _target_words_override = None
+                _effective_target = _target_words_override if _target_words_override else _target_words
+                streamer.send_update(
+                    f"✂️ Shortening script to ~{_target_minutes:.0f} min "
+                    f"(target ~{_effective_target} Host words, current {_before_host_words})",
+                    12,
+                )
+
+                # Only call the agent when the current script is materially longer
+                if _before_host_words > _effective_target * 1.05:
+                    from linedrive_azure.agents.script_shorten_agent_client import (
+                        ScriptShortenAgentClient,
+                    )
+                    _shorten_agent = ScriptShortenAgentClient()
+                    _short_result = _shorten_agent.shorten_to_target(
+                        script_content=cleaned_script,
+                        target_minutes=_target_minutes,
+                        wpm=_wpm,
+                        timeout=600,
+                        target_words_override=_target_words_override,
+                        reduction_percent=(int(_percent_raw) if _target_words_override else None),
+                        current_host_words=_before_host_words,
+                    )
+                    if _short_result.get("success") and _short_result.get("response"):
+                        _shortened = _short_result["response"].strip()
+                        # Strip ``` code fences if the agent wrapped its reply.
+                        _shortened = re.sub(r"^```[a-zA-Z]*\n", "", _shortened)
+                        _shortened = re.sub(r"\n```\s*$", "", _shortened)
+                        if _shortened:
+                            cleaned_script = _shortened
+                            _after_host_words = _host_word_count(cleaned_script)
+                            streamer.send_update(
+                                f"✅ Shortened: Host words {_before_host_words} → {_after_host_words} "
+                                f"(target ~{_target_words})",
+                                14,
+                            )
+                        else:
+                            streamer.send_update("⚠️ Shorten agent returned empty content; keeping original", 14)
+                    else:
+                        _err = _short_result.get("error", "unknown error")
+                        streamer.send_update(f"⚠️ Shorten agent failed: {_err}; keeping original", 14)
+                else:
+                    streamer.send_update(
+                        f"✅ Script already at/under target length — no shortening needed",
+                        14,
+                    )
+            except Exception as _shorten_err:
+                logger.error(f"❌ Shorten step error: {_shorten_err}")
+                streamer.send_update(f"⚠️ Shorten step error: {_shorten_err}", 14)
+
+        # HOOK-ONLY MODE: when only the Hook checkbox is set (no other section
+        # generators), we generate 3 hook options and return them to the UI for
+        # interactive selection. The user picks one in a modal, then
+        # /api/finalize-hook writes the final script with a single FINAL HOOK
+        # section and strips any prior OPENING HOOK OPTIONS block.
+        _section_flags = [
+            "youtube_details", "broll", "broll_images", "heygen", "curl",
+            "demo", "thumbnails", "flow_analysis", "grok_videos",
+        ]
+        _hook_only_mode = (
+            checkboxes.get("hook_summary", False)
+            and not any(checkboxes.get(_f, False) for _f in _section_flags)
+        )
 
         # Generate Hook & Summary if requested
         if checkboxes.get("hook_summary", False):
@@ -2357,6 +2671,120 @@ async def process_existing_script(
             logger.info(
                 f"📌 Adding {3 if hook3_text else (2 if hook2_text else 1)} hook option(s) to output")
 
+            # HOOK-ONLY MODE: short-circuit here and return hooks to UI for
+            # interactive selection instead of writing the full output file.
+            if _hook_only_mode:
+                _hooks_list = [h for h in (hook1_text, hook2_text, hook3_text) if h]
+
+                # Defensive: if the agent returned success but produced zero
+                # usable hook texts, surface an actionable error rather than
+                # silently completing with nothing for the UI to render.
+                if not _hooks_list:
+                    _raw = (
+                        hook_result.get("full_response")
+                        or hook_result.get("raw_response")
+                        or ""
+                    )
+                    # Common case: the source script contains an Azure content-
+                    # filter refusal (e.g. "I'm sorry, but I cannot assist with
+                    # that request.") so the Hook agent refused the whole job.
+                    _refusal_marker = "cannot assist with that request"
+                    if _refusal_marker in (script_content or "").lower():
+                        _err = (
+                            "Source script contains Azure content-filter refusal text "
+                            "('I'm sorry, but I cannot assist with that request.'). "
+                            "Remove those lines from the script (or re-run script "
+                            "creation) before generating hooks."
+                        )
+                    elif _refusal_marker in _raw.lower():
+                        _err = (
+                            "Hook agent refused the request (Azure content filter). "
+                            "Soften wording in the script or retry."
+                        )
+                    else:
+                        _err = (
+                            "Hook agent returned no usable hooks. Try again, or "
+                            "check the agent's raw response for parsing issues."
+                        )
+                    logger.warning(f"⚠️ Hook-only mode: {_err}")
+                    streamer.result = {"success": False, "error": _err}
+                    streamer.send_update(f"❌ {_err}", -1)
+                    return
+
+                # If the source script already has a **🎯 FINAL HOOK:** section,
+                # extract its Host body and prepend it as a "Keep current"
+                # option so the user can re-pick the existing hook.
+                _existing_hook_text = ""
+                try:
+                    # Find the start of any "FINAL HOOK" section (tolerant of
+                    # markdown bold, leading emoji, "the", trailing colon, etc.)
+                    _start_re = re.compile(
+                        r"(?:^|\n)\s*(?:#{1,6}\s*)?\*{0,2}\s*(?:🎯\s*)?(?:THE\s+)?FINAL\s+HOOK\s*:?\s*\*{0,2}\s*\n",
+                        flags=re.IGNORECASE,
+                    )
+                    _m = _start_re.search(script_content)
+                    if _m:
+                        _body = script_content[_m.end():]
+                        # Optional "Host:" / "**Host:**" label line
+                        _body = re.sub(
+                            r"^\s*\*{0,2}\s*Host\s*:?\s*\*{0,2}\s*\n+",
+                            "",
+                            _body,
+                            count=1,
+                            flags=re.IGNORECASE,
+                        )
+                        # Terminator: --- rule, next markdown heading, next
+                        # "Heading:" marker, next labeled section (e.g.
+                        # "**Chapter 1:**", "OPENING HOOK OPTIONS"), or EOF.
+                        _end_re = re.compile(
+                            r"\n(?:---+\s*\n|"
+                            r"#{1,6}\s|"
+                            r"\s*Heading\s*:|"
+                            r"\s*\*{1,2}\s*(?:Chapter|Part|Section|Opening|Hook|Summary|Conclusion|Outro|Intro)[^\n]*\*{1,2}|"
+                            r"\s*\*{1,2}\s*🎬|"
+                            r"\s*\*{1,2}\s*🎯|"
+                            r"\s*(?:🎬|🎯)\s+\w|"
+                            r"\s*FINAL\s+HOOK\s*:)",
+                            flags=re.IGNORECASE,
+                        )
+                        _e = _end_re.search(_body)
+                        _hook_body = _body[: _e.start()] if _e else _body
+                        _existing_hook_text = _hook_body.strip()
+                        # Sanity: drop if absurdly long (likely matched past the hook)
+                        if len(_existing_hook_text) > 1200:
+                            logger.info(
+                                f"ℹ️ Existing FINAL HOOK candidate too long ({len(_existing_hook_text)} chars); ignoring"
+                            )
+                            _existing_hook_text = ""
+                except Exception as _ex:
+                    logger.warning(f"⚠️ Existing FINAL HOOK extract failed: {_ex}")
+                logger.info(
+                    f"🔎 Existing FINAL HOOK extraction: {'FOUND ' + str(len(_existing_hook_text)) + ' chars' if _existing_hook_text else 'not found'}"
+                )
+                _hook_labels = [f"Option {i+1}" for i in range(len(_hooks_list))]
+                if _existing_hook_text:
+                    _hooks_list = [_existing_hook_text] + _hooks_list
+                    _hook_labels = ["Current FINAL HOOK"] + _hook_labels
+
+                logger.info(
+                    f"🎯 Hook-only mode: returning {len(_hooks_list)} hooks for UI selection"
+                    + (" (incl. existing FINAL HOOK)" if _existing_hook_text else "")
+                )
+                streamer.result = {
+                    "success": True,
+                    "awaiting_hook_selection": True,
+                    "hooks": _hooks_list,
+                    "hook_labels": _hook_labels,
+                    "script_title": script_title,
+                    "original_script": script_content,
+                    "session_id": session_id,
+                }
+                streamer.send_update(
+                    f"🎯 {len(_hooks_list)} hook options ready — pick one to finalize",
+                    100,
+                )
+                return
+
             final_output += "**🎬 OPENING HOOK OPTIONS**\n\n"
             final_output += "*Choose one of these three hooks for your video:*\n\n"
 
@@ -2405,114 +2833,149 @@ async def process_existing_script(
         youtube_details = None
         if checkboxes.get("youtube_details", False):
             current_progress = 15 + (completed_steps * progress_per_step)
-            streamer.send_update("📺 Generating YouTube Upload Details...",
-                                 int(current_progress))
-            try:
-                from linedrive_azure.agents import YouTubeUploadDetailsAgentClient
-
-                youtube_agent = YouTubeUploadDetailsAgentClient()
-                youtube_result = youtube_agent.generate_upload_details(
-                    script_content=cleaned_script,
-                    script_title=script_title,
-                    target_audience=audience,
-                    video_length=video_length,
-                    timeout=180
+            if youtube_details_override:
+                # Skip the agent: user loaded an existing YouTube details doc.
+                youtube_details = youtube_details_override
+                youtube_section = f"\n\n{'=' * 80}\n"
+                youtube_section += "# 📺 YOUTUBE UPLOAD DETAILS\n"
+                youtube_section += f"{'=' * 80}\n\n{youtube_details}"
+                final_output += youtube_section
+                completed_steps += 1
+                progress = 15 + (completed_steps * progress_per_step)
+                streamer.send_update(
+                    f"✅ Using loaded YouTube details ({len(youtube_details)} chars) — agent skipped",
+                    int(progress)
                 )
+            else:
+                streamer.send_update("📺 Generating YouTube Upload Details...",
+                                     int(current_progress))
+                try:
+                    from linedrive_azure.agents import YouTubeUploadDetailsAgentClient
 
-                if youtube_result.get("success", False):
-                    youtube_details = youtube_result.get("upload_details", "")
-                    youtube_section = f"\n\n{'=' * 80}\n"
-                    youtube_section += "# 📺 YOUTUBE UPLOAD DETAILS\n"
-                    youtube_section += f"{'=' * 80}\n\n{youtube_details}"
-                    final_output += youtube_section
-                    completed_steps += 1
-                    progress = 15 + (completed_steps * progress_per_step)
-                    streamer.send_update(
-                        f"✅ YouTube details generated ({len(youtube_details)} chars)",
-                        int(progress)
+                    youtube_agent = YouTubeUploadDetailsAgentClient()
+                    youtube_result = youtube_agent.generate_upload_details(
+                        script_content=cleaned_script,
+                        script_title=script_title,
+                        target_audience=audience,
+                        video_length=video_length,
+                        timeout=180
                     )
-            except Exception as e:
-                logger.error(f"❌ YouTube details error: {e}")
+
+                    if youtube_result.get("success", False):
+                        youtube_details = youtube_result.get("upload_details", "")
+                        youtube_section = f"\n\n{'=' * 80}\n"
+                        youtube_section += "# 📺 YOUTUBE UPLOAD DETAILS\n"
+                        youtube_section += f"{'=' * 80}\n\n{youtube_details}"
+                        final_output += youtube_section
+                        completed_steps += 1
+                        progress = 15 + (completed_steps * progress_per_step)
+                        streamer.send_update(
+                            f"✅ YouTube details generated ({len(youtube_details)} chars)",
+                            int(progress)
+                        )
+                except Exception as e:
+                    logger.error(f"❌ YouTube details error: {e}")
 
         # Generate B-roll Table if requested
         broll_table = None
         broll_rows = []
+        # If user pre-loaded a B-roll table doc, prime it now so that BOTH
+        # the explicit "broll" checkbox and downstream consumers (broll_images,
+        # grok_videos) can use it without re-running the agent.
+        if broll_table_override:
+            broll_table = broll_table_override
+            broll_rows = []
+            logger.info(
+                f"📋 Using loaded B-roll table override ({len(broll_table)} chars)")
         if checkboxes.get("broll", False):
             current_progress = 15 + (completed_steps * progress_per_step)
-            streamer.send_update("📊 Generating B-roll Search Terms Table...",
-                                 int(current_progress))
-            try:
-                from linedrive_azure.agents import ScriptBRollAgentClient
-
-                broll_agent = ScriptBRollAgentClient()
-                broll_result = broll_agent.generate_broll_table_with_timecodes(
-                    script_content=cleaned_script,
-                    script_title=script_title,
-                    words_per_minute=150,
-                    # Increased to 5 minutes for larger tables (40-60+ rows)
-                    timeout=300
-                )
-
-                if broll_result.get("success", False):
-                    broll_table = broll_result.get("table", "")
-                    parsed_data = broll_result.get("parsed_data", [])
-                    broll_rows = parsed_data
-
-                    broll_section = f"\n\n{'=' * 80}\n"
-                    broll_section += "# 📊 B-ROLL SEARCH TERMS TABLE\n"
-                    broll_section += f"{'=' * 80}\n\n{broll_table}"
-                    final_output += broll_section
-
-                    # Generate EDL file
-                    if parsed_data:
-                        try:
-                            import time
-                            timestamp = time.strftime("%Y%m%d_%H%M%S")
-                            edl_filename = f"broll_markers_{timestamp}.edl"
-                            edl_dir = run_output_dir / "MDL"
-                            edl_dir.mkdir(parents=True, exist_ok=True)
-                            edl_path = edl_dir / edl_filename
-
-                            edl_result = broll_agent.create_edl_markers(
-                                broll_data=parsed_data,
-                                output_file=str(edl_path),
-                                frame_rate='24'
-                            )
-
-                            if edl_result.get("success"):
-                                # Read EDL content for frontend display
-                                try:
-                                    with open(edl_path, 'r', encoding='utf-8') as f:
-                                        edl_content = f.read()
-                                    logger.info(
-                                        f"✅ EDL content read ({len(edl_content)} bytes)")
-                                except Exception as read_error:
-                                    logger.error(
-                                        f"⚠️ Could not read EDL file: {read_error}")
-
-                                edl_info = f"\n\n**EDL File:** `{edl_filename}`"
-                                edl_info += f" ({edl_result.get('marker_count')}"
-                                edl_info += " markers)\n"
-                                final_output += edl_info
-                        except Exception as edl_error:
-                            logger.error(f"❌ EDL error: {edl_error}")
-
-                    completed_steps += 1
-                    progress = 15 + (completed_steps * progress_per_step)
-                    streamer.send_update(
-                        f"✅ B-roll table generated ({len(broll_table)} chars)",
-                        int(progress)
-                    )
-                else:
-                    logger.warning(f"⚠️ B-roll agent returned success=False")
-                    streamer.send_update(
-                        "⚠️ B-roll table generation failed", int(current_progress))
-            except Exception as e:
-                logger.error(f"❌ B-roll table error: {e}")
-                import traceback
-                traceback.print_exc()
+            if broll_table_override:
+                # Skip the agent entirely.
+                broll_section = f"\n\n{'=' * 80}\n"
+                broll_section += "# 📊 B-ROLL SEARCH TERMS TABLE\n"
+                broll_section += f"{'=' * 80}\n\n{broll_table}"
+                final_output += broll_section
+                completed_steps += 1
+                progress = 15 + (completed_steps * progress_per_step)
                 streamer.send_update(
-                    f"❌ B-roll table error: {str(e)}", int(current_progress))
+                    f"✅ Using loaded B-roll table ({len(broll_table)} chars) — agent skipped",
+                    int(progress)
+                )
+            else:
+                streamer.send_update("📊 Generating B-roll Search Terms Table...",
+                                     int(current_progress))
+                try:
+                    from linedrive_azure.agents import ScriptBRollAgentClient
+
+                    broll_agent = ScriptBRollAgentClient()
+                    broll_result = broll_agent.generate_broll_table_with_timecodes(
+                        script_content=cleaned_script,
+                        script_title=script_title,
+                        words_per_minute=150,
+                        # Increased to 5 minutes for larger tables (40-60+ rows)
+                        timeout=300
+                    )
+
+                    if broll_result.get("success", False):
+                        broll_table = broll_result.get("table", "")
+                        parsed_data = broll_result.get("parsed_data", [])
+                        broll_rows = parsed_data
+
+                        broll_section = f"\n\n{'=' * 80}\n"
+                        broll_section += "# 📊 B-ROLL SEARCH TERMS TABLE\n"
+                        broll_section += f"{'=' * 80}\n\n{broll_table}"
+                        final_output += broll_section
+
+                        # Generate EDL file
+                        if parsed_data:
+                            try:
+                                import time
+                                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                                edl_filename = f"broll_markers_{timestamp}.edl"
+                                edl_dir = run_output_dir / "MDL"
+                                edl_dir.mkdir(parents=True, exist_ok=True)
+                                edl_path = edl_dir / edl_filename
+
+                                edl_result = broll_agent.create_edl_markers(
+                                    broll_data=parsed_data,
+                                    output_file=str(edl_path),
+                                    frame_rate='24'
+                                )
+
+                                if edl_result.get("success"):
+                                    # Read EDL content for frontend display
+                                    try:
+                                        with open(edl_path, 'r', encoding='utf-8') as f:
+                                            edl_content = f.read()
+                                        logger.info(
+                                            f"✅ EDL content read ({len(edl_content)} bytes)")
+                                    except Exception as read_error:
+                                        logger.error(
+                                            f"⚠️ Could not read EDL file: {read_error}")
+
+                                    edl_info = f"\n\n**EDL File:** `{edl_filename}`"
+                                    edl_info += f" ({edl_result.get('marker_count')}"
+                                    edl_info += " markers)\n"
+                                    final_output += edl_info
+                            except Exception as edl_error:
+                                logger.error(f"❌ EDL error: {edl_error}")
+
+                        completed_steps += 1
+                        progress = 15 + (completed_steps * progress_per_step)
+                        streamer.send_update(
+                            f"✅ B-roll table generated ({len(broll_table)} chars)",
+                            int(progress)
+                        )
+                    else:
+                        logger.warning(f"⚠️ B-roll agent returned success=False")
+                        streamer.send_update(
+                            "⚠️ B-roll table generation failed", int(current_progress))
+                except Exception as e:
+                    logger.error(f"❌ B-roll table error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    streamer.send_update(
+                        f"❌ B-roll table error: {str(e)}", int(current_progress))
 
         # Generate B-roll Images using Gemini (ONLY if broll_images checkbox checked AND broll_table was successfully generated)
         broll_images = None
@@ -2684,18 +3147,23 @@ async def process_existing_script(
             streamer.send_update("🎬 Generating HeyGen Ready section...",
                                  int(current_progress))
             try:
-                from console_ui.text_processing import extract_heygen_host_script
+                from console_ui.text_processing import (
+                    extract_heygen_host_script,
+                    scrub_heygen_text,
+                )
 
                 # Extract from the cleaned source script ONLY (not final_output) so the
                 # HeyGen text never includes the prepended OPENING HOOK OPTIONS block,
                 # the OPTION 1/2/3 "Host:" hooks, the opening statement, or any
                 # generated headers added below.
                 heygen_script = extract_heygen_host_script(cleaned_script)
-                # Fallback: if no Host: markers found, use cleaned script directly
+                # Fallback: if no Host: markers found, scrub the cleaned script
+                # down to dialogue-only (strip title, chapter headings, metadata,
+                # stage directions, hook/summary headers, separators).
                 if not heygen_script:
                     logger.info(
-                        "⚠️ No Host: markers found - using full script for HeyGen section")
-                    heygen_script = cleaned_script
+                        "⚠️ No Host: markers found - scrubbing cleaned script for HeyGen")
+                    heygen_script = scrub_heygen_text(cleaned_script)
                 if heygen_script:
                     heygen_section = f"\n\n{'=' * 80}\n"
                     heygen_section += "# 🎬 HEYGEN READY SCRIPT\n"
@@ -2719,26 +3187,136 @@ async def process_existing_script(
             try:
                 from console_ui.text_processing import (
                     extract_heygen_host_script,
-                    generate_heygen_curl_commands
+                    generate_heygen_curl_commands,
+                    scrub_heygen_text,
                 )
 
                 if not heygen_script:
                     heygen_script = extract_heygen_host_script(cleaned_script)
 
-                # Fallback: if no Host: markers found, use the cleaned script directly
+                # Fallback: if no Host: markers found, scrub for dialogue only.
                 if not heygen_script:
                     logger.info(
-                        "⚠️ No Host: markers found - using full script for curl generation")
-                    heygen_script = cleaned_script
+                        "⚠️ No Host: markers found - scrubbing cleaned script for curl generation")
+                    heygen_script = scrub_heygen_text(cleaned_script)
 
                 if heygen_script:
                     heygen_with_header = (
                         f"# 🎬 HEYGEN READY SCRIPT\n{'=' * 80}\n\n{heygen_script}"
                     )
+
+                    # Extract a FINAL HOOK section (if present in cleaned_script
+                    # or final_output) so we can emit a dedicated `{short}-hook`
+                    # curl command alongside the chapter curls.
+                    _hook_search_text = f"{final_output}\n{cleaned_script}"
+                    _final_hook_text = ""
+                    _hm = re.search(
+                        r"\*{0,2}\s*(?:🎯\s*)?FINAL\s+HOOK\s*:?\s*\*{0,2}\s*\n+"
+                        r"(?:\*{0,2}\s*Host\s*:?\s*\*{0,2}\s*\n+)?"
+                        r"([\s\S]*?)"
+                        r"(?="
+                        r"\n\s*---"
+                        r"|\n\s*={3,}"
+                        r"|\n\s*#{1,6}\s"
+                        r"|\n\s*\*{0,2}\s*(?:Heading|Visual\s*Cue|B-?Roll|Chapter|VISUAL|HEADING|OPTION\s*\d+|Host|Summary|Conclusion|Outro|Intro)\s*[:\-]"
+                        r"|\n\s*\*{2}[^*\n]+\*{2}\s*:"
+                        r"|\n\s*\n\s*\*{0,2}\s*OPTION\s*\d+"
+                        r"|\Z)",
+                        _hook_search_text,
+                        re.IGNORECASE,
+                    )
+                    if _hm:
+                        _final_hook_text = _hm.group(1).strip()
+                        # PRIMARY terminator: a hook is ONE paragraph. Cut at
+                        # the first BLANK line so any intro paragraph that
+                        # follows the hook doesn't bleed into the HeyGen
+                        # `-hook` curl payload. (Hooks themselves may wrap
+                        # across single \n line breaks, so we don't cut on a
+                        # bare single newline.)
+                        _final_hook_text = re.split(
+                            r"\n\s*\n",
+                            _final_hook_text,
+                            maxsplit=1,
+                        )[0].strip()
+                        # Defensive: drop a trailing standing-intro paragraph
+                        # that may be joined to the hook with only a single
+                        # \n (e.g. "...five to start with.\nHi, I'm <Host>...").
+                        _final_hook_text = re.split(
+                            r"\n\s*(?:Hi[, ]\s*I[’']m|Hello[, ]|Welcome\s+back|Welcome\s+to|This\s+is,?\s+AI\s+with)\b",
+                            _final_hook_text,
+                            maxsplit=1,
+                            flags=re.IGNORECASE,
+                        )[0].strip()
+                        # Defensive: drop any trailing "Heading:" / "OPTION N:" line
+                        # that snuck in despite the lookahead.
+                        _final_hook_text = re.split(
+                            r"\n\s*(?:\*{0,2}\s*)?(?:Heading|Visual\s*Cue|B-?Roll|Chapter|OPTION\s*\d+|Host)\s*[:\-]",
+                            _final_hook_text,
+                            maxsplit=1,
+                            flags=re.IGNORECASE,
+                        )[0].strip()
+                        # Defensive: also cut at the first `---` separator.
+                        _final_hook_text = re.split(
+                            r"\n\s*---+\s*\n?",
+                            _final_hook_text,
+                            maxsplit=1,
+                        )[0].strip()
+                        # Defensive: reject obviously-bad captures (just the
+                        # header text, empty, or fewer than ~6 words). Better
+                        # to skip the hook curls than emit a `-hook` curl whose
+                        # content is literally "FINAL HOOK:".
+                        _hook_norm = re.sub(
+                            r"[^a-z0-9 ]+", " ",
+                            _final_hook_text.lower()).strip()
+                        if (
+                            not _hook_norm
+                            or _hook_norm in ("final hook", "opening hook", "host")
+                            or _hook_norm.startswith(("final hook ", "opening hook "))
+                            or len(_final_hook_text.split()) < 6
+                        ):
+                            logger.warning(
+                                "⚠️ FINAL HOOK extract was header-only or too "
+                                "short (%r) — skipping `-hook` curls.",
+                                _final_hook_text[:80],
+                            )
+                            _final_hook_text = ""
+                        # Hard cap: a hook is at most ~120 words. Anything longer
+                        # means our regex bled into adjacent content — truncate
+                        # at the first sentence boundary within the cap.
+                        _MAX_HOOK_WORDS = 120
+                        _words = _final_hook_text.split()
+                        if len(_words) > _MAX_HOOK_WORDS:
+                            _truncated = " ".join(_words[:_MAX_HOOK_WORDS])
+                            # Prefer trimming back to a sentence end.
+                            _sent_end = max(
+                                _truncated.rfind(". "),
+                                _truncated.rfind("! "),
+                                _truncated.rfind("? "),
+                            )
+                            if _sent_end > len(_truncated) // 2:
+                                _truncated = _truncated[: _sent_end + 1]
+                            logger.warning(
+                                f"⚠️ FINAL HOOK extract was {len(_words)} words; "
+                                f"truncated to {_MAX_HOOK_WORDS}-word cap for HeyGen curl."
+                            )
+                            _final_hook_text = _truncated.strip()
+
+                    # NOTE: curl chapter splitter needs the ORIGINAL structured
+                    # script (with `Heading:` / `Chapter N -` boundaries) to
+                    # split chapters correctly. `heygen_script` is now scrubbed
+                    # dialogue-only and has no boundaries left, so feed the
+                    # raw cleaned_script (wrapped with the expected header)
+                    # and let the curl generator strip stage-direction lines
+                    # from each chapter's content itself.
+                    curl_source = (
+                        f"# 🎬 HEYGEN READY SCRIPT\n{'=' * 80}\n\n{cleaned_script}"
+                    )
+
                     curl_commands = generate_heygen_curl_commands(
-                        heygen_with_header, script_title,
+                        curl_source, script_title,
                         heygen_api_key, heygen_template_id,
-                        heygen_voice_id
+                        heygen_voice_id,
+                        final_hook_text=_final_hook_text,
                     )
                     if curl_commands:
                         # Store curl commands separately (don't append to script)
@@ -3639,6 +4217,10 @@ def progress_stream(session_id):
                                 "broll_table": streamer.result.get("broll_table"),
                                 "broll_rows": streamer.result.get("broll_rows"),
                                 "youtube_details": streamer.result.get("youtube_details"),
+                                "awaiting_hook_selection": streamer.result.get("awaiting_hook_selection", False),
+                                "hooks": streamer.result.get("hooks", []),
+                                "hook_labels": streamer.result.get("hook_labels", []),
+                                "original_script": streamer.result.get("original_script", ""),
                             }
 
                             print("\n" + "="*70)
@@ -3771,6 +4353,12 @@ def process_script():
         heygen_api_key = data.get("heygen_api_key", "")
         heygen_voice_id = data.get("heygen_voice_id", "")
         grok_api_key = data.get("grok_api_key", "")
+        # Optional pre-loaded artifacts that let the workflow skip the
+        # corresponding agents (Feature: Load existing YouTube details / B-roll table).
+        youtube_details_override = (
+            data.get("youtube_details_override") or "").strip() or None
+        broll_table_override = (
+            data.get("broll_table_override") or "").strip() or None
 
         if not script_content.strip():
             logger.warning("❌ Empty script received")
@@ -3794,7 +4382,9 @@ def process_script():
                 asyncio.run(process_existing_script(
                     session_id, script_content, audience, tone,
                     video_length, checkboxes, heygen_template_id,
-                    heygen_api_key, heygen_voice_id, grok_api_key
+                    heygen_api_key, heygen_voice_id, grok_api_key,
+                    youtube_details_override=youtube_details_override,
+                    broll_table_override=broll_table_override,
                 ))
             except Exception as e:
                 logger.error(f"❌ Script processing error: {e}")
@@ -3817,6 +4407,216 @@ def process_script():
         error_msg = f"Script processing request failed: {str(e)}"
         logger.error(f"❌ {error_msg}")
         return jsonify({"success": False, "error": error_msg})
+
+
+@app.route("/api/finalize-hook", methods=["POST"])
+def finalize_hook():
+    """Apply a user-chosen hook to a script and save the final output.
+
+    Called by the frontend after the user picks one of the three hooks
+    generated in hook-only mode. We strip any prior **🎬 OPENING HOOK
+    OPTIONS** block from the source script, prepend a single
+    **🎯 FINAL HOOK:** section with the chosen hook, and save md/docx.
+    """
+    import re as _re
+    try:
+        data = request.json or {}
+        chosen_hook = (data.get("hook_text") or "").strip()
+        original_script = (data.get("original_script") or "").strip()
+        script_title = (data.get("script_title") or "Untitled Script").strip()
+
+        if not chosen_hook:
+            return jsonify({"success": False, "error": "hook_text is required"}), 400
+        if not original_script:
+            return jsonify({"success": False, "error": "original_script is required"}), 400
+
+        # Strip ALL existing OPENING HOOK OPTIONS / FINAL HOOK blocks so we
+        # never stack hooks on repeated picks. We can't rely on a `---`
+        # terminator being present, so we scan for each section header and
+        # delete through a tolerant end-of-section marker: next markdown
+        # heading, `Heading:` marker, `---` rule, next labeled section
+        # (Chapter/Part/Opening/Hook/Summary/Outro), or EOF.
+        stripped = original_script
+
+        def _strip_sections(text, header_re):
+            _end_re = _re.compile(
+                r"\n(?:---+\s*\n|"
+                r"#{1,6}\s|"
+                r"\s*Heading\s*:|"
+                r"\s*\*{1,2}\s*(?:Chapter|Part|Section|Opening|Hook|Summary|Conclusion|Outro|Intro)[^\n]*\*{1,2}|"
+                r"\s*\*{1,2}\s*🎬|"
+                r"\s*\*{1,2}\s*🎯|"
+                r"\s*(?:🎬|🎯)\s+\w)",
+                flags=_re.IGNORECASE,
+            )
+            out = text
+            # Iterate until no more matches (handles multiple stacked sections)
+            for _ in range(20):
+                m = header_re.search(out)
+                if not m:
+                    break
+                tail = out[m.end():]
+                e = _end_re.search(tail)
+                # If end found, drop through end marker's leading newline only,
+                # keeping the terminator line intact. If no end, drop to EOF.
+                if e:
+                    out = out[: m.start()] + tail[e.start() + 1 :]
+                else:
+                    out = out[: m.start()]
+            return out
+
+        # **🎬 OPENING HOOK OPTIONS** header (with optional emoji/bold).
+        # The OPENING HOOK OPTIONS block has a known internal structure:
+        #     # 🎬 OPENING HOOK OPTIONS
+        #     *Choose one of these three hooks for your video:*
+        #     **OPTION 1:** ... ---
+        #     **OPTION 2:** ... ---
+        #     **OPTION 3:** ... ---
+        # The generic _strip_sections terminator includes `---`, so it would
+        # only delete through the FIRST `---` and leave OPTION 2/3 behind.
+        # Use a dedicated stripper that walks past those internal `---`
+        # separators and consumes every **OPTION N:** sub-block until we hit
+        # the next real section.
+        _opening_hdr = _re.compile(
+            r"(?:^|\n)\s*(?:={3,}\s*\n)?\s*(?:#{1,6}\s*)?\*{0,2}\s*(?:🎬\s*)?OPENING\s+HOOK\s+OPTIONS\s*\*{0,2}\s*\n(?:\s*={3,}\s*\n)?",
+            flags=_re.IGNORECASE,
+        )
+        _option_block_re = _re.compile(
+            r"\A\s*(?:\*{1,2}\s*)?OPTION\s*\d+\s*:?\s*\*{0,2}\s*\n",
+            flags=_re.IGNORECASE,
+        )
+        _hook_block_terminator = _re.compile(
+            r"\n(?:#{1,6}\s|"
+            r"\s*Heading\s*:|"
+            r"\s*\*{0,2}\s*(?:Chapter|Part|Section|Visual\s*Cue|B-?Roll|Summary|Conclusion|Outro|Intro|Host)\s*[:\-]|"
+            r"\s*\*{0,2}\s*🎯\s*(?:THE\s+)?FINAL\s+HOOK|"
+            r"\s*={3,}\s*\n\s*#)",
+            flags=_re.IGNORECASE,
+        )
+
+        def _strip_opening_hook_options(text: str) -> str:
+            out = text
+            for _ in range(5):
+                m = _opening_hdr.search(out)
+                if not m:
+                    break
+                start = m.start()
+                cursor = m.end()
+                # Optionally consume an intro line like "*Choose one of these three hooks for your video:*"
+                intro_m = _re.match(r"[ \t]*\*[^\n]*\n+", out[cursor:])
+                if intro_m:
+                    cursor += intro_m.end()
+                # Now consume one or more **OPTION N:** ... --- blocks.
+                consumed_any_option = False
+                for _ in range(10):
+                    tail = out[cursor:]
+                    if not _option_block_re.match(tail):
+                        break
+                    # Find end of this OPTION block — next `---` line.
+                    sep_m = _re.search(r"\n\s*---+\s*(?:\n|$)", tail)
+                    if not sep_m:
+                        # No trailing separator — consume to end of paragraph
+                        # or until a real terminator.
+                        term = _hook_block_terminator.search(tail)
+                        cursor += term.start() + 1 if term else len(tail)
+                        consumed_any_option = True
+                        break
+                    cursor += sep_m.end()
+                    consumed_any_option = True
+                # Also consume any trailing blank lines + stray `---` that
+                # remain right after the OPTION blocks.
+                blank_m = _re.match(r"(?:[ \t]*\n)+", out[cursor:])
+                if blank_m:
+                    cursor += blank_m.end()
+                if not consumed_any_option:
+                    # Header found but no options — fall back to terminator scan.
+                    tail = out[cursor:]
+                    term = _hook_block_terminator.search(tail)
+                    cursor += term.start() + 1 if term else len(tail)
+                out = out[:start] + "\n" + out[cursor:]
+            return out
+
+        stripped = _strip_opening_hook_options(stripped)
+
+        # Defensive sweep: also kill any stray **OPTION N:** ... --- blocks
+        # that may still be sitting at the top of the script (e.g. when the
+        # OPENING HOOK OPTIONS header was already trimmed by an earlier pass
+        # but its sub-options remained). This is bounded to the first 6KB so
+        # we never touch genuine in-chapter content.
+        _head, _rest = stripped[:6000], stripped[6000:]
+        _head = _re.sub(
+            r"(?:^|\n)\s*(?:\*{1,2}\s*)?OPTION\s*\d+\s*:?\s*\*{0,2}\s*\n[\s\S]*?\n\s*---+\s*(?:\n|$)",
+            "\n",
+            _head,
+            flags=_re.IGNORECASE,
+        )
+        stripped = _head + _rest
+
+        # FINAL HOOK header — tolerant: optional `#`, optional bold, optional
+        # 🎯 emoji, optional `THE`, optional trailing colon. Match leading
+        # newline OR start-of-string OR end of a previous line (handles cases
+        # where the header is glued onto the prior line, e.g.
+        # "# Title**🎯 FINAL HOOK:**").
+        _final_hdr = _re.compile(
+            r"(?:^|\n|(?<=\*\*))\s*(?:#{1,6}\s*)?\*{0,2}\s*(?:🎯\s*)?(?:THE\s+)?FINAL\s+HOOK\s*:?\s*\*{0,2}\s*\n",
+            flags=_re.IGNORECASE,
+        )
+        stripped = _strip_sections(stripped, _final_hdr)
+
+        # Also strip a stray "**Host:**" / "Host:" line if it was left behind
+        # immediately after we removed a FINAL HOOK header.
+        stripped = _re.sub(
+            r"(?:^|\n)\s*\*{0,2}\s*Host\s*:\s*\*{0,2}\s*\n+([^\n]+\n)(?=\s*\n|$)",
+            "\n",
+            stripped,
+            count=0,
+            flags=_re.IGNORECASE,
+        )
+        stripped = stripped.lstrip("\n")
+
+        hook_block = (
+            "**🎯 FINAL HOOK:**\n\n"
+            "**Host:**\n\n"
+            f"{chosen_hook}\n\n"
+            "---\n\n"
+        )
+
+        # Insert AFTER the title heading if the first non-blank line is a
+        # markdown heading (`# Title`). Otherwise prepend.
+        title_match = _re.match(r"\s*(#{1,6}[^\n]*\n+)", stripped)
+        if title_match:
+            title_line = title_match.group(1)
+            rest = stripped[title_match.end():]
+            final_output = f"{title_line}\n{hook_block}{rest.lstrip()}"
+        else:
+            final_output = f"{hook_block}{stripped}"
+
+        # Save md/docx using the same helper as the main pipeline
+        try:
+            saved_md, saved_docx = asyncio.run(
+                _save_script_md_and_docx(script_title, final_output)
+            )
+        except RuntimeError:
+            # Already inside an event loop — schedule synchronously
+            loop = asyncio.new_event_loop()
+            try:
+                saved_md, saved_docx = loop.run_until_complete(
+                    _save_script_md_and_docx(script_title, final_output)
+                )
+            finally:
+                loop.close()
+
+        return jsonify({
+            "success": True,
+            "script": final_output,
+            "script_title": script_title,
+            "markdown_path": saved_md,
+            "docx_path": saved_docx,
+        })
+
+    except Exception as e:
+        logger.error(f"❌ /api/finalize-hook error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/export_markdown", methods=["POST"])
@@ -4175,7 +4975,7 @@ def grok_test_video_generate():
 
         client = xai_sdk.Client(api_key=xai_api_key)
         response = client.video.generate(
-            prompt=prompt,
+            prompt=_grok_prompt_no_audio(prompt),
             model="grok-imagine-video",
             duration=duration,
             aspect_ratio=aspect_ratio,
@@ -4894,6 +5694,24 @@ def grok_get_saved_key():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# Hint appended to every Grok video prompt so the generator avoids audio.
+# xai_sdk video.generate has no audio toggle, so we steer the model via prompt.
+GROK_NO_AUDIO_HINT = (
+    " Silent video only. No audio, no music, no sound effects, no dialogue, "
+    "no voiceover, no ambient sound. Visuals only."
+)
+
+
+def _grok_prompt_no_audio(prompt: str) -> str:
+    """Append the no-audio hint to a Grok video prompt (idempotent)."""
+    base = (prompt or "").strip()
+    if not base:
+        return base
+    if "silent video" in base.lower() or "no audio" in base.lower():
+        return base
+    return base.rstrip(".") + "." + GROK_NO_AUDIO_HINT
+
+
 @app.route("/api/grok/key", methods=["POST"])
 def grok_save_key():
     """Persist Grok API key in server settings so it survives browser/session changes."""
@@ -5000,7 +5818,7 @@ def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, sc
 
         try:
             response = client.video.generate(
-                prompt=prompt,
+                prompt=_grok_prompt_no_audio(prompt),
                 model="grok-imagine-video",
                 duration=6,
                 aspect_ratio="16:9",
@@ -5239,84 +6057,94 @@ def export_word():
                 # Handle markdown tables - detect header row with pipes
                 if '|' in line:
                     # Look ahead to check if next line is a separator
+                    is_table = False
                     if i + 1 < len(lines):
                         next_line = lines[i + 1].rstrip()
                         # Check if next line is a table separator (pipes, dashes, colons, spaces)
                         if '|' in next_line and all(c in '|-: \t' for c in next_line.replace('|', '')):
-                            # This is a markdown table!
-                            logger.info(f"📊 Detected table at line {i}")
+                            is_table = True
+                    if not is_table:
+                        # Not a table — treat as a regular paragraph and advance.
+                        # (Lines like "Audience: [a | b | c]" used to cause an
+                        # infinite loop because i was never incremented here.)
+                        paragraph = doc.add_paragraph()
+                        paragraph.add_run(line)
+                        i += 1
+                        continue
+                    # This is a markdown table!
+                    logger.info(f"📊 Detected table at line {i}")
 
-                            # Collect header row
-                            header_line = line
-                            i += 1  # Skip to separator line
-                            i += 1  # Skip separator, move to first data row
+                    # Collect header row
+                    header_line = line
+                    i += 1  # Skip to separator line
+                    i += 1  # Skip separator, move to first data row
 
-                            # Collect all data rows (lines with pipes)
-                            data_lines = []
-                            while i < len(lines):
-                                data_line = lines[i].rstrip()
-                                if '|' in data_line:
-                                    data_lines.append(data_line)
-                                    i += 1
-                                else:
-                                    break
+                    # Collect all data rows (lines with pipes)
+                    data_lines = []
+                    while i < len(lines):
+                        data_line = lines[i].rstrip()
+                        if '|' in data_line:
+                            data_lines.append(data_line)
+                            i += 1
+                        else:
+                            break
 
-                            # Parse the table
-                            # Split on pipes and clean up
-                            header_cells = [cell.strip()
-                                            for cell in header_line.split('|')]
-                            # Remove empty cells from start/end if table has leading/trailing pipes
-                            if header_cells and not header_cells[0]:
-                                header_cells = header_cells[1:]
-                            if header_cells and not header_cells[-1]:
-                                header_cells = header_cells[:-1]
+                    # Parse the table
+                    # Split on pipes and clean up
+                    header_cells = [cell.strip()
+                                    for cell in header_line.split('|')]
+                    # Remove empty cells from start/end if table has leading/trailing pipes
+                    if header_cells and not header_cells[0]:
+                        header_cells = header_cells[1:]
+                    if header_cells and not header_cells[-1]:
+                        header_cells = header_cells[:-1]
 
-                            # Parse data rows
-                            data_rows = []
-                            for data_line in data_lines:
-                                cells = [cell.strip()
-                                         for cell in data_line.split('|')]
-                                # Remove empty cells from start/end
-                                if cells and not cells[0]:
-                                    cells = cells[1:]
-                                if cells and not cells[-1]:
-                                    cells = cells[:-1]
-                                if cells:  # Only add non-empty rows
-                                    data_rows.append(cells)
+                    # Parse data rows
+                    data_rows = []
+                    for data_line in data_lines:
+                        cells = [cell.strip()
+                                 for cell in data_line.split('|')]
+                        # Remove empty cells from start/end
+                        if cells and not cells[0]:
+                            cells = cells[1:]
+                        if cells and not cells[-1]:
+                            cells = cells[:-1]
+                        if cells:  # Only add non-empty rows
+                            data_rows.append(cells)
 
-                            # Create Word table
-                            if header_cells and data_rows:
-                                logger.info(
-                                    f"📊 Creating Word table: {len(header_cells)} columns, {len(data_rows)} rows")
+                    # Create Word table
+                    if header_cells and data_rows:
+                        logger.info(
+                            f"📊 Creating Word table: {len(header_cells)} columns, {len(data_rows)} rows")
 
-                                table = doc.add_table(
-                                    rows=1 + len(data_rows), cols=len(header_cells))
-                                table.style = 'Light Grid Accent 1'
+                        table = doc.add_table(
+                            rows=1 + len(data_rows), cols=len(header_cells))
+                        table.style = 'Light Grid Accent 1'
 
-                                # Add headers
-                                for col_idx, header in enumerate(header_cells):
-                                    if col_idx < len(table.rows[0].cells):
-                                        cell = table.rows[0].cells[col_idx]
-                                        cell.text = header
-                                        # Make header bold
-                                        for paragraph in cell.paragraphs:
-                                            for run in paragraph.runs:
-                                                run.bold = True
+                        # Add headers
+                        for col_idx, header in enumerate(header_cells):
+                            if col_idx < len(table.rows[0].cells):
+                                cell = table.rows[0].cells[col_idx]
+                                cell.text = header
+                                # Make header bold
+                                for paragraph in cell.paragraphs:
+                                    for run in paragraph.runs:
+                                        run.bold = True
 
-                                # Add data rows
-                                for row_idx, row_data in enumerate(data_rows, start=1):
-                                    for col_idx, cell_text in enumerate(row_data):
-                                        if col_idx < len(header_cells) and row_idx < len(table.rows):
-                                            table.rows[row_idx].cells[col_idx].text = cell_text
+                        # Add data rows
+                        for row_idx, row_data in enumerate(data_rows, start=1):
+                            for col_idx, cell_text in enumerate(row_data):
+                                if col_idx < len(header_cells) and row_idx < len(table.rows):
+                                    table.rows[row_idx].cells[col_idx].text = cell_text
 
-                                # Add spacing after table
-                                doc.add_paragraph()
-                                logger.info(f"✅ Table created successfully")
-                            else:
-                                logger.warning(
-                                    f"⚠️ Table parsing failed: headers={len(header_cells)}, rows={len(data_rows)}")
+                        # Add spacing after table
+                        doc.add_paragraph()
+                        logger.info(f"✅ Table created successfully")
+                    else:
+                        logger.warning(
+                            f"⚠️ Table parsing failed: headers={len(header_cells)}, rows={len(data_rows)}")
 
-                            continue
+                    continue
 
                 # Handle horizontal rules (---)
                 elif line.strip() in ['---', '___', '***']:
@@ -5378,19 +6206,23 @@ def export_word():
             if not temp_file.exists():
                 return jsonify({"success": False, "error": "Failed to create Word document"})
 
-            # Optionally save a server-side copy to {output_dir}/broll/
-            try:
-                if data.get("save_to_broll_dir"):
-                    script_title_for_dir = data.get("script_title") or title or "Untitled_Script"
-                    run_dir = _get_run_output_dir(script_title_for_dir, create=True)
-                    broll_dir = Path(run_dir) / "broll"
-                    broll_dir.mkdir(parents=True, exist_ok=True)
-                    server_copy = broll_dir / f"{title}.docx"
-                    import shutil as _shutil
-                    _shutil.copy2(str(temp_file), str(server_copy))
-                    logger.info(f"💾 Saved B-roll Word copy → {server_copy}")
-            except Exception as save_err:
-                logger.error(f"⚠️ Failed to save server-side broll .docx: {save_err}")
+            # Optionally also copy into the run's broll/ folder so the user has
+            # a per-project archived copy of the B-roll table docx.
+            if data.get("save_to_broll_dir"):
+                try:
+                    archive_title = data.get("script_title") or title
+                    archive_root = _get_run_output_dir(
+                        archive_title, create=True)
+                    archive_dir = archive_root / "broll"
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    archive_path = archive_dir / f"{title}.docx"
+                    import shutil
+                    shutil.copy2(str(temp_file), str(archive_path))
+                    logger.info(
+                        f"💾 Archived broll docx → {archive_path}")
+                except Exception as arc_err:
+                    logger.warning(
+                        f"⚠️ Could not archive broll docx: {arc_err}")
 
             # Read the file and return as binary response
             with open(temp_file, 'rb') as f:
@@ -5415,6 +6247,593 @@ def export_word():
         error_msg = f"Export to Word failed: {str(e)}"
         logger.error(f"❌ {error_msg}")
         return jsonify({"success": False, "error": error_msg})
+
+
+# ---------------------------------------------------------------------------
+# YouTube Publishing (AI for Roz channel)
+# ---------------------------------------------------------------------------
+
+def _yt_uploads_dir() -> Path:
+    """Working directory for browser-uploaded videos and thumbnails."""
+    base = Path.home() / ".scriptcraft" / "youtube_uploads"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _osascript_pick_file(prompt: str, types_clause: str = "") -> dict:
+    """Show a macOS native file-open dialog and return the chosen path.
+
+    ``types_clause`` is the literal AppleScript clause appended to the
+    ``choose file`` command (e.g. ``of type {"mp4","mov"}``)."""
+    import subprocess
+    if sys.platform != "darwin":
+        return {"success": False,
+                "error": "Native file picker is only supported on macOS."}
+    script = (
+        'try\n'
+        f'  set theFile to POSIX path of (choose file with prompt "{prompt}" {types_clause})\n'
+        '  return theFile\n'
+        'on error number -128\n'
+        '  return "__CANCELLED__"\n'
+        'end try'
+    )
+    try:
+        out = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=300, check=False
+        )
+    except Exception as ex:
+        return {"success": False, "error": f"osascript failed: {ex}"}
+    if out.returncode != 0:
+        return {"success": False,
+                "error": (out.stderr or "osascript error").strip()}
+    path = (out.stdout or "").strip()
+    if not path or path == "__CANCELLED__":
+        return {"success": False, "cancelled": True}
+    return {"success": True, "path": path}
+
+
+@app.route("/api/youtube/pick-video-path", methods=["GET"])
+def youtube_pick_video_path():
+    """Open a native OS file dialog and return the selected video path
+    without uploading anything. The video must remain on the local disk
+    where the YouTube uploader can read it directly."""
+    res = _osascript_pick_file(
+        "Choose the finished video to publish to YouTube",
+        'of type {"mp4","mov","m4v","mkv","webm"}'
+    )
+    if not res.get("success"):
+        return jsonify(res), (200 if res.get("cancelled") else 500)
+    p = Path(res["path"])
+    if not p.exists() or not p.is_file():
+        return jsonify({"success": False,
+                        "error": f"Selected file not found: {p}"}), 400
+    return jsonify({
+        "success": True,
+        "path": str(p),
+        "filename": p.name,
+        "size_bytes": p.stat().st_size,
+    })
+
+
+@app.route("/api/youtube/pick-thumbnail-path", methods=["GET"])
+def youtube_pick_thumbnail_path():
+    """Open a native OS file dialog and return the selected thumbnail
+    path. We validate extension and 2 MB YouTube limit here."""
+    res = _osascript_pick_file(
+        "Choose a thumbnail image (PNG or JPG, under 2 MB)",
+        'of type {"png","jpg","jpeg"}'
+    )
+    if not res.get("success"):
+        return jsonify(res), (200 if res.get("cancelled") else 500)
+    p = Path(res["path"])
+    if not p.exists() or not p.is_file():
+        return jsonify({"success": False,
+                        "error": f"Selected file not found: {p}"}), 400
+    if p.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+        return jsonify({"success": False,
+                        "error": f"Unsupported extension {p.suffix}"}), 400
+    size = p.stat().st_size
+    if size > 2 * 1024 * 1024:
+        return jsonify({"success": False,
+                        "error": "Thumbnail exceeds YouTube's 2 MB limit."
+                        }), 400
+    return jsonify({
+        "success": True,
+        "path": str(p),
+        "filename": p.name,
+        "size_bytes": size,
+    })
+
+
+@app.route("/api/youtube/upload-video-file", methods=["POST"])
+def youtube_upload_video_file():
+    """Receive a video file from the browser and save it to a working
+    directory so the publisher can upload it by path."""
+    try:
+        from werkzeug.utils import secure_filename
+        f = request.files.get("file")
+        if not f:
+            return jsonify({"success": False, "error": "no file"}), 400
+        safe_name = secure_filename(f.filename or "video.mp4") or "video.mp4"
+        target = _yt_uploads_dir() / safe_name
+        f.save(str(target))
+        return jsonify({
+            "success": True,
+            "path": str(target),
+            "filename": safe_name,
+            "size_bytes": target.stat().st_size,
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_upload_video_file error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/upload-thumbnail", methods=["POST"])
+def youtube_upload_thumbnail():
+    """Receive a thumbnail image from the browser and save it locally."""
+    try:
+        from werkzeug.utils import secure_filename
+        f = request.files.get("file")
+        if not f:
+            return jsonify({"success": False, "error": "no file"}), 400
+        safe_name = secure_filename(f.filename or "thumbnail.png") \
+            or "thumbnail.png"
+        ext = Path(safe_name).suffix.lower()
+        if ext not in {".png", ".jpg", ".jpeg"}:
+            return jsonify({"success": False,
+                            "error": f"unsupported extension {ext}"}), 400
+        target = _yt_uploads_dir() / safe_name
+        f.save(str(target))
+        if target.stat().st_size > 2 * 1024 * 1024:
+            target.unlink(missing_ok=True)
+            return jsonify({"success": False,
+                            "error": "Thumbnail exceeds YouTube's 2 MB limit."
+                            }), 400
+        return jsonify({
+            "success": True,
+            "path": str(target),
+            "filename": safe_name,
+            "size_bytes": target.stat().st_size,
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_upload_thumbnail error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/auth-status", methods=["GET"])
+def youtube_auth_status():
+    try:
+        import youtube_publisher as yp
+        return jsonify({
+            "success": True,
+            "has_client_secret": yp.has_client_secret(),
+            "is_authorized": yp.is_authorized(),
+            "client_secret_path": str(yp.CLIENT_SECRET_PATH),
+            "token_path": str(yp.TOKEN_PATH),
+            "default_video_dir": str(yp.DEFAULT_VIDEO_DIR),
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_auth_status error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/recent-videos", methods=["GET"])
+def youtube_recent_videos():
+    """List recently-modified video files in the configured Final dir."""
+    try:
+        import youtube_publisher as yp
+        directory = request.args.get("dir") or None
+        base = Path(directory).expanduser() if directory else None
+        videos = yp.list_recent_videos(directory=base)
+        return jsonify({
+            "success": True,
+            "videos": videos,
+            "directory": str(base or yp.DEFAULT_VIDEO_DIR),
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_recent_videos error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/thumbnails", methods=["GET"])
+def youtube_thumbnails():
+    """List thumbnail images in the ``thumbnails`` folder next to a
+    selected video (e.g. ~/Dev/Videos/Edited/Final/projectX/thumbnails)."""
+    try:
+        import youtube_publisher as yp
+        video_path = (request.args.get("video_path") or "").strip()
+        if not video_path:
+            return jsonify({"success": False,
+                            "error": "video_path is required"}), 400
+        thumbs = yp.list_thumbnails_for_video(video_path)
+        # Build serving URLs the UI can drop straight into <img src>.
+        for t in thumbs:
+            t["url"] = ("/api/youtube/thumbnail-image?path="
+                        + urllib.parse.quote(t["path"], safe=""))
+        return jsonify({
+            "success": True,
+            "thumbnails": thumbs,
+            "directory": str(Path(video_path).expanduser().parent
+                              / "thumbnails"),
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_thumbnails error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/thumbnail-image", methods=["GET"])
+def youtube_thumbnail_image():
+    """Serve a thumbnail image file from disk. Restricted to images that
+    live inside a ``thumbnails`` directory under the configured Final
+    video root, so this cannot be used to read arbitrary files."""
+    try:
+        import youtube_publisher as yp
+        raw = request.args.get("path", "")
+        if not raw:
+            return jsonify({"success": False,
+                            "error": "path is required"}), 400
+        target = Path(raw).expanduser().resolve()
+        if not target.exists() or not target.is_file():
+            return jsonify({"success": False,
+                            "error": "file not found"}), 404
+        if target.suffix.lower() not in yp.THUMBNAIL_EXTS:
+            return jsonify({"success": False,
+                            "error": "unsupported file type"}), 400
+        # Containment check: must live under DEFAULT_VIDEO_DIR and inside
+        # a directory literally named "thumbnails".
+        root = yp.DEFAULT_VIDEO_DIR.expanduser().resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            return jsonify({"success": False,
+                            "error": "path outside allowed root"}), 403
+        if "thumbnails" not in {p.name for p in target.parents}:
+            return jsonify({"success": False,
+                            "error": "path is not in a thumbnails dir"}), 403
+        return send_file(str(target), mimetype=None, conditional=True)
+    except Exception as e:
+        logger.error(f"❌ youtube_thumbnail_image error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/local-preview", methods=["GET"])
+def youtube_local_preview():
+    """Serve any image or video file from the user's home directory so
+    the publish modal can preview the selected video and thumbnail.
+    Restricted to $HOME and to known media extensions to prevent
+    arbitrary disk reads."""
+    try:
+        raw = request.args.get("path", "")
+        if not raw:
+            return jsonify({"success": False,
+                            "error": "path is required"}), 400
+        target = Path(raw).expanduser().resolve()
+        if not target.exists() or not target.is_file():
+            return jsonify({"success": False,
+                            "error": "file not found"}), 404
+        # Containment: must live somewhere under the user's home dir.
+        home = Path.home().resolve()
+        try:
+            target.relative_to(home)
+        except ValueError:
+            return jsonify({"success": False,
+                            "error": "path outside home directory"}), 403
+        ext = target.suffix.lower()
+        media_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif",
+                      ".mp4", ".mov", ".m4v", ".mkv", ".webm"}
+        if ext not in media_exts:
+            return jsonify({"success": False,
+                            "error": f"unsupported file type {ext}"}), 400
+        mimetype = None
+        if ext in {".mp4", ".m4v"}:
+            mimetype = "video/mp4"
+        elif ext == ".mov":
+            mimetype = "video/quicktime"
+        elif ext == ".webm":
+            mimetype = "video/webm"
+        elif ext == ".mkv":
+            mimetype = "video/x-matroska"
+        elif ext in {".jpg", ".jpeg"}:
+            mimetype = "image/jpeg"
+        elif ext == ".png":
+            mimetype = "image/png"
+        elif ext == ".webp":
+            mimetype = "image/webp"
+        elif ext == ".gif":
+            mimetype = "image/gif"
+        return send_file(str(target), mimetype=mimetype, conditional=True)
+    except Exception as e:
+        logger.error(f"❌ youtube_local_preview error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/preview-metadata", methods=["POST"])
+def youtube_preview_metadata():
+    """Parse the YouTube details markdown and return the metadata that
+    will be sent to YouTube — lets the UI show a final review."""
+    try:
+        import youtube_publisher as yp
+        data = request.get_json(silent=True) or {}
+        md = data.get("youtube_details_md", "")
+        if not md.strip():
+            return jsonify({"success": False,
+                            "error": "youtube_details_md is required"}), 400
+        meta = yp.parse_youtube_details_markdown(md)
+        return jsonify({
+            "success": True,
+            "metadata": {
+                "title": meta.title,
+                "description": meta.description,
+                "tags": meta.tags,
+                "category_id": meta.category_id,
+                "made_for_kids": meta.made_for_kids,
+            },
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_preview_metadata error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/reveal-path", methods=["POST"])
+def youtube_reveal_path():
+    """Open Finder with the given file selected so the user can drag
+    the SRT into the YouTube Studio captions uploader."""
+    try:
+        data = request.get_json(silent=True) or {}
+        p = (data.get("path") or "").strip()
+        if not p:
+            return jsonify({"success": False, "error": "path required"}), 400
+        target = Path(p).expanduser()
+        if not target.exists():
+            return jsonify({"success": False,
+                            "error": f"Not found: {target}"}), 400
+        import subprocess
+        subprocess.Popen(["open", "-R", str(target)])
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/generate-srt", methods=["POST"])
+def youtube_generate_srt():
+    """Run whisper on the chosen video file and produce a .srt subtitle
+    file the user can upload to YouTube. Does NOT touch the DaVinci
+    timeline. Returns the absolute path of the .srt and a sibling URL
+    the browser can use to download it."""
+    try:
+        data = request.get_json(silent=True) or {}
+        video_path = (data.get("video_path") or "").strip()
+        model = (data.get("model") or "medium").strip()
+        language = (data.get("language") or "en").strip()
+        if not video_path:
+            return jsonify({"success": False,
+                            "error": "video_path is required"}), 400
+        src = Path(video_path).expanduser()
+        if not src.exists() or not src.is_file():
+            return jsonify({"success": False,
+                            "error": f"Video file not found: {src}"}), 400
+
+        whisper_bin = _find_whisper_cli()
+        if not whisper_bin:
+            return jsonify({
+                "success": False,
+                "error": "whisper CLI not found. Install with: "
+                         "pip install openai-whisper",
+            }), 500
+
+        out_dir = src.parent / "captions"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        import subprocess
+        cmd = [
+            whisper_bin, str(src),
+            "--model", model,
+            "--output_format", "srt",
+            "--output_dir", str(out_dir),
+            "--task", "transcribe",
+            "--verbose", "False",
+        ]
+        if language:
+            cmd += ["--language", language]
+        logger.info(f"🎙️ Generating SRT: {' '.join(cmd)}")
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=60 * 60)
+        if proc.returncode != 0:
+            logger.error(f"❌ whisper SRT failed: {proc.stderr[:2000]}")
+            return jsonify({"success": False,
+                            "error": "whisper failed: "
+                                     + (proc.stderr or proc.stdout)[-500:]}), 500
+
+        srt_path = out_dir / (src.stem + ".srt")
+        if not srt_path.exists():
+            # Whisper may name it differently; pick newest .srt in out_dir.
+            srts = sorted(out_dir.glob("*.srt"),
+                          key=lambda p: p.stat().st_mtime, reverse=True)
+            if srts:
+                srt_path = srts[0]
+        if not srt_path.exists():
+            return jsonify({"success": False,
+                            "error": "SRT file was not produced"}), 500
+        return jsonify({
+            "success": True,
+            "srt_path": str(srt_path),
+            "filename": srt_path.name,
+            "size_bytes": srt_path.stat().st_size,
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_generate_srt error: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/publish", methods=["POST"])
+def youtube_publish():
+    """Publish a finished video to YouTube. Returns immediately with
+    an upload_id; poll /api/youtube/publish/status/<id> for progress."""
+    try:
+        import youtube_publisher as yp
+        data = request.get_json(silent=True) or {}
+        video_path = (data.get("video_path") or "").strip()
+        md = data.get("youtube_details_md", "")
+        privacy = (data.get("privacy_status") or "private").lower()
+        notify = bool(data.get("notify_subscribers", True))
+        # Optional manual overrides from the review modal.
+        overrides = data.get("overrides") or {}
+
+        if not video_path:
+            return jsonify({"success": False,
+                            "error": "video_path is required"}), 400
+        if not md.strip() and not overrides.get("title"):
+            return jsonify({"success": False,
+                            "error": "youtube_details_md or overrides.title required"}), 400
+        # We never publish publicly from this app — going public must be a
+        # manual action in YouTube Studio.
+        ALLOWED_PRIVACY = {"private", "unlisted"}
+        if privacy not in ALLOWED_PRIVACY:
+            return jsonify({"success": False,
+                            "error": f"privacy_status must be one of {sorted(ALLOWED_PRIVACY)} "
+                                     f"(public uploads must be toggled in YouTube Studio)"}), 400
+
+        path = Path(video_path).expanduser()
+        if not path.exists() or not path.is_file():
+            return jsonify({"success": False,
+                            "error": f"Video file not found: {path}"}), 400
+
+        if not yp.has_client_secret():
+            return jsonify({
+                "success": False,
+                "error": "Missing OAuth client secret",
+                "setup_required": True,
+                "client_secret_path": str(yp.CLIENT_SECRET_PATH),
+            }), 400
+
+        meta = yp.parse_youtube_details_markdown(md) if md.strip() else \
+            yp.YouTubeMetadata(title=overrides.get("title", "Untitled"),
+                               description=overrides.get("description", ""))
+        # Apply overrides from the review modal (if user edited fields).
+        if overrides.get("title"):
+            meta.title = overrides["title"]
+        if overrides.get("description"):
+            meta.description = overrides["description"]
+        if "tags" in overrides and isinstance(overrides["tags"], list):
+            meta.tags = [str(t).strip() for t in overrides["tags"] if str(t).strip()]
+        if "hashtags" in overrides and isinstance(overrides["hashtags"], list):
+            meta.hashtags = [str(h).strip() for h in overrides["hashtags"] if str(h).strip()]
+        if overrides.get("category_id"):
+            meta.category_id = str(overrides["category_id"])
+        if "made_for_kids" in overrides:
+            meta.made_for_kids = bool(overrides["made_for_kids"])
+        # Newer fields (synthetic media, language, recording date, embed).
+        if "contains_synthetic_media" in overrides:
+            meta.contains_synthetic_media = bool(
+                overrides["contains_synthetic_media"])
+        if overrides.get("default_language"):
+            meta.default_language = str(overrides["default_language"])
+        if overrides.get("default_audio_language"):
+            meta.default_audio_language = str(overrides["default_audio_language"])
+        if overrides.get("recording_date"):
+            meta.recording_date = str(overrides["recording_date"])
+        if "embeddable" in overrides:
+            meta.embeddable = bool(overrides["embeddable"])
+        meta.privacy_status = privacy
+
+        # Optional thumbnail.
+        thumbnail_path = (data.get("thumbnail_path") or "").strip() or None
+        if thumbnail_path:
+            tp = Path(thumbnail_path).expanduser()
+            if not tp.exists() or not tp.is_file():
+                return jsonify({"success": False,
+                                "error": f"Thumbnail file not found: {tp}"}), 400
+            if tp.suffix.lower() not in yp.THUMBNAIL_EXTS:
+                return jsonify({
+                    "success": False,
+                    "error": f"Unsupported thumbnail extension {tp.suffix}. "
+                             f"Allowed: {sorted(yp.THUMBNAIL_EXTS)}"
+                }), 400
+            if tp.stat().st_size > yp.MAX_THUMBNAIL_BYTES:
+                return jsonify({
+                    "success": False,
+                    "error": f"Thumbnail is larger than YouTube's 2 MB limit: {tp}"
+                }), 400
+            thumbnail_path = str(tp)
+
+        # Optional playlists to add the video to after upload.
+        raw_pls = data.get("playlist_ids") or []
+        if not isinstance(raw_pls, list):
+            return jsonify({"success": False,
+                            "error": "playlist_ids must be a list"}), 400
+        playlist_ids = [str(p).strip() for p in raw_pls if str(p).strip()]
+
+        upload_id = str(uuid.uuid4())
+
+        def _worker():
+            try:
+                yp.upload_video(str(path), meta, upload_id,
+                                notify_subscribers=notify,
+                                thumbnail_path=thumbnail_path,
+                                playlist_ids=playlist_ids)
+            except Exception as ex:
+                logger.error(f"❌ YouTube upload failed: {ex}")
+                # The publisher already records error state, but ensure
+                # we have a final status entry even for setup errors.
+                from youtube_publisher import _set_state
+                _set_state(upload_id, status="error", error=str(ex))
+
+        _threading.Thread(target=_worker, daemon=True).start()
+
+        return jsonify({
+            "success": True,
+            "upload_id": upload_id,
+            "video_path": str(path),
+            "filesize_bytes": path.stat().st_size,
+            "metadata_preview": {
+                "title": meta.title,
+                "tags_count": len(meta.tags),
+                "hashtags_count": len(meta.hashtags),
+                "category_id": meta.category_id,
+                "privacy_status": meta.privacy_status,
+                "made_for_kids": meta.made_for_kids,
+                "thumbnail_path": thumbnail_path,
+            },
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_publish error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/playlists", methods=["GET"])
+def youtube_list_playlists():
+    """Return all playlists owned by the authorized channel so the UI
+    can render a picker. Triggers OAuth on first call (same as publish)."""
+    try:
+        import youtube_publisher as yp
+        if not yp.has_client_secret():
+            return jsonify({
+                "success": False,
+                "error": "Missing OAuth client secret",
+                "setup_required": True,
+                "client_secret_path": str(yp.CLIENT_SECRET_PATH),
+            }), 400
+        playlists = yp.list_my_playlists()
+        return jsonify({"success": True, "playlists": playlists})
+    except Exception as e:
+        logger.error(f"❌ youtube_list_playlists error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/publish/status/<upload_id>", methods=["GET"])
+def youtube_publish_status(upload_id):
+    """Poll endpoint for upload progress."""
+    try:
+        import youtube_publisher as yp
+        state = yp.get_upload_status(upload_id)
+        if state is None:
+            return jsonify({"success": False,
+                            "error": "Unknown upload_id"}), 404
+        return jsonify({"success": True, "state": state})
+    except Exception as e:
+        logger.error(f"❌ youtube_publish_status error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/test-thumbnails")
@@ -6120,6 +7539,26 @@ def check_aroll_videos():
         logger.info(f"📁 Checking aroll path: {aroll_path}")
         logger.info(f"📁 Path exists: {os.path.exists(aroll_path)}")
 
+        # Fallback: if the title-derived aRoll folder is missing OR empty,
+        # also try the configured output_dir/aRoll directly. This matches the
+        # user expectation: "set output dir = source for aRoll".
+        def _has_videos(p: str) -> bool:
+            try:
+                return os.path.isdir(p) and any(
+                    _is_video_file(f) for f in os.listdir(p)
+                )
+            except Exception:
+                return False
+
+        if not _has_videos(aroll_path):
+            configured_dir = _get_output_parent_dir()
+            alt_aroll = str(configured_dir / "aRoll")
+            if alt_aroll != aroll_path and _has_videos(alt_aroll):
+                logger.info(
+                    f"📁 Falling back to configured output_dir aRoll: {alt_aroll}"
+                )
+                aroll_path = alt_aroll
+
         if not os.path.exists(aroll_path):
             # List what's actually in the output parent path to help debug
             base_path = _get_output_parent_dir()
@@ -6236,6 +7675,22 @@ def create_resolve_with_videos():
                 aroll_path) if _is_video_file(f)]
             logger.info(f"📹 Found {len(video_files)} video(s) in aroll folder")
 
+        # Fallback to configured output_dir/aRoll if title-derived folder is empty.
+        if len(video_files) == 0:
+            configured_dir = _get_output_parent_dir()
+            alt_aroll = str(configured_dir / "aRoll")
+            if alt_aroll != aroll_path and os.path.isdir(alt_aroll):
+                alt_videos = [
+                    f for f in os.listdir(alt_aroll) if _is_video_file(f)
+                ]
+                if alt_videos:
+                    logger.info(
+                        f"📁 Falling back to configured output_dir aRoll: "
+                        f"{alt_aroll} ({len(alt_videos)} videos)"
+                    )
+                    aroll_path = alt_aroll
+                    video_files = alt_videos
+
         # Optional fallback for testing DaVinci flow without downloaded HeyGen aRoll.
         used_default_aroll = False
         default_source = None
@@ -6258,15 +7713,17 @@ def create_resolve_with_videos():
         def parse_chapter_info(filename):
             """Extract chapter and part numbers from filename.
 
-            Matches any filename containing Ch{N} and p{N}, e.g.:
+            Matches any filename containing Ch{N} and p{N}, with any
+            non-alphanumeric separators in between (or none):
               Ch1p1, Ch1p2, Ch6p1         (no separator)
               Ch1-Pt1, Ch1-pt1, Ch2-p2   (dash + optional 't')
-              Ch1_Pt1                     (underscore)
+              Ch1_Pt1, Ch_1_p_1, Ch1.p1  (underscore / dot)
               Title-Ch3p2.mp4            (title prefix, any separator)
               heygen_...-Ch1p1_id.mp4    (heygen with ID suffix)
               Ch1p1b                     (b-duplicate sorts after Ch1p1)
 
             'AI with Roz' intro files always sort first.
+            'AI with Roz Exit' files always sort last.
             Unknown files sort to the end.
             """
             import re
@@ -6277,21 +7734,37 @@ def create_resolve_with_videos():
             if re.search(r'AI\s+with\s+Roz.*Exit', name, re.IGNORECASE):
                 return (99999, 0)
 
-            # Other "AI with Roz" intro clips always go first
-            if re.search(r'AI\s+with\s+Roz', name, re.IGNORECASE):
-                return (0, 0)
-
-            # Universal pattern: Ch{X} then optional separator then p/P then optional t/T then {Y} then optional b
-            # Covers: Ch1p1, Ch1-p1, Ch1-Pt1, Ch1-pt1, Ch1_Pt1, Ch6p1, Ch2-p2, etc.
-            match = re.search(r'Ch(\d+)[-_]?[Pp][Tt]?(\d+)(b?)', name)
-            if match:
-                chapter_num = int(match.group(1))
-                part_num = int(match.group(2))
+            # Detect chapter pattern first — a chapter clip wins even if its
+            # title contains "AI with Roz" (e.g.
+            # "AI with Roz  AI ZERO Knowledge of AI-Ch1p1_xxx.mp4").
+            # Permissive pattern: Ch [sep] {X} [sep] p [t]? [sep] {Y} [b]?
+            # where [sep] is any run of non-alphanumeric characters (or empty).
+            chapter_match = re.search(
+                r'Ch[^A-Za-z0-9]*?(\d+)[^A-Za-z0-9]*?[Pp][Tt]?[^A-Za-z0-9]*?(\d+)(b?)',
+                name
+            )
+            if chapter_match:
+                chapter_num = int(chapter_match.group(1))
+                part_num = int(chapter_match.group(2))
                 # 'b' duplicate sorts just after the main part
-                part_frac = 0.5 if match.group(3).lower() == 'b' else 0
+                part_frac = 0.5 if chapter_match.group(
+                    3).lower() == 'b' else 0
+                logger.info(
+                    f"   🔢 parse_chapter_info: {name} → (Ch{chapter_num}, P{part_num}{'b' if part_frac else ''})"
+                )
                 return (chapter_num, part_num + part_frac)
 
+            # Only treat as intro when there is NO chapter marker. This keeps
+            # the standalone "AI with Roz v2.mov" intro at position 0 without
+            # collapsing every chapter clip to (0, 0).
+            if re.search(r'AI\s+with\s+Roz', name, re.IGNORECASE):
+                logger.info(f"   🔢 parse_chapter_info: {name} → INTRO (0, 0)")
+                return (0, 0)
+
             # Default to end of list
+            logger.warning(
+                f"   ⚠️ parse_chapter_info: NO chapter marker found in {name} → (999, 999)"
+            )
             return (999, 999)
 
         # Sort videos by chapter order
@@ -6771,7 +8244,7 @@ def download_heygen_video():
                 if c.isalnum() or c in safe_chars
             ).rstrip().replace(' ', '_') if script_title else "default"
 
-            filename = f"heygen_{safe_chapter_name}_{video_id[:8]}.mp4"
+            filename = f"{safe_chapter_name}_{video_id[:8]}.mp4"
 
             # Save to project aroll folder if script title provided
             if script_title:
@@ -7247,7 +8720,10 @@ def api_transcribe_audio_upload():
                 "error": "whisper CLI not found. Install with: pip install openai-whisper",
             }), 500
 
+        # Save upload to a per-session temp dir; cleaned up by the worker’s rmtree of out_dir
+        # is separate — we keep the input file in its own temp dir and let the OS clean tmp.
         upload_dir = Path(tempfile.mkdtemp(prefix="whisper_in_"))
+        # Preserve a safe filename + original extension
         safe_name = Path(f.filename).name.replace("/", "_").replace("\\", "_")
         if not safe_name:
             safe_name = "upload.bin"
@@ -7316,6 +8792,7 @@ _MIME_MAP = {
     ".webm": "video/webm",
     ".mkv": "video/x-matroska",
 }
+# Cached user-delegation key (refreshed ~hourly)
 _udk_cache: "dict[str, object]" = {"key": None, "expires": 0.0}
 
 
@@ -7365,6 +8842,11 @@ def _blob_sas_url(blob_name: str) -> str:
 
 
 def _list_finished_videos_from_blob():
+    """Returns (items, source_label) by listing blobs in the configured container.
+
+    Groups by the first path segment ('folder'); picks the first video blob in
+    each group. Loose root-level video blobs become their own cards.
+    """
     svc = _finished_videos_blob_service()
     container = svc.get_container_client(FINISHED_VIDEOS_BLOB_CONTAINER)
     folders: "dict[str, list]" = {}
@@ -7550,6 +9032,151 @@ def api_finished_videos_file():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/finished-videos/delete", methods=["POST"])
+def api_finished_videos_delete():
+    """Delete a finished video from the gallery.
+
+    POST body: {"rel_path": "<blob name or local rel path>"}
+
+    - When FINISHED_VIDEOS_BLOB_CONTAINER is set: deletes the blob, plus any
+      sibling `<stem>.jpg` poster blob.
+    - Otherwise: deletes the local file under FINISHED_VIDEOS_ROOT. If the
+      parent folder is then empty, removes the folder as well.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        rel = (data.get("rel_path") or data.get("path") or "").strip()
+        if not rel:
+            return jsonify({"success": False, "error": "Missing 'rel_path'"}), 400
+        if ".." in rel.split("/") or rel.startswith("/"):
+            return jsonify({"success": False, "error": "Invalid path"}), 400
+
+        # Azure Blob mode
+        if FINISHED_VIDEOS_BLOB_CONTAINER:
+            try:
+                svc = _finished_videos_blob_service()
+                container = svc.get_container_client(
+                    FINISHED_VIDEOS_BLOB_CONTAINER)
+                deleted = []
+                try:
+                    container.delete_blob(rel)
+                    deleted.append(rel)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"❌ blob delete failed for {rel}: {e}")
+                    return jsonify({
+                        "success": False,
+                        "error": f"Blob delete failed: {e}",
+                    }), 500
+                # Best-effort: delete sidecar poster <stem>.jpg
+                if "." in rel:
+                    stem = rel.rsplit(".", 1)[0]
+                    for poster in (stem + ".jpg", stem + ".jpeg"):
+                        try:
+                            container.delete_blob(poster)
+                            deleted.append(poster)
+                        except Exception:  # noqa: BLE001
+                            pass
+                return jsonify({"success": True, "deleted": deleted,
+                                "source": "blob"})
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"❌ /api/finished-videos/delete (blob) "
+                             f"failed: {e}", exc_info=True)
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        # Local mode
+        root = FINISHED_VIDEOS_ROOT
+        candidate = (root / rel).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return jsonify({"success": False,
+                            "error": "Path escapes finished-videos root"}), 400
+        if not candidate.is_file():
+            return jsonify({"success": False, "error": "File not found"}), 404
+        if candidate.suffix.lower() not in _VIDEO_EXTS:
+            return jsonify({"success": False,
+                            "error": "Not a supported video type"}), 400
+        try:
+            candidate.unlink()
+        except Exception as e:  # noqa: BLE001
+            return jsonify({"success": False,
+                            "error": f"Delete failed: {e}"}), 500
+        deleted = [str(candidate.relative_to(root))]
+        # Best-effort: matching local poster
+        for suf in (".jpg", ".jpeg", ".png"):
+            poster = candidate.with_suffix(suf)
+            if poster.exists():
+                try:
+                    poster.unlink()
+                    deleted.append(str(poster.relative_to(root)))
+                except Exception:  # noqa: BLE001
+                    pass
+        # If parent folder is now empty (and isn't the gallery root), drop it.
+        try:
+            parent = candidate.parent
+            if parent != root and parent.is_dir() and not any(
+                p for p in parent.iterdir() if not p.name.startswith(".")
+            ):
+                parent.rmdir()
+        except Exception:  # noqa: BLE001
+            pass
+        return jsonify({"success": True, "deleted": deleted,
+                        "source": "local"})
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"❌ /api/finished-videos/delete failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/grok-videos/delete", methods=["POST"])
+def api_grok_video_delete():
+    """Delete a single Grok-generated B-roll video file by filename.
+
+    POST body: {"filename": "grok_20260517_0_clip.mp4"}
+
+    Searches the same candidate directories used by /broll-videos/<filename>
+    and deletes every matching .mp4 it finds (covers both the current run's
+    output dir and the legacy ~/Dev/brollvideos cache).
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_name = (data.get("filename") or "").strip()
+        if not raw_name:
+            return jsonify({"success": False, "error": "Missing 'filename'"}), 400
+        safe_name = Path(raw_name).name  # strip any path components
+        if not safe_name or not safe_name.lower().endswith(".mp4"):
+            return jsonify({"success": False,
+                            "error": "Filename must be a .mp4"}), 400
+
+        candidates = []
+        base = _get_output_base_dir()
+        if base is not None:
+            candidates.append(base / "broll" / safe_name)
+            for run_broll in base.glob("*/broll"):
+                candidates.append(run_broll / safe_name)
+        candidates.append(Path.home() / "Dev" / "brollvideos" / safe_name)
+
+        deleted = []
+        for path in candidates:
+            try:
+                if path.exists() and path.is_file():
+                    path.unlink()
+                    deleted.append(str(path))
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"❌ grok-video delete failed for {path}: {e}")
+
+        if not deleted:
+            return jsonify({"success": False,
+                            "error": "File not found in any broll directory",
+                            "filename": safe_name}), 404
+        return jsonify({"success": True, "deleted": deleted,
+                        "filename": safe_name})
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"❌ /api/grok-videos/delete failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/finished-videos/upload", methods=["POST"])
 def api_finished_videos_upload():
     """Start a background transcode + upload to the gallery.
@@ -7568,6 +9195,7 @@ def api_finished_videos_upload():
     import re as _re
     import threading
     import time
+    import json as _json
     from werkzeug.utils import secure_filename
     from azure.storage.blob import ContentSettings
 
@@ -7595,6 +9223,7 @@ def api_finished_videos_upload():
         folder = stem
     blob_name = f"{folder}/{stem}.mp4"
 
+    # Persist the upload to a temp dir BEFORE returning (FileStorage dies with the request).
     tmpdir = Path(tempfile.mkdtemp(prefix="scriptcraft-upload-"))
     src_path = tmpdir / safe_name
     f.save(str(src_path))
@@ -7622,6 +9251,7 @@ def api_finished_videos_upload():
         out_path = tmpdir / f"{stem}.mp4"
         ffmpeg_log = tmpdir / "ffmpeg.log"
         try:
+            # 1) Probe duration so we can compute %.
             duration = None
             try:
                 pr = subprocess.run(
@@ -7635,6 +9265,7 @@ def api_finished_videos_upload():
             except Exception as pe:
                 logger.warning(f"ffprobe failed (continuing without %): {pe}")
 
+            # 2) Transcode. Progress key=value lines on stdout, errors to file.
             ffmpeg_cmd = [
                 "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
                 "-i", str(src_path),
@@ -7664,7 +9295,16 @@ def api_finished_videos_upload():
                         if not line or "=" not in line:
                             continue
                         k, _, v = line.partition("=")
-                        if k in ("out_time_ms", "out_time_us"):
+                        if k == "out_time_ms":
+                            try:
+                                secs = int(v) / 1_000_000.0
+                                pct = int((secs / duration) *
+                                          100) if duration else 0
+                                pct = max(0, min(99, pct))
+                                _set(out_time=secs, percent=pct)
+                            except Exception:
+                                pass
+                        elif k == "out_time_us":
                             try:
                                 secs = int(v) / 1_000_000.0
                                 pct = int((secs / duration) *
@@ -7690,7 +9330,7 @@ def api_finished_videos_upload():
                      finished=time.time())
                 return
 
-            # Generate poster (thumbnail) — single frame at ~3s (or 10% in for short clips).
+            # 3) Generate poster (thumbnail) — single frame at ~3s (or 10% in for short clips).
             poster_path = tmpdir / f"{stem}.jpg"
             poster_blob = f"{folder}/{stem}.jpg"
             try:
@@ -7716,6 +9356,7 @@ def api_finished_videos_upload():
                     f"⚠️ [{job_id[:8]}] poster generation error: {pe}")
                 poster_path = None
 
+            # 4) Upload to blob.
             _set(state="uploading", percent=99)
             svc = _finished_videos_blob_service()
             container = svc.get_container_client(
@@ -7780,13 +9421,19 @@ def api_finished_videos_upload_status(job_id: str):
         job = video_upload_jobs.get(job_id)
         if not job:
             return jsonify({"success": False, "error": "Unknown job_id"}), 404
+        # Return a shallow copy so the caller doesn't see live mutations.
         snap = dict(job)
     return jsonify({"success": True, "job": snap})
 
 
 @app.route("/api/finished-videos/regenerate-posters", methods=["POST"])
 def api_finished_videos_regenerate_posters():
-    """Backfill poster JPGs for any video blobs that don't already have one."""
+    """Backfill poster JPGs for any video blobs that don't already have one.
+
+    Streams the source video into ffmpeg via a temp file, extracts a single
+    frame at ~3s, and uploads as `<stem>.jpg`. Skips blobs whose poster
+    already exists. Returns a summary list.
+    """
     import subprocess
     import tempfile
     import shutil as _shutil
@@ -8085,10 +9732,76 @@ def _transcribe_worker(session_id: str, whisper_bin: str, file_path: str,
                              seg in collected_segments if seg).strip()
         else:
             text = plain_text
+
+        # Auto-save the transcript to <output_dir>/transcript/<project>_transcript.{md,docx}
+        saved_md_path: Optional[str] = None
+        saved_docx_path: Optional[str] = None
+        save_error: Optional[str] = None
+        try:
+            out_parent = _get_output_parent_dir()
+            transcript_dir = out_parent / "transcript"
+            transcript_dir.mkdir(parents=True, exist_ok=True)
+            project_name = _safe_title_for_paths(out_parent.name) or "project"
+            src_path = Path(file_path)
+            generated_at = _time.strftime("%Y-%m-%d %H:%M:%S")
+            md_body = (
+                f"# Transcript: {project_name}\n\n"
+                f"- **Source:** `{src_path}`\n"
+                f"- **Model:** {model}\n"
+                f"- **Language:** {language or 'auto'}\n"
+                f"- **Generated:** {generated_at}\n"
+                f"- **Segments:** {len(collected_segments)}\n\n"
+                f"---\n\n"
+                f"{text}\n"
+            )
+            md_path = transcript_dir / f"{project_name}_transcript.md"
+            md_path.write_text(md_body, encoding="utf-8")
+            saved_md_path = str(md_path)
+            logger.info(f"📝 Transcript .md saved: {md_path}")
+
+            docx_path = transcript_dir / f"{project_name}_transcript.docx"
+            try:
+                from docx import Document  # python-docx
+                doc = Document()
+                doc.add_heading(f"Transcript: {project_name}", level=1)
+                meta = doc.add_paragraph()
+                meta.add_run(f"Source: {src_path}\n").italic = True
+                meta.add_run(f"Model: {model}    ").italic = True
+                meta.add_run(f"Language: {language or 'auto'}\n").italic = True
+                meta.add_run(f"Generated: {generated_at}    ").italic = True
+                meta.add_run(
+                    f"Segments: {len(collected_segments)}").italic = True
+                doc.add_paragraph("")
+                for line in text.splitlines():
+                    doc.add_paragraph(line)
+                doc.save(str(docx_path))
+                saved_docx_path = str(docx_path)
+                logger.info(f"📝 Transcript .docx saved: {docx_path}")
+            except Exception as docx_exc:
+                logger.warning(
+                    f"⚠️ Could not save transcript .docx (md saved ok): {docx_exc}")
+
+            saved_msg = f"📝 Transcript saved to {md_path}"
+            if saved_docx_path:
+                saved_msg += f" (+ .docx)"
+            push({"type": "progress", "message": saved_msg})
+        except Exception as save_exc:
+            save_error = str(save_exc)
+            logger.error(
+                f"⚠️ Failed to save transcript: {save_exc}", exc_info=True)
+            push({"type": "progress",
+                  "message": f"⚠️ Failed to save transcript: {save_exc}"})
+
         transcribe_results[session_id] = {
-            "success": True, "text": text, "model": model}
+            "success": True, "text": text, "model": model,
+            "saved_md_path": saved_md_path,
+            "saved_docx_path": saved_docx_path,
+            "save_error": save_error}
         push({"type": "done", "text": text, "model": model,
-             "segments": len(collected_segments)})
+             "segments": len(collected_segments),
+             "saved_md_path": saved_md_path,
+             "saved_docx_path": saved_docx_path,
+             "save_error": save_error})
     except Exception as e:
         logger.error(f"❌ transcribe worker crash: {e}", exc_info=True)
         push({"type": "error", "error": str(e)})
