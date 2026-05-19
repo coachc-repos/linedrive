@@ -128,10 +128,17 @@
             display: flex;
             gap: 8px;
             margin-bottom: 8px;
+            align-items: end;
         }
         
         .form-row .form-group {
             flex: 1;
+        }
+
+        .form-row .form-group > label {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         
         input[type="text"],
@@ -444,18 +451,24 @@
                 margin-bottom: 5px;
             }
 
-            /* Compact toolbar buttons so they fit on a single row without wrapping */
+            /* Compact toolbar buttons styled like the checkbox pills:
+               icon + text inline (row), small padding, small font. */
             .toolbar-btn {
+                flex-direction: row;
+                align-items: center;
                 min-width: 0;
+                min-height: 0;
                 padding: 4px 6px;
-                gap: 1px;
+                gap: 4px;
                 flex: 0 0 auto;
+                border-radius: 4px;
             }
             .toolbar-icon {
                 font-size: 1em;
+                line-height: 1;
             }
             .toolbar-text {
-                font-size: 0.55em;
+                font-size: 0.8em;
             }
 
             /* v2-only on mobile: hide the Agent API selector entirely */
@@ -466,7 +479,6 @@
             /* Always show toolbar text labels on mobile (no hover on touch). */
             .toolbar-text {
                 display: inline !important;
-                font-size: 0.55em;
             }
 
             /* Script Options row: stack label above checkbox grid; let grid wrap to 2 cols. */
