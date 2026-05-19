@@ -7539,6 +7539,26 @@ def check_aroll_videos():
         logger.info(f"📁 Checking aroll path: {aroll_path}")
         logger.info(f"📁 Path exists: {os.path.exists(aroll_path)}")
 
+        # Fallback: if the title-derived aRoll folder is missing OR empty,
+        # also try the configured output_dir/aRoll directly. This matches the
+        # user expectation: "set output dir = source for aRoll".
+        def _has_videos(p: str) -> bool:
+            try:
+                return os.path.isdir(p) and any(
+                    _is_video_file(f) for f in os.listdir(p)
+                )
+            except Exception:
+                return False
+
+        if not _has_videos(aroll_path):
+            configured_dir = _get_output_parent_dir()
+            alt_aroll = str(configured_dir / "aRoll")
+            if alt_aroll != aroll_path and _has_videos(alt_aroll):
+                logger.info(
+                    f"📁 Falling back to configured output_dir aRoll: {alt_aroll}"
+                )
+                aroll_path = alt_aroll
+
         if not os.path.exists(aroll_path):
             # List what's actually in the output parent path to help debug
             base_path = _get_output_parent_dir()
@@ -7654,6 +7674,22 @@ def create_resolve_with_videos():
             video_files = [f for f in os.listdir(
                 aroll_path) if _is_video_file(f)]
             logger.info(f"📹 Found {len(video_files)} video(s) in aroll folder")
+
+        # Fallback to configured output_dir/aRoll if title-derived folder is empty.
+        if len(video_files) == 0:
+            configured_dir = _get_output_parent_dir()
+            alt_aroll = str(configured_dir / "aRoll")
+            if alt_aroll != aroll_path and os.path.isdir(alt_aroll):
+                alt_videos = [
+                    f for f in os.listdir(alt_aroll) if _is_video_file(f)
+                ]
+                if alt_videos:
+                    logger.info(
+                        f"📁 Falling back to configured output_dir aRoll: "
+                        f"{alt_aroll} ({len(alt_videos)} videos)"
+                    )
+                    aroll_path = alt_aroll
+                    video_files = alt_videos
 
         # Optional fallback for testing DaVinci flow without downloaded HeyGen aRoll.
         used_default_aroll = False

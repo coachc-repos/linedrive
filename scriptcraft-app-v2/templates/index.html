@@ -377,13 +377,14 @@
             flex-direction: column;
             align-items: center;
             gap: 2px;
-            padding: 5px 8px;
+            padding: 10px 14px;
             background: #1e293b;
             border: 1px solid #334155;
-            border-radius: 6px;
+            border-radius: 8px;
             cursor: pointer;
             transition: all 0.2s;
-            min-width: 50px;
+            min-width: 56px;
+            min-height: 48px;
         }
         
         .toolbar-btn:hover {
@@ -398,7 +399,7 @@
         }
         
         .toolbar-icon {
-            font-size: 1.2em;
+            font-size: 1.8em;
             line-height: 1;
         }
         
@@ -406,9 +407,13 @@
             font-size: 0.65em;
             color: #ffffff;
             font-weight: 500;
+            /* Hidden by default — show full label on hover only. */
+            display: none;
         }
-        
-        .toolbar-btn:hover .toolbar-text {
+
+        .toolbar-btn:hover .toolbar-text,
+        .toolbar-btn:focus-visible .toolbar-text {
+            display: inline;
             color: #0ea5e9;
         }
         
@@ -1022,7 +1027,7 @@
                 <span class="toolbar-label">Actions</span>
                 <button class="toolbar-btn" id="primaryBtn" onclick="processWorkflow()" title="Generate selected outputs">
                     <span class="toolbar-icon">🚀</span>
-                    <span class="toolbar-text">Generate</span>
+                    <span class="toolbar-text">Generate Script</span>
                 </button>
             </div>
             
@@ -1098,7 +1103,7 @@
                 </button>
                 <button class="toolbar-btn" onclick="openOutputDirModal()" id="outputDirBtn" title="Set base output directory for saving all generated artifacts">
                     <span class="toolbar-icon">📁</span>
-                    <span class="toolbar-text">Output Dir</span>
+                    <span class="toolbar-text">Output Directory</span>
                 </button>
                 <button class="toolbar-btn" onclick="saveAllOutputs()" id="saveAllOutputsBtn" title="Save current results (script, images, thumbnails, videos, EDL, curls) to the configured Output Directory" style="display:none;">
                     <span class="toolbar-icon">💾</span>
@@ -1458,43 +1463,44 @@
         
         <div class="main-content">
             <!-- Workflow Selection Checkboxes -->
-            <div class="form-group" style="background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; margin-bottom: 10px;">
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 4px;">
+            <div class="form-group" style="background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">
+                <span class="toolbar-label" style="flex: 0 0 auto;">Script Options</span>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 4px; flex: 1 1 auto;">
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkScript" onclick="toggleScriptInput()" checked style="width: auto; margin-right: 4px;">
                         <span style="font-size: 0.8em !important;">📝 Script</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkYouTubeDetails" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">📺 ytube</span>
+                        <span style="font-size: 0.8em !important;">📺 Publish to Youtube</span>
                         <button type="button" onclick="event.preventDefault(); event.stopPropagation(); loadYouTubeDetailsFromFile();" title="Load existing YouTube details .docx/.md (skips the agent)" style="margin-left:6px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:0 6px; border-radius:3px; font-size:0.85em; cursor:pointer;">📂</button>
                         <span id="ytLoadedBadge" style="display:none; margin-left:4px; color:#10b981; font-size:0.75em;" title="YouTube details pre-loaded">●</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkHeyGenReady" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎬 HeyGen</span>
+                        <span style="font-size: 0.8em !important;">🎬 Heygen Script and Curl Commands</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkBRollTable" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎥 B-Roll</span>
+                        <span style="font-size: 0.8em !important;">🎥 B-Roll Table and Shutterstock Links</span>
                         <button type="button" onclick="event.preventDefault(); event.stopPropagation(); loadBrollTableFromFile();" title="Load existing B-Roll table .docx/.md (skips the agent)" style="margin-left:6px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:0 6px; border-radius:3px; font-size:0.85em; cursor:pointer;">📂</button>
                         <span id="brollLoadedBadge" style="display:none; margin-left:4px; color:#10b981; font-size:0.75em;" title="B-Roll table pre-loaded">●</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkBRollImages" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎨 B-Roll Img</span>
+                        <span style="font-size: 0.8em !important;">🎨 B-Roll Images</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkGrokVideos" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🤖 Grok Vid</span>
+                        <span style="font-size: 0.8em !important;">🤖 Grok Videos from B-Roll Table</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkHookSummary" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎯 Hook</span>
+                        <span style="font-size: 0.8em !important;">🎯 Hook & Summary</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;" title="Condense Host: dialogue to match the requested video length">
                         <input type="checkbox" id="checkShortenScript" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">✂️ Shorten</span>
+                        <span style="font-size: 0.8em !important;">✂️ Shorten Script</span>
                         <select id="shortenPercent" title="Reduce Host: word count by this much" style="margin-left:6px; padding:2px 4px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:3px; font-size:0.85em;" onclick="event.stopPropagation();" onchange="event.stopPropagation();">
                             <option value="10">−10%</option>
                             <option value="20">−20%</option>
@@ -1506,15 +1512,15 @@
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkFlowAnalysis" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🔄 Flow</span>
+                        <span style="font-size: 0.8em !important;">🔄 Script Flow Quality</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkThumbnails" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🖼️ Thumb</span>
+                        <span style="font-size: 0.8em !important;">🖼️ Thumbnails</span>
                     </label>
                     <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
                         <input type="checkbox" id="checkDemoScript" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎯 Demo</span>
+                        <span style="font-size: 0.8em !important;">🎯 Demo Scripts</span>
                     </label>
                 </div>
             </div>
@@ -3859,14 +3865,14 @@ Time management content here...`;
                     scriptInputSection.style.display = 'none';
                     topicInputSection.style.display = 'block';
                     primaryBtn.onclick = processWorkflow;
-                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Generate</span>';
+                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Generate Script</span>';
                     primaryBtn.title = 'Generate selected outputs from topic';
                 } else {
                     // Script must be provided, show script input
                     scriptInputSection.style.display = 'block';
                     topicInputSection.style.display = 'none';
                     primaryBtn.onclick = processWorkflow;
-                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Process</span>';
+                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Process Updated Script</span>';
                     primaryBtn.title = 'Process script with selected outputs';
                 }
             }
@@ -3917,6 +3923,9 @@ Time management content here...`;
         }
 
         async function processWorkflow() {
+            // Gate: require an Output Directory before any workflow step runs.
+            const ok = await ensureOutputDirSet('generating the script');
+            if (!ok) return;
             // New unified workflow handler based on checkboxes
             const scriptChecked = document.getElementById('checkScript')?.checked || false;
             
@@ -5635,6 +5644,9 @@ Time management content here...`;
         
         // Download HeyGen video function
         async function downloadHeyGenVideo(videoUrl, videoId, chapterName) {
+            // Gate: HeyGen video downloads land under the configured output dir.
+            const __okOD = await ensureOutputDirSet('downloading HeyGen videos');
+            if (!__okOD) return;
             try {
                 const scriptTitle = window.currentScriptTitle || '';
                 
@@ -7695,9 +7707,44 @@ Thank you for watching!`;
             if (input) setTimeout(() => input.focus(), 50);
         }
 
+        // Promise-based gate: ensures an Output Directory is set before
+        // proceeding with an operation that needs one (Generate Script,
+        // HeyGen actions, Save Outputs, DaVinci project creation, etc.).
+        //   - If output_dir is already set, resolves true immediately.
+        //   - Otherwise opens the modal and resolves true after Save,
+        //     or false if the user closes/cancels without saving.
+        async function ensureOutputDirSet(reasonLabel) {
+            try {
+                const resp = await fetch('/api/output-dir');
+                const data = await resp.json();
+                const current = (data && data.success && (data.output_dir || '').trim()) || '';
+                if (current) {
+                    window.currentOutputDirBase = current;
+                    window.currentOutputDir = current;
+                    return true;
+                }
+            } catch (e) {
+                // Fall through to prompt.
+            }
+            return new Promise(async (resolve) => {
+                await openOutputDirModal();
+                const status = document.getElementById('outputDirModalStatus');
+                if (status && reasonLabel) {
+                    status.style.color = '#fbbf24';
+                    status.textContent = `⚠️ Set an Output Directory before ${reasonLabel}.`;
+                }
+                window.__outputDirGateResolve = (ok) => {
+                    window.__outputDirGateResolve = null;
+                    resolve(!!ok);
+                };
+            });
+        }
+
         function closeOutputDirModal() {
             const modal = document.getElementById('outputDirModal');
             if (modal) modal.style.display = 'none';
+            // If a gate is awaiting this modal, treat close-without-save as cancel.
+            if (window.__outputDirGateResolve) window.__outputDirGateResolve(false);
         }
 
         async function saveOutputDir() {
@@ -7722,7 +7769,17 @@ Thank you for watching!`;
                 refreshOutputDirPreview();
                 status.style.color = '#34d399';
                 status.textContent = '✅ Saved: ' + (data.output_dir || '(cleared)');
-                setTimeout(closeOutputDirModal, 800);
+                // Resolve any awaiting gate (true only if a non-empty path was saved).
+                if (window.__outputDirGateResolve) {
+                    const ok = !!(data.output_dir || '').trim();
+                    const resolver = window.__outputDirGateResolve;
+                    window.__outputDirGateResolve = null;
+                    resolver(ok);
+                }
+                setTimeout(() => {
+                    const modal = document.getElementById('outputDirModal');
+                    if (modal) modal.style.display = 'none';
+                }, 800);
             } catch (err) {
                 status.style.color = '#f87171';
                 status.textContent = '❌ ' + err.message;
@@ -7839,11 +7896,9 @@ Thank you for watching!`;
 
         async function saveAllOutputs(silent) {
             if (!window.currentOutputDir) {
-                if (!silent) {
-                    alert('Set an Output Directory first (📁 Output Dir button).');
-                    openOutputDirModal();
-                }
-                return;
+                if (silent) return;
+                const ok = await ensureOutputDirSet('saving documents');
+                if (!ok) return;
             }
             const payload = _collectCurrentOutputs();
             try {
@@ -7883,6 +7938,160 @@ Thank you for watching!`;
         }
 
         document.addEventListener('DOMContentLoaded', loadOutputDir);
+
+        // ============================================================
+        // Icon-only mode for the WORKFLOW CHECKBOX ROW only.
+        // Splits each checkbox label into emoji + text, hides the text,
+        // shows it as a tooltip on hover. Does NOT touch any <button>.
+        // ============================================================
+        (function () {
+            const STYLE_ID = 'sc-checkbox-iconify-style';
+            if (!document.getElementById(STYLE_ID)) {
+                const s = document.createElement('style');
+                s.id = STYLE_ID;
+                s.textContent = `
+                    /* Shrink the checkbox row container so labels are not stretched
+                       by the grid; let them flow inline and size to content. */
+                    .sc-checkbox-row { display: flex !important; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+                    .sc-checkbox-iconify {
+                        padding: 6px 10px !important;
+                        width: auto !important;
+                        flex: 0 0 auto;
+                        transition: background 0.12s ease;
+                        min-height: 40px;
+                        align-items: center;
+                    }
+                    /* Text reveal: inherits the label's original 0.8em sizing. */
+                    .sc-checkbox-iconify .sc-cb-text {
+                        display: none;
+                    }
+                    .sc-checkbox-iconify:hover .sc-cb-text,
+                    .sc-checkbox-iconify:focus-within .sc-cb-text { display: inline; margin-left: 6px; }
+                    .sc-checkbox-iconify:hover { background: #273449 !important; }
+                `;
+                document.head.appendChild(s);
+            }
+
+            const EMOJI_RE = /^(?:\p{Extended_Pictographic}(?:\u200D\p{Extended_Pictographic})*[\uFE0E\uFE0F]?[\u{1F3FB}-\u{1F3FF}]?\s*)+/u;
+
+            // The 12 workflow checkboxes we want to iconify.
+            const CHECKBOX_IDS = [
+                'checkScript', 'checkYouTubeDetails', 'checkHeyGenReady',
+                'checkBRollTable', 'checkBRollImages', 'checkGrokVideos',
+                'checkHookSummary', 'checkShortenScript', 'checkFlowAnalysis',
+                'checkThumbnails', 'checkDemoScript',
+            ];
+
+            function iconifyLabel(label) {
+                if (!label || label.dataset.scIconified === '1') return;
+                // Find the FIRST <span> child that contains the emoji+text label.
+                const spans = label.querySelectorAll(':scope > span');
+                for (const span of spans) {
+                    const txt = span.textContent || '';
+                    const m = txt.match(EMOJI_RE);
+                    if (!m) continue;
+                    const emoji = m[0].trim();
+                    const rest = txt.slice(m[0].length).trim();
+                    if (!rest) break; // already icon-only
+                    span.textContent = emoji;
+                    // Inline !important is the only way to override the
+                    // inline font-size:0.8em !important on these spans.
+                    span.style.setProperty('font-size', '24px', 'important');
+                    span.style.setProperty('line-height', '1', 'important');
+                    const tail = document.createElement('span');
+                    tail.className = 'sc-cb-text';
+                    tail.textContent = ' ' + rest;
+                    span.parentNode.insertBefore(tail, span.nextSibling);
+                    // Tooltip on the whole label, preserving any existing title.
+                    if (!label.getAttribute('title')) {
+                        label.setAttribute('title', rest);
+                    }
+                    break;
+                }
+                label.classList.add('sc-checkbox-iconify');
+                label.dataset.scIconified = '1';
+            }
+
+            function applyAll() {
+                CHECKBOX_IDS.forEach(id => {
+                    const cb = document.getElementById(id);
+                    if (!cb) return;
+                    const lbl = cb.closest('label');
+                    if (lbl) {
+                        iconifyLabel(lbl);
+                        // Tag the parent grid container exactly once so its
+                        // CSS switches from "grid auto-fit minmax(100px,1fr)"
+                        // (which stretches every label) to a flex row that
+                        // sizes each pill to content.
+                        const grid = lbl.parentElement;
+                        if (grid && !grid.classList.contains('sc-checkbox-row')) {
+                            grid.classList.add('sc-checkbox-row');
+                        }
+                    }
+                });
+            }
+
+            applyAll();
+            // Re-apply if the DOM changes (defensive).
+            const obs = new MutationObserver(applyAll);
+            obs.observe(document.body, { childList: true, subtree: true });
+        })();
+
+        // ============================================================
+        // Icon-only mode for the HeyGen CONFIG TOOLBAR buttons only.
+        // (Browse / Details / Voices / Test Generate / API Keys)
+        // Does NOT touch dialog/modal/sidebar/inline-action buttons.
+        // ============================================================
+        (function () {
+            const STYLE_ID = 'sc-toolbar-iconify-style';
+            if (!document.getElementById(STYLE_ID)) {
+                const s = document.createElement('style');
+                s.id = STYLE_ID;
+                s.textContent = `
+                    .sc-toolbar-iconify .sc-btn-label { display: none; }
+                    .sc-toolbar-iconify:hover .sc-btn-label,
+                    .sc-toolbar-iconify:focus-visible .sc-btn-label { display: inline; margin-left: 6px; }
+                `;
+                document.head.appendChild(s);
+            }
+
+            const EMOJI_RE = /^(?:\p{Extended_Pictographic}(?:\u200D\p{Extended_Pictographic})*[\uFE0E\uFE0F]?[\u{1F3FB}-\u{1F3FF}]?\s*)+/u;
+
+            function iconifyButton(btn) {
+                if (!btn || btn.dataset.scToolbarIcon === '1') return;
+                const raw = (btn.textContent || '').trim();
+                if (!raw) { btn.dataset.scToolbarIcon = '1'; return; }
+                const m = raw.match(EMOJI_RE);
+                if (!m) { btn.dataset.scToolbarIcon = '1'; return; }
+                const emoji = m[0].trim();
+                const rest = raw.slice(m[0].length).trim();
+                if (!rest) { btn.dataset.scToolbarIcon = '1'; return; }
+                if (!btn.getAttribute('title')) btn.setAttribute('title', rest);
+                // Rebuild: leading emoji text node + hidden label span.
+                btn.textContent = '';
+                btn.appendChild(document.createTextNode(emoji));
+                const span = document.createElement('span');
+                span.className = 'sc-btn-label';
+                span.textContent = ' ' + rest;
+                btn.appendChild(span);
+                btn.classList.add('sc-toolbar-iconify');
+                btn.dataset.scToolbarIcon = '1';
+            }
+
+            function applyToolbar() {
+                // Anchor on the HeyGen Template ID input — its parent form-group
+                // is the toolbar row we want to compress.
+                const anchor = document.getElementById('heygenTemplateId');
+                if (!anchor) return;
+                const row = anchor.closest('.form-group');
+                if (!row) return;
+                row.querySelectorAll(':scope button').forEach(iconifyButton);
+            }
+
+            applyToolbar();
+            const obs2 = new MutationObserver(applyToolbar);
+            obs2.observe(document.body, { childList: true, subtree: true });
+        })();
     </script>
     
     <!-- HeyGen Template Details Modal -->
