@@ -442,16 +442,14 @@
                 display: none;
             }
 
+            /* Flatten sections so all toolbar-btns sit as direct flex children
+               of .toolbar in DOM order — Generate ends up leftmost. */
             .toolbar-section {
-                flex-wrap: nowrap;
-                justify-content: center;
-                gap: 4px;
+                display: contents;
             }
 
             .toolbar-label {
-                width: 100%;
-                text-align: center;
-                margin-bottom: 5px;
+                display: none;
             }
 
             /* Compact toolbar buttons styled like the checkbox pills:
@@ -486,17 +484,20 @@
                 display: none !important;
             }
 
-            /* HeyGen config row: stack as 2-col grid so both ID inputs left-align
-               directly under each other; buttons wrap below. Short labels. */
+            /* HeyGen config row: keep inline flex; each divider acts as a
+               full-width line break so each label+input keeps its buttons
+               on the same row. Inputs shrink to share width. */
             .heygen-config-row {
-                display: grid !important;
-                grid-template-columns: auto 1fr;
-                column-gap: 6px;
-                row-gap: 6px;
+                flex-wrap: wrap !important;
+                gap: 6px !important;
                 align-items: center;
             }
             .heygen-config-row > span[style*="height:20px"] {
-                display: none !important; /* hide vertical dividers */
+                flex-basis: 100% !important;
+                width: 100% !important;
+                height: 0 !important;
+                background: transparent !important;
+                margin: 0 !important;
             }
             .heygen-config-row .label-full {
                 display: none;
@@ -505,19 +506,17 @@
                 display: inline;
             }
             .heygen-config-row > label {
-                justify-self: start;
+                flex: 0 0 auto;
+                min-width: 32px;
                 text-align: left;
             }
-            .heygen-config-row #heygenTemplateId,
-            .heygen-config-row #heygenVoiceId {
-                width: 100% !important;
+            .heygen-config-row > input {
+                flex: 1 1 80px;
+                width: auto !important;
                 min-width: 0;
-                box-sizing: border-box;
             }
-            /* Buttons span both columns and flex-wrap together. */
             .heygen-config-row > button {
-                grid-column: 1 / -1;
-                justify-self: start;
+                flex: 0 0 auto;
                 padding: 4px 8px !important;
                 font-size: 0.75em !important;
             }
