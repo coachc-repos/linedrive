@@ -424,10 +424,13 @@
             color: #0ea5e9;
         }
         
+        /* Mobile-only short label letter; hidden on desktop. */
+        .label-mobile-voice { display: none; }
+
         /* Responsive toolbar */
         @media (max-width: 768px) {
             .toolbar {
-                justify-content: center;
+                justify-content: flex-start;
                 flex-wrap: nowrap;
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
@@ -478,26 +481,43 @@
             }
 
             /* Hide Output Directory button on mobile — not usable from phone. */
-            #outputDirBtn {
+            #outputDirBtn,
+            #outputDirStrip {
                 display: none !important;
             }
 
-            /* HeyGen config row: wrap, shrink inputs, shorten label so all
-               buttons (Voices, Test Generate, API Keys) stay visible. */
+            /* HeyGen config row: stack as 2-col grid so both ID inputs left-align
+               directly under each other; buttons wrap below. Short labels. */
             .heygen-config-row {
-                flex-wrap: wrap !important;
-                gap: 6px !important;
+                display: grid !important;
+                grid-template-columns: auto 1fr;
+                column-gap: 6px;
+                row-gap: 6px;
+                align-items: center;
+            }
+            .heygen-config-row > span[style*="height:20px"] {
+                display: none !important; /* hide vertical dividers */
             }
             .heygen-config-row .label-full {
                 display: none;
             }
+            .heygen-config-row .label-mobile-voice {
+                display: inline;
+            }
+            .heygen-config-row > label {
+                justify-self: start;
+                text-align: left;
+            }
             .heygen-config-row #heygenTemplateId,
             .heygen-config-row #heygenVoiceId {
-                width: auto !important;
-                flex: 1 1 120px;
+                width: 100% !important;
                 min-width: 0;
+                box-sizing: border-box;
             }
-            .heygen-config-row button {
+            /* Buttons span both columns and flex-wrap together. */
+            .heygen-config-row > button {
+                grid-column: 1 / -1;
+                justify-self: start;
                 padding: 4px 8px !important;
                 font-size: 0.75em !important;
             }
@@ -1604,7 +1624,7 @@
                     <button onclick="browseHeyGenTemplates()" style="padding: 4px 10px; background: linear-gradient(135deg, #0ea5e9, #0284c7); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">📋 Browse</button>
                     <button onclick="viewHeyGenTemplateDetails()" style="padding: 4px 10px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🔍 Details</button>
                     <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
-                    <label for="heygenVoiceId" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;">Voice ID:</label>
+                    <label for="heygenVoiceId" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;"><span class="label-full">Voice </span><span class="label-mobile-voice">V</span>ID:</label>
                     <input type="text" id="heygenVoiceId" value="{{ saved_heygen_voice_id or '' }}" placeholder="Select a voice..." autocomplete="off" style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
                     <button onclick="browseHeyGenVoices()" style="padding: 4px 10px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🎤 Voices</button>
                     <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
