@@ -464,11 +464,22 @@
                 border-radius: 4px;
             }
             .toolbar-icon {
-                font-size: 1em;
+                font-size: 1.4em;
                 line-height: 1;
             }
             .toolbar-text {
                 font-size: 0.8em;
+            }
+
+            /* Hide section labels (Actions / Export / Tools) on mobile —
+               they don't render cleanly in the scrolling pill bar. */
+            .toolbar-section > .toolbar-label {
+                display: none !important;
+            }
+
+            /* Hide Output Directory button on mobile — not usable from phone. */
+            #outputDirBtn {
+                display: none !important;
             }
 
             /* v2-only on mobile: hide the Agent API selector entirely */
@@ -7754,6 +7765,13 @@ Thank you for watching!`;
         //   - Otherwise opens the modal and resolves true after Save,
         //     or false if the user closes/cancels without saving.
         async function ensureOutputDirSet(reasonLabel) {
+            // On mobile we don't expose an output-directory picker, so skip
+            // the gate entirely and let the server use its default.
+            try {
+                if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) {
+                    return true;
+                }
+            } catch (e) { /* ignore */ }
             try {
                 const resp = await fetch('/api/output-dir');
                 const data = await resp.json();
