@@ -30,6 +30,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 # App source
 COPY container_app.py web_gui.py ./
 COPY templates/ ./templates/
+COPY static/ ./static/
 COPY console_ui/ ./console_ui/
 COPY linedrive_azure/ ./linedrive_azure/
 COPY tools/ ./tools/
