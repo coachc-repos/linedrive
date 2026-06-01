@@ -583,6 +583,7 @@ def _add_background_audio_clips(media_pool, timeline, audio_bin):
     sfx_intro_name = (
         "Computers, Keyboard   Mouse, Classic Keyboard Typing SND81694.wav"
     )
+    sfx_swoosh_name = "AI Roz Swoosh.wav"
     main_bg_per_aroll = 2
 
     if not audio_bin:
@@ -768,6 +769,58 @@ def _add_background_audio_clips(media_pool, timeline, audio_bin):
         print(f"   ⚠️ SFX not found in audio bin: {sfx_intro_name}")
         if sfx_intro_name not in missing:
             missing.append(sfx_intro_name)
+
+    # Place "AI Roz Swoosh.wav" on A3 alongside the other sound effects,
+    # sequenced right after the keyboard-typing SFX so the two don't overlap.
+    swoosh_clip = by_name.get(sfx_swoosh_name.lower())
+    if not swoosh_clip:
+        swoosh_base = sfx_swoosh_name.rsplit(".", 1)[0].lower()
+        for k, v in by_name.items():
+            if k.rsplit(".", 1)[0] == swoosh_base:
+                swoosh_clip = v
+                break
+    if swoosh_clip:
+        # Ensure A3 still exists (it should, from the keyboard SFX block above).
+        try:
+            cur_audio = int(timeline.GetTrackCount("audio") or 1)
+        except Exception:
+            cur_audio = 1
+        while cur_audio < 3:
+            try:
+                timeline.AddTrack("audio")
+                cur_audio += 1
+                print(f"   ➕ Added audio track A{cur_audio} (fallback for Swoosh SFX)")
+            except Exception as add_err:
+                print(f"   ⚠️ Could not add audio track A{cur_audio + 1}: {add_err}")
+                break
+
+        # Sequence after the keyboard SFX if we placed it; otherwise at start.
+        swoosh_start = start_frame
+        if sfx_clip:
+            kb_duration = _audio_duration_frames(sfx_clip)
+            if kb_duration > 0:
+                swoosh_start = start_frame + kb_duration
+
+        swoosh_info = {
+            "mediaPoolItem": swoosh_clip,
+            "trackIndex": 3,
+            "mediaType": 2,
+            "recordFrame": swoosh_start,
+        }
+        try:
+            swoosh_result = media_pool.AppendToTimeline([swoosh_info])
+        except Exception as swoosh_err:
+            swoosh_result = None
+            print(f"   ❌ AppendToTimeline failed for SFX {sfx_swoosh_name}: {swoosh_err}")
+        if swoosh_result:
+            appended.append(sfx_swoosh_name)
+            print(f"   ✅ A3 @ frame {swoosh_start}: {sfx_swoosh_name}")
+        else:
+            print(f"   ⚠️ AppendToTimeline returned empty for SFX {sfx_swoosh_name}")
+    else:
+        print(f"   ⚠️ SFX not found in audio bin: {sfx_swoosh_name}")
+        if sfx_swoosh_name not in missing:
+            missing.append(sfx_swoosh_name)
 
     if appended:
         return {
@@ -3132,14 +3185,15 @@ def create_resolve_project(script_title, edl_filename=None, broll_folder=None, i
                 "error": "Failed to get Media Pool from project"
             }
 
-        # Create master bins structure matching template directory
+        # Create master bins structure matching template directory.
+        # NOTE: "heygen" and "raw" bins are intentionally omitted — those
+        # template subdirectories are no longer copied into new projects and
+        # the corresponding bins should not be created in the media pool.
         bins_created = []
         bin_structure = [
-            "heygen",
             "intro",
             "aroll",
             "broll",
-            "raw",
             "animations",
             "timelines",
             "audio",

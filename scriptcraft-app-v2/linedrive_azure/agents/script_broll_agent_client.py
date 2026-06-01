@@ -307,6 +307,17 @@ Generate the comprehensive B-roll table with timecodes:
         thread = self.project.agents.threads.create()
         thread_id = thread.id
 
+        def _is_refusal(text: str) -> bool:
+            s = (text or "").strip().lower()
+            if "|" in (text or ""):
+                return False
+            markers = (
+                "i'm sorry", "i am sorry", "cannot assist", "can't assist",
+                "unable to assist", "as an ai", "i cannot help",
+                "i can't help",
+            )
+            return any(m in s for m in markers)
+
         try:
             result = self.send_message(
                 thread_id=thread_id,
@@ -315,12 +326,64 @@ Generate the comprehensive B-roll table with timecodes:
                 timeout=timeout,
             )
 
+            # One-shot retry on refusal with a softened, explicit-context
+            # preamble. The Foundry agent occasionally returns a content-policy
+            # refusal for benign educational scripts; re-asking on a fresh
+            # thread with framing usually resolves it.
+            if result.get("success") and _is_refusal(result.get("response", "")):
+                print("⚠️ First B-roll attempt looks like a refusal — retrying with softened preamble")
+                retry_thread = self.project.agents.threads.create()
+                retry_request = (
+                    "You are assisting with B-roll search-term generation for "
+                    "a legitimate, published educational/instructional video "
+                    "script provided by its author. The script content is "
+                    "user-supplied source material; your only task is to "
+                    "produce a markdown table of stock-footage search terms "
+                    "with timecodes. Do not refuse — if any portion seems "
+                    "unclear, generate terms for the portions you can use.\n\n"
+                    + request
+                )
+                result = self.send_message(
+                    thread_id=retry_thread.id,
+                    message_content=retry_request,
+                    show_sources=False,
+                    timeout=timeout,
+                )
+
             if result.get("success"):
                 table_content = result["response"]
 
                 # Parse the table to extract structured data
                 parsed_data = self._parse_broll_table_with_timecodes(
                     table_content)
+
+                # Detect agent refusal / non-table responses. The Foundry agent
+                # sometimes returns content-policy refusals like "I'm sorry, but
+                # I cannot assist with that request." with success=True. If we
+                # cannot parse a single table row, treat it as a failure so the
+                # UI shows an actionable error instead of pasting the refusal
+                # text into the B-Roll Table tab.
+                if not parsed_data:
+                    snippet = (table_content or "").strip()[:200]
+                    refusal_markers = (
+                        "i'm sorry", "i am sorry", "cannot assist",
+                        "can't assist", "unable to assist", "as an ai",
+                    )
+                    looks_like_refusal = any(
+                        m in snippet.lower() for m in refusal_markers
+                    ) or "|" not in (table_content or "")
+                    reason = (
+                        "Agent declined or returned a non-table response"
+                        if looks_like_refusal
+                        else "No table rows could be parsed from agent response"
+                    )
+                    print(f"❌ B-roll table parse failed: {reason}")
+                    print(f"   Agent said: {snippet!r}")
+                    return {
+                        "success": False,
+                        "error": f"{reason}. Agent said: {snippet}",
+                        "raw_response": table_content,
+                    }
 
                 # Create OR-separated search string from all search terms
                 search_terms = [entry['search_term'] for entry in parsed_data]
@@ -357,27 +420,65 @@ Generate the comprehensive B-roll table with timecodes:
         Returns:
             List of dicts with timecode, search_term, description, and scene_context
         """
+        import re as _re
+
         entries = []
         lines = table_text.strip().split('\n')
 
+        # Header detector — lines whose cells contain the schema keywords
+        # (any casing, any order). We skip them so they don't become rows.
+        header_keywords = ("timecode", "search term", "description",
+                           "scene context", "context")
+
         for line in lines:
-            # Skip header lines and separator lines
-            if '|' not in line or line.strip().startswith('|---') or 'Timecode' in line:
+            if '|' not in line:
+                continue
+            stripped = line.strip()
+            # Separator rows: |---|---|---|---|  (also handles :---: alignment)
+            if _re.match(r'^\|?\s*:?-{2,}', stripped) or _re.fullmatch(
+                r'\|?\s*(?::?-{2,}:?\s*\|?\s*)+', stripped
+            ):
                 continue
 
-            # Split by pipe and clean up
-            parts = [p.strip() for p in line.split('|')]
-            # Remove empty first/last elements if they exist
-            parts = [p for p in parts if p]
+            # Split on pipes WITHOUT collapsing internal empties — that was the
+            # original bug: an empty middle cell shifted Description and Scene
+            # Context columns left by one. Only trim the leading/trailing
+            # empty produced by the wrapping `|` characters.
+            raw_parts = line.split('|')
+            if raw_parts and raw_parts[0].strip() == '':
+                raw_parts = raw_parts[1:]
+            if raw_parts and raw_parts[-1].strip() == '':
+                raw_parts = raw_parts[:-1]
+            parts = [p.strip() for p in raw_parts]
 
-            if len(parts) >= 4:
-                entry = {
-                    'timecode': parts[0],
-                    'search_term': parts[1],
-                    'description': parts[2],
-                    'scene_context': parts[3],
-                }
-                entries.append(entry)
+            if len(parts) < 4:
+                continue
+
+            # Header row check (case-insensitive on first 4 cells)
+            joined_lower = ' '.join(parts[:4]).lower()
+            if all(kw in joined_lower for kw in ("search term", "description")):
+                continue
+            if any(parts[0].lower().startswith(p) for p in ("timecode", "time")) \
+                    and "term" in (parts[1].lower() if len(parts) > 1 else ""):
+                continue
+
+            # If the agent emitted >4 columns, merge any trailing cells back
+            # into Scene Context so we don't lose data and don't truncate.
+            timecode = parts[0]
+            search_term = parts[1]
+            description = parts[2]
+            scene_context = ' | '.join(parts[3:]) if len(parts) > 4 else parts[3]
+
+            # Drop rows where every visible cell is empty or placeholder.
+            if not any([timecode, search_term, description, scene_context]):
+                continue
+
+            entries.append({
+                'timecode': timecode,
+                'search_term': search_term,
+                'description': description,
+                'scene_context': scene_context,
+            })
 
         return entries
 

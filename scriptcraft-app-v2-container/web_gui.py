@@ -7734,6 +7734,22 @@ def create_resolve_with_videos():
             if re.search(r'AI\s+with\s+Roz.*Exit', name, re.IGNORECASE):
                 return (99999, 0)
 
+            # Hook clip(s) always sort to the FRONT of the timeline (before any
+            # chapter clip). HeyGen names them like "{title}-hook",
+            # "{title}-hook-2", "{title}-hook_{id}.mp4", etc. Multiple hooks
+            # keep their numeric suffix order (hook = 1, hook-2 = 2, …).
+            hook_match = re.search(
+                r'[-_\s]hook(?:[-_]?(\d+))?(?:[-_.]|$)',
+                name,
+                re.IGNORECASE,
+            )
+            if hook_match:
+                hook_idx = int(hook_match.group(1)) if hook_match.group(1) else 1
+                logger.info(
+                    f"   🔢 parse_chapter_info: {name} → HOOK (-1, {hook_idx})"
+                )
+                return (-1, hook_idx)
+
             # Detect chapter pattern first — a chapter clip wins even if its
             # title contains "AI with Roz" (e.g.
             # "AI with Roz  AI ZERO Knowledge of AI-Ch1p1_xxx.mp4").
@@ -9643,6 +9659,13 @@ def _transcribe_worker(session_id: str, whisper_bin: str, file_path: str,
     try:
         proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,  # whisper's Python child fails with
+                                       # "init_sys_streams: can't initialize sys
+                                       # standard streams / [Errno 9] Bad file
+                                       # descriptor" if it inherits a closed
+                                       # stdin (web_gui is often detached from
+                                       # a controlling terminal). DEVNULL gives
+                                       # it a valid fd 0.
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

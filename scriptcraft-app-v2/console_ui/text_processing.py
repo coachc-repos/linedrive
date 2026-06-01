@@ -966,7 +966,8 @@ def generate_heygen_curl_commands(
             # HeyGen video for the hook twice (two takes), so each curl must
             # contain the complete hook, not a split half.
             curl_commands.append(build_curl(f"{short_title}-hook", hook_clean))
-            curl_commands.append(build_curl(f"{short_title}-hook-2", hook_clean))
+            curl_commands.append(build_curl(
+                f"{short_title}-hook-2", hook_clean))
             extra_curls += 2
 
     for i, chapter in enumerate(chapters, 1):

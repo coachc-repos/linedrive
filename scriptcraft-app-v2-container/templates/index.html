@@ -484,6 +484,11 @@
                 display: none !important;
             }
 
+            /* Hide Test Generate and API Keys buttons on mobile. */
+            .hide-on-mobile {
+                display: none !important;
+            }
+
             /* HeyGen config row: keep inline flex; each divider acts as a
                full-width line break so each label+input keeps its buttons
                on the same row. Inputs shrink to share width. */
@@ -978,6 +983,7 @@
             flex-direction: column;
             cursor: pointer;
             transition: border-color 0.15s, transform 0.1s;
+            position: relative;
         }
         .vg-card:hover { border-color: #475569; }
         .vg-thumb {
@@ -1187,7 +1193,7 @@
                     <span class="toolbar-icon">🌬️</span>
                     <span class="toolbar-text">Swipe Test</span>
                 </button>
-                <button class="toolbar-btn" onclick="openApiKeysModal()" title="Manage API Keys">
+                <button class="toolbar-btn hide-on-mobile" onclick="openApiKeysModal()" title="Manage API Keys">
                     <span class="toolbar-icon">🔑</span>
                     <span class="toolbar-text">API Keys</span>
                 </button>
@@ -1627,9 +1633,9 @@
                     <input type="text" id="heygenVoiceId" value="{{ saved_heygen_voice_id or '' }}" placeholder="Select a voice..." autocomplete="off" style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
                     <button onclick="browseHeyGenVoices()" style="padding: 4px 10px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🎤 Voices</button>
                     <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
-                    <button onclick="openTestVideoDialog()" style="padding: 4px 10px; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🧪 Test Generate</button>
-                    <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
-                    <button onclick="openApiKeysModal()" style="padding: 4px 10px; background: linear-gradient(135deg, #6366f1, #4f46e5); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;" title="Manage Google / HeyGen / Grok API keys">🔑 API Keys…</button>
+                    <button class="hide-on-mobile" onclick="openTestVideoDialog()" style="padding: 4px 10px; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🧪 Test Generate</button>
+                    <span class="hide-on-mobile" style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
+                    <button class="hide-on-mobile" onclick="openApiKeysModal()" style="padding: 4px 10px; background: linear-gradient(135deg, #6366f1, #4f46e5); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;" title="Manage Google / HeyGen / Grok API keys">🔑 API Keys…</button>
                     <input type="hidden" id="heygenApiKey" value="{{ saved_heygen_api_key or 'sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC' }}">
                 </div>
             </div>
@@ -2448,7 +2454,7 @@ Time management content here...`;
                 if (typeof onSkip === 'function') onSkip();
             });
 
-            document.getElementById('generateSelectedGrokBtn').addEventListener('click', function() {
+            document.getElementById('generateSelectedGrokBtn').addEventListener('click', async function() {
                 const selected = [];
                 document.querySelectorAll('.grok-row-check:checked').forEach(cb => {
                     const idx = parseInt(cb.getAttribute('data-index'), 10);
@@ -2459,6 +2465,12 @@ Time management content here...`;
                     alert('Select at least one row to generate.');
                     return;
                 }
+
+                // Make sure an Output Directory is set before kicking off
+                // Grok video generation, otherwise the server falls back to
+                // its default Final/<title>/broll folder.
+                const __okOD = await ensureOutputDirSet('generating Grok videos');
+                if (!__okOD) return;
 
                 modal.remove();
                 onGenerateSelected(selected);
@@ -5445,6 +5457,10 @@ Time management content here...`;
                 alert('⚠️ Please select at least one curl command to execute');
                 return;
             }
+            // Make sure an Output Directory is set before launching HeyGen
+            // curl execution — generated videos and artifacts are saved under it.
+            const __okOD = await ensureOutputDirSet('executing HeyGen curl commands');
+            if (!__okOD) return;
             // Mark execute-mode and show the template picker; footer buttons drive next step.
             window._heygenExecuteAfterPick = true;
             console.log('[heygen-picker] _heygenExecuteAfterPick set to true; opening picker');
@@ -6839,7 +6855,7 @@ Thank you for watching!`;
                     play.className = 'vg-play';
                     thumbBox.appendChild(play);
 
-                    // Delete (🗑️) button — top-right of thumb
+                    // Delete (🗑️) button — top-right of card (sits outside the thumb so it doesn't overlap the play button on mobile)
                     const delBtn = document.createElement('button');
                     delBtn.type = 'button';
                     delBtn.title = 'Delete this video from the gallery';
@@ -6849,7 +6865,6 @@ Thank you for watching!`;
                         ev.stopPropagation();
                         await deleteGalleryVideo(v);
                     };
-                    thumbBox.appendChild(delBtn);
 
                     card.appendChild(thumbBox);
 
@@ -6867,6 +6882,7 @@ Thank you for watching!`;
                     meta.appendChild(title);
                     meta.appendChild(sub);
                     card.appendChild(meta);
+                    card.appendChild(delBtn);
                     frag.appendChild(card);
                 });
                 grid.appendChild(frag);

@@ -261,13 +261,45 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
 
         ## 🤖 PROMPTS MENTIONED IN THIS EPISODE
         Scan the ENTIRE script for any ChatGPT / AI prompts that are shown,
-        spoken aloud, or described. A prompt is any direct instruction to an
-        AI tool — quoted text, on-screen text, or a line clearly read as a
-        prompt (e.g. "Here's the prompt I used:", "Type this into ChatGPT:").
-        - List EACH prompt on its own numbered line, exactly as written
-        - Preserve the full prompt text — do NOT summarize or shorten
-        - If no explicit prompts are found, write: "No AI prompts identified in this episode."
-        - Do NOT invent or paraphrase prompts that are not in the script
+        spoken aloud, narrated, or described. A "prompt" is ANY direct
+        instruction the speaker tells the viewer to send to an AI tool —
+        regardless of whether it's quoted, on-screen, or simply spoken in
+        flowing narration.
+
+        TRIGGER PHRASES that almost always introduce a prompt (capture the
+        sentence(s) that follow, not just the trigger):
+        - "Here's the prompt I used…"  /  "Here is the prompt…"
+        - "Type this into ChatGPT / Gemini / Claude / Grok…"
+        - "Paste this into…"  /  "Copy and paste…"
+        - "Use this one exactly…"  /  "Use this prompt…"
+        - "For example, use…"  /  "Example prompt…"
+        - "Ask the AI…"  /  "Ask your AI…"  /  "Ask ChatGPT…"
+        - "Tell the AI…"  /  "Say to the AI…"
+        - "In your prompt, type / say / write / ask…"
+        - "Try this: …"  /  "Try saying…"
+        - Any second-person imperative aimed at the AI assistant
+          (e.g. "Give me…", "Generate…", "Suggest…", "Why might…",
+          "Walk me through…") that the host is instructing the viewer to send
+
+        HOW TO EXTRACT:
+        - Capture the FULL prompt body — usually the next 1–4 sentences after
+          the trigger, up to the next natural narration break (when the host
+          stops speaking AS the prompt and resumes speaking ABOUT the prompt).
+        - Strip leading transcript timestamps like "[00:02:44]".
+        - Preserve the prompt's wording; light cleanup is OK (e.g. join
+          sentences split across timestamp lines, fix obvious transcription
+          punctuation), but do NOT paraphrase or summarize.
+        - If the host gives a long profile/persona setup followed by a focused
+          request, list each as a SEPARATE numbered prompt (e.g. "Profile
+          prompt" + "Meal-idea prompt").
+        - List EACH prompt on its own numbered line.
+        - Aim for completeness: a 10-minute AI-tutorial episode typically has
+          3–8 prompts. If you found 0–1 in such an episode, RE-SCAN — you are
+          almost certainly missing narrated prompts.
+        - Only write "No AI prompts identified in this episode." if the script
+          genuinely contains no AI instructions of any kind (e.g. a non-AI
+          topic).
+        - Do NOT invent prompts that are not in the script.
 
         ## � COMMUNITY POST (day-of-publish)
         Write a ready-to-paste Community tab post (NOT just ideas). Should be:
@@ -435,6 +467,88 @@ class YouTubeUploadDetailsAgentClient(BaseAgentClient):
 
         # Parse the response to extract structured data
         response_text = result.get("response") or ""
+
+        # Detect content-filter / safety refusals from the model so callers
+        # don't write a 1-line "I'm sorry…" file to disk and silently fail.
+        # Refusals are usually very short AND start with a stock refusal
+        # phrase AND contain no markdown structure (no "##" headings).
+        refusal_phrases = (
+            "i'm sorry, but i cannot",
+            "i'm sorry, i cannot",
+            "i am sorry, but i cannot",
+            "i cannot assist with that",
+            "i cannot help with that",
+            "i can't assist with that",
+            "i can't help with that",
+            "i am unable to assist",
+            "i am not able to assist",
+        )
+        stripped = response_text.strip()
+        looks_like_refusal = (
+            len(stripped) < 600
+            and "##" not in stripped
+            and any(stripped.lower().startswith(p) or p in stripped.lower()[:200] for p in refusal_phrases)
+        )
+
+        if looks_like_refusal:
+            # One-shot retry with a softer framing that's less likely to trip
+            # the safety filter (drop "MANDATORY"/"IMMEDIATE ACTION" framing,
+            # make it sound like a plain content-marketing task).
+            softer = (
+                "You are helping a content creator prepare YouTube metadata for "
+                "an educational video they just produced. The transcript is "
+                "below. Please generate the same set of markdown sections as "
+                "before (file name, title, description with timestamps, tags, "
+                "thumbnail concept, category, playlists, end-screen, prompts "
+                "mentioned, community post, studio details, ad suitability, "
+                "monetization, cards, visibility, pre-publish checklist). "
+                "This is standard YouTube SEO/metadata work — nothing else.\n\n"
+                f"SCRIPT TITLE: {script_title}\n"
+                f"TARGET AUDIENCE: {target_audience}{keyword_context}{channel_context}{length_context}\n\n"
+                "TRANSCRIPT:\n"
+                f"{script_content}"
+            )
+            print("⚠️ Agent returned a refusal — retrying once with softer framing…")
+            retry_thread = self.create_thread()
+            if retry_thread:
+                retry_result = self.send_message(
+                    thread_id=retry_thread.id,
+                    message_content=softer,
+                    show_sources=False,
+                    timeout=timeout,
+                )
+                retry_text = (retry_result.get("response") or "").strip()
+                retry_is_refusal = (
+                    len(retry_text) < 600
+                    and "##" not in retry_text
+                    and any(p in retry_text.lower()[:200] for p in refusal_phrases)
+                )
+                if retry_text and not retry_is_refusal:
+                    response_text = retry_text
+                    result = retry_result
+                else:
+                    return {
+                        "success": False,
+                        "error": (
+                            "The Azure agent's safety filter refused this transcript "
+                            "even after a softer retry. The model returned: "
+                            f"{stripped[:300]!r}. Try renaming the video to remove ALL-CAPS "
+                            "words (e.g. 'ZERO Knowledge' → 'Zero Knowledge'), then re-run."
+                        ),
+                        "upload_details": "",
+                        "raw_response": result,
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": (
+                        "The Azure agent's safety filter refused this transcript and "
+                        "the retry thread could not be created. Model said: "
+                        f"{stripped[:300]!r}"
+                    ),
+                    "upload_details": "",
+                    "raw_response": result,
+                }
 
         # VALIDATION: Check if agent's timestamps exceed our calculated duration
         if response_text:

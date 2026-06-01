@@ -207,14 +207,74 @@ def _parse_tags(body: str) -> List[str]:
     tags: List[str] = []
     total = 0
     for t in raw_tags:
-        if not t or len(t) > MAX_TAG_LEN:
+        # Sanitize: drop characters YouTube rejects in tags (<, >, quotes,
+        # backslashes, control chars). Keep letters, digits, spaces, and
+        # a small set of safe punctuation, then collapse internal whitespace
+        # into single hyphens ("AI generated video" -> "AI-generated-video").
+        t = re.sub(r"[<>\"\\\u0000-\u001f]", "", t)
+        # Strip surrounding bold/italic markdown leftovers.
+        t = re.sub(r"^[*_`]+|[*_`]+$", "", t).strip()
+        # Drop wrapping straight or smart quotes.
+        t = t.strip("'\u2018\u2019\u201c\u201d").strip()
+        if not t:
+            continue
+        # Hyphenate multi-word tags.
+        t = re.sub(r"\s+", "-", t)
+        # Collapse repeat hyphens and trim.
+        t = re.sub(r"-{2,}", "-", t).strip("-")
+        if not t:
+            continue
+        # Cap individual tag at YouTube's per-tag practical limit (30 chars).
+        if len(t) > 30:
+            t = t[:30].rstrip("-")
+        if len(t) > MAX_TAG_LEN:
             continue
         # YouTube counts quoted multi-word tags with quotes; keep simple.
         if total + len(t) + 2 > MAX_TAGS_TOTAL:
             break
         tags.append(t)
         total += len(t) + 2
-    return tags
+    # De-duplicate (case-insensitive) while preserving order.
+    seen: set = set()
+    deduped: List[str] = []
+    for t in tags:
+        key = t.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(t)
+    return deduped
+
+
+_HASHTAG_TOKEN_RE = re.compile(r"#([A-Za-z0-9_]+)")
+
+
+def _parse_hashtags(sections: Dict[str, str]) -> List[str]:
+    """Collect hashtags from a dedicated ``## Hashtags`` section if present,
+    otherwise harvest any ``#word`` tokens that appear inside the description
+    body. Returns a de-duplicated list (case-insensitive) without the leading
+    ``#`` so :meth:`YouTubeMetadata.composed_description` can format them."""
+    candidates: List[str] = []
+    for key in ("hashtags", "hash tags"):
+        block = (sections.get(key) or "").strip()
+        if block:
+            candidates.extend(_HASHTAG_TOKEN_RE.findall(block))
+            # Also accept bare comma/space separated words in the section.
+            for tok in re.split(r"[,\s]+", block):
+                tok = tok.strip().lstrip("#")
+                if tok and re.fullmatch(r"[A-Za-z0-9_]+", tok):
+                    candidates.append(tok)
+    desc_body = (sections.get("description") or "")
+    candidates.extend(_HASHTAG_TOKEN_RE.findall(desc_body))
+    out: List[str] = []
+    seen: set = set()
+    for h in candidates:
+        k = h.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(h)
+    return out
 
 
 def _parse_category(body: str) -> str:
@@ -244,9 +304,11 @@ def _build_description(sections: Dict[str, str]) -> str:
     # Section labels we want spaced apart in the final description.
     spaced_labels = (
         "overview", "timestamps", "tools & resources", "tools and resources",
-        "connect with us", "call to action", "cta", "hashtags",
+        "call to action", "cta", "hashtags",
         "resources", "links",
     )
+    # Labels whose entire body should be dropped from the description.
+    dropped_labels = ("connect with us", "connect",)
     # Match any of these label shapes (the raw label text is captured):
     #   **OVERVIEW:**       **OVERVIEW**:        **OVERVIEW**
     #   ## OVERVIEW         ### OVERVIEW:        OVERVIEW:
@@ -267,6 +329,7 @@ def _build_description(sections: Dict[str, str]) -> str:
         return None
 
     cleaned_lines: List[str] = []
+    skipping = False
     for raw in body.splitlines():
         line = raw.rstrip()
         stripped = line.strip()
@@ -274,24 +337,37 @@ def _build_description(sections: Dict[str, str]) -> str:
         if label_text is not None:
             label_norm = re.sub(r"\s*\([^)]*\)\s*", "",
                                 label_text).strip().lower().rstrip(":")
+            # "Connect with Us" (and similar) is dropped entirely — skip
+            # the label and all of its body lines until the next label.
+            if any(label_norm.startswith(d) for d in dropped_labels):
+                skipping = True
+                continue
             # The HOOK label is removed entirely (just the prose stays).
             if label_norm.startswith("hook"):
+                skipping = False
                 if cleaned_lines and cleaned_lines[-1].strip():
                     cleaned_lines.append("")
                 continue
             # For the other major sections, surround the heading with blank
             # lines so they read as distinct paragraphs in YouTube.
             if label_norm in spaced_labels:
+                skipping = False
                 if cleaned_lines and cleaned_lines[-1].strip():
                     cleaned_lines.append("")
                 cleaned_lines.append(label_norm.upper().rstrip(":"))
                 cleaned_lines.append("")
                 continue
             # Unknown label: keep the text without the bold markers.
+            skipping = False
             cleaned_lines.append(label_text.rstrip(":"))
+            continue
+        if skipping:
             continue
         # Strip inline bold markers but keep the text.
         line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+        # Strip a leading inline "Hook:" / "HOOK -" prefix if the agent
+        # emitted the hook label on the same line as the sentence.
+        line = re.sub(r"^\s*hook\s*[:\-\u2014]\s*", "", line, flags=re.I)
         cleaned_lines.append(line)
     description = "\n".join(cleaned_lines).strip()
     # Collapse 3+ blank lines but keep single blank-line spacing.
@@ -322,6 +398,7 @@ def parse_youtube_details_markdown(md: str) -> YouTubeMetadata:
         or "Untitled Video"
     description = _build_description(sections) or title
     tags = _parse_tags(sections.get("tags", ""))
+    hashtags = _parse_hashtags(sections)
     category_id = _parse_category(sections.get("category", ""))
     made_for_kids = _parse_made_for_kids(
         sections.get("studio details (copy-paste ready into youtube studio)",
@@ -331,6 +408,7 @@ def parse_youtube_details_markdown(md: str) -> YouTubeMetadata:
         title=title,
         description=description,
         tags=tags,
+        hashtags=hashtags,
         category_id=category_id,
         made_for_kids=made_for_kids,
     )
@@ -459,6 +537,34 @@ def get_upload_status(upload_id: str) -> Optional[Dict[str, Any]]:
         return dict(state) if state else None
 
 
+def _upload_caption_track(
+    service,
+    video_id: str,
+    srt_path: Path,
+    language: str = "en",
+    name: str = "English",
+) -> Dict[str, Any]:
+    """Upload an .srt caption track to ``video_id`` via captions.insert.
+    Requires the youtube.force-ssl scope; the broader 'youtube' scope this
+    module already requests is sufficient because Google grants captions
+    write permission with it for the channel's own videos."""
+    libs = _import_google_libs()
+    MediaFileUpload = libs["MediaFileUpload"]
+    media = MediaFileUpload(str(srt_path), mimetype="application/octet-stream",
+                            resumable=False)
+    body = {
+        "snippet": {
+            "videoId": video_id,
+            "language": language,
+            "name": name,
+            "isDraft": False,
+        }
+    }
+    return service.captions().insert(
+        part="snippet", body=body, media_body=media,
+    ).execute()
+
+
 def upload_video(
     video_path: str,
     metadata: YouTubeMetadata,
@@ -466,6 +572,9 @@ def upload_video(
     notify_subscribers: bool = True,
     thumbnail_path: Optional[str] = None,
     playlist_ids: Optional[List[str]] = None,
+    srt_path: Optional[str] = None,
+    srt_language: str = "en",
+    srt_track_name: str = "English",
 ) -> Dict[str, Any]:
     """Upload a local video file to YouTube. Updates progress under
     ``upload_id`` so the UI can poll ``get_upload_status``. If
@@ -486,6 +595,15 @@ def upload_video(
             raise ValueError(
                 f"Unsupported thumbnail type: {thumb_path.suffix}. "
                 f"Allowed: {sorted(THUMBNAIL_EXTS)}")
+
+    srt_file: Optional[Path] = None
+    if srt_path:
+        srt_file = Path(srt_path).expanduser()
+        if not srt_file.exists() or not srt_file.is_file():
+            raise FileNotFoundError(f"SRT caption file not found: {srt_file}")
+        if srt_file.suffix.lower() != ".srt":
+            raise ValueError(
+                f"Unsupported caption type: {srt_file.suffix} (only .srt)")
 
     libs = _import_google_libs()
     HttpError = libs["HttpError"]
@@ -599,6 +717,35 @@ def upload_video(
                     f"Could not add video to playlist {pid}: {pe}")
                 playlist_errors.append({"playlist_id": pid, "error": msg})
 
+    caption_id: Optional[str] = None
+    caption_error: Optional[str] = None
+    if video_id and srt_file is not None:
+        _set_state(upload_id, status="uploading_captions", progress=100)
+        logger.info(
+            f"📝 Uploading caption track for {video_id}: {srt_file} "
+            f"({srt_file.stat().st_size} bytes, lang={srt_language})")
+        try:
+            resp = _upload_caption_track(
+                service, video_id, srt_file,
+                language=srt_language, name=srt_track_name,
+            )
+            caption_id = (resp or {}).get("id")
+            logger.info(f"✅ Caption track uploaded for {video_id}: id={caption_id}")
+        except HttpError as ce:
+            try:
+                caption_error = ce.content.decode("utf-8", errors="replace") \
+                    if hasattr(ce, "content") and ce.content else str(ce)
+            except Exception:  # pragma: no cover
+                caption_error = str(ce)
+            logger.error(
+                f"❌ Caption upload FAILED for {video_id} "
+                f"(file={srt_file}): {caption_error}")
+        except Exception as ce:
+            caption_error = str(ce)
+            logger.error(
+                f"❌ Caption upload FAILED for {video_id} "
+                f"(file={srt_file}): {ce}")
+
     _set_state(
         upload_id,
         status="complete",
@@ -610,6 +757,8 @@ def upload_video(
         thumbnail_error=thumbnail_error,
         playlists_added=playlists_added,
         playlist_errors=playlist_errors,
+        caption_id=caption_id,
+        caption_error=caption_error,
     )
     return {
         "video_id": video_id,
@@ -622,6 +771,8 @@ def upload_video(
         "thumbnail_error": thumbnail_error,
         "playlists_added": playlists_added,
         "playlist_errors": playlist_errors,
+        "caption_id": caption_id,
+        "caption_error": caption_error,
         "metadata": asdict(metadata),
     }
 

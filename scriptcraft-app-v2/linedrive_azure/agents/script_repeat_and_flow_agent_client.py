@@ -240,6 +240,13 @@ class ScriptRepeatAndFlowAgentClient(BaseAgentClient):
             if not improved_script:
                 improved_script = agent_response
 
+            # Defensive repair: the agent sometimes drops the "Chapter 1" heading
+            # but keeps Chapters 2+. Detect that and restore it from the source
+            # script so the downstream rendering shows all chapters.
+            improved_script = self._restore_missing_chapter_one(
+                improved_script, script_content
+            )
+
             return {
                 "success": True,
                 "improved_script": improved_script,
@@ -254,6 +261,64 @@ class ScriptRepeatAndFlowAgentClient(BaseAgentClient):
                 "error": f"Exception during script flow analysis: {str(e)}",
                 "raw_response": None,
             }
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _restore_missing_chapter_one(
+        improved_script: str, original_script: str
+    ) -> str:
+        """If the agent dropped the 'Chapter 1' heading, put it back.
+
+        Some agent responses begin with Chapter 1's body (VISUAL CUE / Host)
+        and then jump straight to a 'Chapter 2 - …' heading, with no
+        'Chapter 1 - …' line at the top. We detect that case and prepend the
+        Chapter 1 heading taken from the original script (or a generic
+        fallback) so the rendered output shows the full chapter list.
+        """
+        import re
+
+        if not improved_script:
+            return improved_script
+
+        # Locate the first chapter heading in the improved script. We accept
+        # variants like "Chapter 1 - Title", "Chapter 1: Title",
+        # "## Chapter 1: Title (1:23)", etc. The capture group anchors on the
+        # word "Chapter" itself so positions point at real content (not the
+        # leading whitespace consumed by \s*).
+        chapter_re = re.compile(
+            r"(?:^|\n)[ \t]*(?:#+[ \t]*)?\*{0,2}(Chapter\s+(\d+)\b[^\n]*)",
+            re.IGNORECASE,
+        )
+        first_match = chapter_re.search(improved_script)
+        if not first_match:
+            # No chapter headings at all → leave as-is (different format).
+            return improved_script
+
+        first_num = int(first_match.group(2))
+        if first_num <= 1:
+            return improved_script
+
+        # First heading is Chapter 2+ : Chapter 1 heading was dropped.
+        # Try to pull the original Chapter 1 heading from the source script.
+        original_match = chapter_re.search(original_script or "")
+        if original_match and int(original_match.group(2)) == 1:
+            ch1_heading = original_match.group(1).strip()
+        else:
+            ch1_heading = "Chapter 1 - Introduction"
+
+        # Insert the missing heading immediately before the first existing
+        # chapter heading (Chapter 2). Anything above that — opening hook
+        # options, visual cues, intro Host blocks — is Chapter 1's body, so
+        # placing the heading right above Chapter 2 keeps the chapter list
+        # complete and ordered without disrupting prepended sections.
+        # Use start(1) so we insert exactly at the "Chapter" word, not at the
+        # leading newline/whitespace.
+        insert_at = first_match.start(1)
+        prefix = improved_script[:insert_at].rstrip()
+        suffix = improved_script[insert_at:]
+        return f"{prefix}\n\n{ch1_heading}\n\n{suffix}"
 
 
 # For backwards compatibility and ease of import
