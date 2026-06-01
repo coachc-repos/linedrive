@@ -595,8 +595,86 @@ def extract_heygen_host_script(script_content: str) -> str:
     # Join all paragraphs with double newlines for readability
     heygen_script = "\n\n".join(host_paragraphs)
 
+    # Final scrub: regardless of how we got here, strip every non-spoken
+    # artifact (title, chapter headings, hook/summary markers, separators,
+    # stage directions, metadata) so the HeyGen text is dialogue ONLY.
+    heygen_script = scrub_heygen_text(heygen_script)
+
     print(f"✅ Extracted {len(host_paragraphs)} host paragraphs for HeyGen")
     return heygen_script
+
+
+def scrub_heygen_text(text: str) -> str:
+    """Aggressively remove non-spoken artifacts from a HeyGen-bound script.
+
+    Guarantees the returned string contains ONLY spoken dialogue paragraphs —
+    no titles, no chapter headings, no FINAL HOOK / SUMMARY markers, no
+    visual cues, no metadata, no separators. Safe to call on already-clean
+    text (it becomes a no-op for plain prose).
+    """
+    if not text:
+        return ""
+
+    skip_line_patterns = [
+        # Section headers / dividers
+        r'^\s*#{1,6}\s',
+        r'^\s*={3,}\s*$',
+        r'^\s*-{3,}\s*$',
+        r'^\s*_{3,}\s*$',
+        r'^\s*\*{3,}\s*$',
+        # Script metadata (accept both ":" and " -" separators)
+        r'^\s*(?:Title|Script\s*Type|Duration|Audience|Tone|Generated|'
+        r'Template\s*ID|Voice\s*ID)\s*[:\-]',
+        # "Direct Video - <title>" header line
+        r'^\s*Direct\s+Video\s*[-:–]',
+        # Chapter headings (Heading:, Chapter N - …, **Chapter N…**)
+        r'^\s*(?:\*{0,2}\s*)?Heading\s*:',
+        r'^\s*(?:#{1,6}\s*)?(?:\*{0,2}\s*)?Chapter\s+\d+\s*[-:–]',
+        r'^\s*\*{2}\s*Chapter\s+\d+.*\*{2}\s*$',
+        # Hook / Summary markers
+        r'^\s*\*{0,2}\s*(?:🎯\s*)?(?:FINAL\s+)?HOOK\s*[:\(]',
+        r'^\s*\*{0,2}\s*OPENING\s+HOOK',
+        r'^\s*\*{0,2}\s*HOOK\s+OPTION',
+        r'^\s*\*{0,2}\s*OPTION\s+\d+',
+        r'^\s*\*{0,2}\s*(?:📝\s*)?(?:CONCLUSION|SUMMARY)\s*[:\*]',
+        # Speaker / production labels
+        r'^\s*\*{0,2}\s*Host\s*:\s*\*{0,2}\s*$',
+        r'^\s*(?:🎬\s*)?(?:\*{0,2}\s*)?'
+        r'(?:Visual\s*Cue|B-?Roll|On[- ]Screen|Graphic|SFX|Music|Caption|'
+        r'Cut\s+to|Transition|Narrator|Voiceover|VO|Camera|Production\s*Note|'
+        r'Tool\s*Demo|Notes\s+for\s+Producer|Audio|Visual|Graphics|Fade\s+in|'
+        r'Fade\s+out)\s*[:\(]',
+        # Footer
+        r'^\s*Generated\s+by\s+LineDrive',
+    ]
+    compiled = [re.compile(p, re.IGNORECASE) for p in skip_line_patterns]
+
+    kept = []
+    for raw in text.split('\n'):
+        s = raw.strip()
+        if not s:
+            kept.append('')
+            continue
+        if any(rx.match(s) for rx in compiled):
+            continue
+        # Strip leading "Summary:" / "Host:" labels but keep the rest.
+        s = re.sub(r'^\s*(?:Summary|Host)\s*:\s*', '', s, flags=re.IGNORECASE)
+        if not s:
+            continue
+        kept.append(s)
+
+    # Collapse runs of blank lines to single blank lines, trim ends.
+    out_lines = []
+    blank = False
+    for ln in kept:
+        if not ln:
+            if not blank and out_lines:
+                out_lines.append('')
+            blank = True
+        else:
+            out_lines.append(ln)
+            blank = False
+    return '\n'.join(out_lines).strip()
 
 
 def generate_heygen_curl_commands(
@@ -604,7 +682,8 @@ def generate_heygen_curl_commands(
     script_title: str,
     api_key: str = "sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC",
     template_id: str = "92c09f8e9a1c4f078f7ae53886b7ad80",
-    voice_id: str = ""
+    voice_id: str = "",
+    final_hook_text: str = ""
 ) -> str:
     """
     Generate HeyGen API curl commands from script content.
@@ -637,6 +716,37 @@ def generate_heygen_curl_commands(
         text = re.sub(r'\s{2,}', ' ', text)
         return text.strip()
 
+    def strip_stage_lines(text: str) -> str:
+        """Remove non-spoken lines (visual cues, b-roll, headings, metadata)
+        from a chapter body so HeyGen only gets the actual dialogue."""
+        out_lines = []
+        for ln in text.split('\n'):
+            s = ln.strip()
+            if not s:
+                out_lines.append('')
+                continue
+            # Stage direction / production label lines.
+            if re.match(
+                r'^(?:🎬\s*)?(?:\*{0,2}\s*)?'
+                r'(?:Visual\s*Cue|B-?Roll|On[- ]Screen|Graphic|SFX|Music|'
+                r'Caption|Cut\s+to|Transition|Narrator|Voiceover|VO|Heading)'
+                r'\s*:',
+                s, re.IGNORECASE,
+            ):
+                continue
+            # Script-metadata bleed lines (Direct Video - ... / Script Type: /
+            # Duration: / Generated: / Audience: / Tone:).
+            if re.match(
+                r'^(?:Direct\s+Video\b|Script\s+Type\s*:|Duration\s*:|'
+                r'Generated\s*:|Audience\s*:|Tone\s*:|Title\s*:)',
+                s, re.IGNORECASE,
+            ):
+                continue
+            # Strip a leading "Summary:" label (keep the sentence after it).
+            s = re.sub(r'^\s*Summary\s*:\s*', '', s, flags=re.IGNORECASE)
+            out_lines.append(s)
+        return '\n'.join(out_lines).strip()
+
     # Find the HeyGen section
     heygen_match = re.search(
         r'# 🎬 HEYGEN READY SCRIPT\s*={70,}\s*(.+?)(?:\n\n#+\s|$)',
@@ -662,22 +772,38 @@ def generate_heygen_curl_commands(
     chapter_matches = list(re.finditer(
         chapter_pattern, heygen_content, re.DOTALL))
 
-    if chapter_matches:
-        # Use structured chapters if they exist
-        # First chapter (intro before first "Heading:")
-        intro_match = re.search(r'^(.+?)(?=\nHeading:)',
-                                heygen_content, re.DOTALL)
-        if intro_match:
-            intro_text = clean_text(intro_match.group(1))
-            chapters.append({
-                'title': shorten_title(script_title),
-                'content': intro_text
-            })
+    # FALLBACK: many manually-authored / processed scripts use bare
+    # `Chapter N - Title` or `Chapter N: Title` lines instead of `Heading:`.
+    # Detect those and treat each as a chapter boundary so we don't dump the
+    # entire script into a single Ch1 curl.
+    if not chapter_matches:
+        alt_pattern = (
+            r'^\s*(?:#{1,6}\s*)?(?:\*{0,2})\s*'
+            r'(Chapter\s+\d+\s*[-:–]\s*[^\n]+?)'
+            r'(?:\*{0,2})\s*\n+'
+            r'(.+?)'
+            r'(?=^\s*(?:#{1,6}\s*)?(?:\*{0,2})\s*Chapter\s+\d+\s*[-:–]'
+            r'|^\s*SUPPORTING\s+RESEARCH'
+            r'|^\s*={3,}\s*$'
+            r'|\Z)'
+        )
+        chapter_matches = list(re.finditer(
+            alt_pattern, heygen_content, re.DOTALL | re.MULTILINE))
 
-        # Add all other chapters
+    if chapter_matches:
+        # Use structured chapters if they exist.
+        # NOTE: We intentionally SKIP any text that appears before the first
+        # "Heading:" marker (the script intro / FINAL HOOK block). The hook
+        # already gets its own dedicated `{title}-hook` / `-hook-2` curls via
+        # the `final_hook_text` parameter, and standing-intro text like the
+        # "Hi, I'm Roz's AI Digital Twin…" preamble shouldn't be turned into
+        # a phantom Chapter-0 curl. This keeps N "Heading:" lines → N chapter
+        # entries (so 6 chapters yields 6, not 7).
+
+        # Add all chapters as found in the script
         for match in chapter_matches:
             chapter_title = match.group(1).strip()
-            chapter_content = clean_text(match.group(2))
+            chapter_content = clean_text(strip_stage_lines(match.group(2)))
 
             chapters.append({
                 'title': shorten_title(chapter_title),
@@ -754,7 +880,7 @@ def generate_heygen_curl_commands(
     curl_commands.append("\n# 🚀 HEYGEN API CURL COMMANDS")
     curl_commands.append("=" * 80)
     curl_commands.append(
-        f"# Generated: {len(chapters)} chapters (2 per chapter + 1 duplicate of Ch1p1)")
+        f"# Generated: {len(chapters)} chapters (2 per chapter; +2 hook curls if FINAL HOOK present)")
     curl_commands.append(f"# Script: {script_title}")
     curl_commands.append("=" * 80)
     curl_commands.append("")
@@ -763,9 +889,14 @@ def generate_heygen_curl_commands(
     def shorten_title(full_title):
         """Extract key words from title, removing common filler words."""
         import re
+        # Strip script-structure label prefixes that occasionally leak in
+        # when title extraction falls back to a non-title line.
+        title = re.sub(
+            r'^(?:VISUAL\s*CUE|HEADING|VISUAL|B-?ROLL|HOOK|SUMMARY|HOST)\s*[:\-]\s*',
+            '', full_title, flags=re.IGNORECASE)
         # Remove common prefixes like "Direct Video -", "Video -", etc.
         title = re.sub(r'^(Direct\s+Video\s*-\s*|Video\s*-\s*)',
-                       '', full_title, flags=re.IGNORECASE)
+                       '', title, flags=re.IGNORECASE)
         # Find content before the chapter marker (Ch1p1, Part1, etc.)
         match = re.match(r'^(.+?)(?:-Ch\d+p\d+|-Part\d+)?$', title)
         if match:
@@ -786,54 +917,75 @@ def generate_heygen_curl_commands(
             title = truncated or title[:MAX_LEN].strip(' -')
         return title
 
+    # Shorten the script title once for all curl entries
+    short_title = shorten_title(script_title)
+
+    # Build the curl with json.dumps for bullet-proof JSON escaping,
+    # then shell-escape the resulting payload for bash single quotes.
+    def build_curl(title_text: str, content_text: str) -> str:
+        payload = {
+            "caption": False,
+            "title": title_text,
+            "variables": {
+                "script": {
+                    "name": "script",
+                    "type": "text",
+                    "properties": {
+                        "content": content_text,
+                    },
+                }
+            },
+        }
+        data_json = _json.dumps(payload, indent=2, ensure_ascii=False)
+        data_for_bash = shell_single_quote(data_json)
+        return (
+            "curl --request POST \\\n"
+            f"     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\\n"
+            "     --header 'accept: application/json' \\\n"
+            "     --header 'content-type: application/json' \\\n"
+            f"     --header 'x-api-key: {api_key}' \\\n"
+            f"     --data '{data_for_bash}'\n\n"
+        )
+
+    extra_curls = 0
+    # If a FINAL HOOK was selected, emit TWO curls for it (hook + hook-2).
+    # If the hook is long enough, split it in half at a sentence boundary;
+    # otherwise duplicate it so HeyGen always gets two hook variants.
+    if final_hook_text and final_hook_text.strip():
+        # Defensive: truncate at the first script-structure marker so we never
+        # bleed Heading:/Visual Cue:/Chapter lines into the hook curl.
+        _hook_raw = re.split(
+            r"\n\s*(?:\*{0,2}\s*)?(?:Heading|Visual\s*Cue|B-?Roll|Chapter)\s*[:\-]",
+            final_hook_text,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        hook_clean = clean_text(_hook_raw)
+        if hook_clean:
+            # Both hook curls get the FULL hook text — the user generates the
+            # HeyGen video for the hook twice (two takes), so each curl must
+            # contain the complete hook, not a split half.
+            curl_commands.append(build_curl(f"{short_title}-hook", hook_clean))
+            curl_commands.append(build_curl(
+                f"{short_title}-hook-2", hook_clean))
+            extra_curls += 2
+
     for i, chapter in enumerate(chapters, 1):
         # Split chapter content into two parts
         part1, part2 = split_content(chapter['content'])
-
-        # Shorten the script title for use in curl commands
-        short_title = shorten_title(script_title)
-
-        # Build the curl with json.dumps for bullet-proof JSON escaping,
-        # then shell-escape the resulting payload for bash single quotes.
-        def build_curl(title_text: str, content_text: str) -> str:
-            payload = {
-                "caption": False,
-                "title": title_text,
-                "variables": {
-                    "script": {
-                        "name": "script",
-                        "type": "text",
-                        "properties": {
-                            "content": content_text,
-                        },
-                    }
-                },
-            }
-            data_json = _json.dumps(payload, indent=2, ensure_ascii=False)
-            data_for_bash = shell_single_quote(data_json)
-            return (
-                "curl --request POST \\\n"
-                f"     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\\n"
-                "     --header 'accept: application/json' \\\n"
-                "     --header 'content-type: application/json' \\\n"
-                f"     --header 'x-api-key: {api_key}' \\\n"
-                f"     --data '{data_for_bash}'\n\n"
-            )
 
         # Generate Part 1 curl command
         title_part1 = f"{short_title}-Ch{i}p1"
         curl_commands.append(build_curl(title_part1, part1))
 
-        # Generate duplicate of ONLY the first chapter's Part 1 command
-        if i == 1:
-            curl_commands.append(build_curl(f"{short_title}-Ch{i}p1b", part1))
-
         # Generate Part 2 curl command
         curl_commands.append(build_curl(f"{short_title}-Ch{i}p2", part2))
 
     curl_commands.append("=" * 80)
+    total_curls = len(chapters) * 2 + extra_curls
+    hook_note = " + 2 FINAL HOOK curls (hook, hook-2)" if extra_curls else ""
     curl_commands.append(
-        f"# ✅ {len(chapters) * 2 + 1} curl commands ready (2 per chapter + Ch1p1b duplicate)")
+        f"# ✅ {total_curls} curl commands ready (2 per chapter{hook_note})")
     curl_commands.append(
         "# Copy and paste individual commands or save to .sh file")
     curl_commands.append("=" * 80)

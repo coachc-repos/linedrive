@@ -160,6 +160,115 @@ class ScriptReviewAgentClient(BaseAgentClient):
             thread_id=thread.id, message_content=query, timeout=timeout
         )
 
+    def shorten_to_target(
+        self,
+        script_content: str,
+        target_minutes: float,
+        wpm: int = 150,
+        timeout: int = 600,
+        target_words_override: int | None = None,
+        reduction_percent: int | None = None,
+        current_host_words: int | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Rewrite a script so the spoken (Host:) portion fits a target duration.
+
+        The agent must preserve the original markdown structure (Heading: lines,
+        VISUAL CUE blocks, Host: blocks) and only condense the Host: dialogue
+        until the total Host word count is within ~10% of the target.
+
+        Args:
+            script_content: The script content to shorten.
+            target_minutes: Desired final video length in minutes (e.g. 10).
+            wpm: Words-per-minute speaking rate to plan against (default 150).
+            timeout: Max time to wait for the agent response.
+            target_words_override: If set, overrides the duration-derived target.
+            reduction_percent: If set (e.g. 25), informs the agent of the desired
+                proportional cut (used in the prompt for context).
+            current_host_words: If set, used in the prompt instead of recomputing.
+
+        Returns:
+            { success: bool, response: <shortened script text>, ... }
+        """
+        if target_words_override is not None and target_words_override > 0:
+            target_words = int(target_words_override)
+        else:
+            target_words = int(round(target_minutes * wpm))
+        current_words = len(script_content.split())
+        cur_host = (
+            current_host_words
+            if current_host_words is not None
+            else "(not provided)"
+        )
+        pct_note = (
+            f"- Requested reduction: ~{reduction_percent}% of current Host: words"
+            if reduction_percent
+            else "- Reduction implied by target Host: word count below"
+        )
+
+        query = f"""
+You are condensing a video script so its narrated Host: portion fits a target
+duration. Return ONLY the rewritten script content — no preamble, no commentary,
+no markdown fences. Preserve the original structure exactly:
+- Keep every "Heading:" line and "VISUAL CUE:" block in place.
+- Keep every "Host:" speaker label.
+- Do NOT add new sections, new chapters, or new visual cues.
+- Do NOT remove chapters; keep the same chapter count and order.
+
+TARGET LENGTH:
+- Target video length: {target_minutes:.1f} minutes at {wpm} wpm
+- Target Host: word count: ~{target_words} words (total across all Host blocks)
+- Current Host: word count: {cur_host}
+- Current total word count (entire script): ~{current_words} words
+{pct_note}
+
+SMART CUTTING RULES (apply in order, stop when target is reached):
+1. Remove the OPENING TRANSITION paragraph at the start of chapters 2, 3, 4, 5,
+   and 6 — the lines that recap what was just covered before introducing the
+   new chapter's topic. Chapter 1 keeps its opening. Each chapter after #1
+   should jump straight into its new content with no "Now that we've covered…"
+   bridge.
+2. Cut REPEATED EXAMPLES of the same concept. If a point is illustrated with
+   two or three examples that make the same case, keep the strongest ONE and
+   delete the others.
+3. Cut REPEATED DEFINITIONS and 101-level framing. Our YouTube channel has
+   progressed beyond explaining "AI is a pattern-matching engine" or basic
+   what-is-AI definitions — assume the viewer already knows this and remove
+   any restatement of those fundamentals.
+4. Cut VAGUE / HIGH-LEVEL claims that don't move the argument forward. Keep
+   specific, named, numeric, or actionable statements; drop the generic
+   "AI is transforming everything" filler.
+5. Collapse DUPLICATE LISTS. Keep at most ONE detailed enumerated list per
+   chapter (e.g. one full "steps to do X" list). Any later list in the same
+   script that covers similar ground should be reduced to a one-line summary
+   of considerations rather than a full enumeration. Always preserve at least
+   one detailed actionable list overall so the viewer still gets something to
+   do or remember.
+6. Cut FILLER and TRANSITIONAL HEDGES inside Host: blocks ("As I mentioned",
+   "Like we said before", "Basically", "Essentially", "At the end of the day").
+7. Only after rules 1–6 are exhausted, lightly tighten remaining Host: prose
+   for concision without removing meaning.
+
+DO NOT:
+- Summarize a chapter into a paragraph. Keep the chapter shape.
+- Remove the hook, the call-to-action, or the final wrap.
+- Touch VISUAL CUE, B-Roll, or any production direction lines.
+- Strip quotes or statistics that anchor a specific claim — those stay.
+
+The final total Host: word count must land within ±10% of {target_words}.
+
+SCRIPT CONTENT TO SHORTEN:
+{script_content}
+"""
+
+        thread = self.create_thread()
+        if not thread:
+            return {"success": False, "error": "Failed to create shorten thread"}
+
+        return self.send_message(
+            thread_id=thread.id, message_content=query, timeout=timeout
+        )
+
     def quick_feedback(
         self,
         script_content: str,

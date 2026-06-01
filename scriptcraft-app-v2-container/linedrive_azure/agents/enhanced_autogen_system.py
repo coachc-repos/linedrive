@@ -10,8 +10,10 @@ Script Review agents alongside existing tournament and AI tips agents.
 import asyncio
 import logging
 import os
+import re
 import sys
 import time
+import concurrent.futures
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Sequence, Union
@@ -866,6 +868,7 @@ class EnhancedAutoGenSystem:
         tone: str = "conversational and educational",
         script_length: str = "5-8 minutes (800-1200 words)",
         max_chapters: int = 8,
+        hook_summary: bool = True,
     ) -> Dict[str, Any]:
         """
         Complete 4-Agent Sequential Workflow with Chapter-by-Chapter Script Writing
@@ -1096,22 +1099,36 @@ secondary. Ensure every chapter serves the goals outlined in the description.
                 f"⏱️ Target: {minutes_per_chapter}+ minutes per chapter ({words_per_chapter}+ words)"
             )
 
-            # STEP 2: Script Writer - Chapter by Chapter
+            # STEP 2: Script Writer - Chapter by Chapter (PARALLEL)
             print(
                 f"\n✍️ STEP 2: Chapter-by-Chapter Script Writing [{get_timestamp()}]")
             print("-" * 60)
 
-            for i, chapter_topic in enumerate(chapters, 1):
-                chapter_start = get_timestamp()
+            def _write_one_chapter(i: int, chapter_topic: str) -> Dict[str, Any]:
+                """Write a single chapter. Runs in a worker thread.
+
+                Returns dict: {index, chapter_topic, success, response|error, elapsed}
+                Each call uses its OWN agent thread so chapters are fully
+                independent and safe to run concurrently.
+                """
+                _start = time.time()
+                _ts = get_timestamp()
                 print(
-                    f"\n📝 Writing Chapter {i}/{len(chapters)}: {chapter_topic} [{chapter_start}]"
+                    f"\n📝 [parallel] Start Chapter {i}/{len(chapters)}: {chapter_topic} [{_ts}]"
                 )
 
-                # Create a new thread for each chapter
-                script_thread = (
-                    self.script_writer_client.project.agents.threads.create()
-                )
-                script_thread_id = script_thread.id
+                try:
+                    script_thread = (
+                        self.script_writer_client.project.agents.threads.create()
+                    )
+                    script_thread_id = script_thread.id
+                except Exception as _e:
+                    return {
+                        "index": i, "chapter_topic": chapter_topic,
+                        "success": False,
+                        "error": f"thread create failed: {_e}",
+                        "elapsed": time.time() - _start,
+                    }
 
                 script_request = f"""
 CHAPTER SCRIPT WRITING REQUEST:
@@ -1171,26 +1188,115 @@ REMINDER: The USER'S DESCRIPTION is your guide for level of detail,
 specific points to cover, and overall approach. Honor their intent.
 """
 
-                script_result = self.script_writer_client.send_message(
-                    thread_id=script_thread_id,
-                    message_content=script_request,
-                    show_sources=False,
-                    timeout=300,
-                )
-
-                chapter_end = get_timestamp()
-                if script_result["success"]:
-                    chapter_script = script_result["response"]
-                    all_chapter_scripts.append(chapter_script)
-                    print(
-                        f"   ✅ Chapter {i}/{len(chapters)} completed "
-                        f"({len(chapter_script)} chars) [{chapter_end}]"
+                try:
+                    script_result = self.script_writer_client.send_message(
+                        thread_id=script_thread_id,
+                        message_content=script_request,
+                        show_sources=False,
+                        timeout=300,
                     )
-                else:
+                except Exception as _e:
+                    return {
+                        "index": i, "chapter_topic": chapter_topic,
+                        "success": False, "error": f"send_message raised: {_e}",
+                        "elapsed": time.time() - _start,
+                    }
+
+                _elapsed = time.time() - _start
+                if script_result.get("success"):
+                    _resp = script_result.get("response", "") or ""
+                    # Detect Azure content-filter refusal text. The Responses API
+                    # sometimes emits partial chapter text followed by a refusal
+                    # apology block. If we leave that in, downstream agents (e.g.
+                    # Hook & Summary) see the refusal in their input and refuse the
+                    # whole job. Strip the refusal tail; if what's left is too
+                    # short to be a real chapter, surface as failure.
+                    _refusal_re = re.compile(
+                        r"(?:^|\n)\s*I[\u2019']?m sorry,?\s+but I cannot assist with that request\.?\s*$",
+                        flags=re.IGNORECASE,
+                    )
+                    if _refusal_re.search(_resp):
+                        _cleaned = _refusal_re.sub("", _resp).rstrip()
+                        _orig_len = len(_resp)
+                        _new_len = len(_cleaned)
+                        # If the chapter is now suspiciously short (<400 chars OR
+                        # we lost more than 25% of the body), treat as a failed
+                        # write so the workflow bails instead of producing a
+                        # broken script that later poisons the hook agent.
+                        if _new_len < 400 or _new_len < _orig_len * 0.5:
+                            print(
+                                f"   ⚠️ [parallel] Chapter {i}/{len(chapters)} hit content-filter refusal "
+                                f"({_orig_len}→{_new_len} chars). Marking as failed."
+                            )
+                            return {
+                                "index": i, "chapter_topic": chapter_topic,
+                                "success": False,
+                                "error": (
+                                    "Chapter writer hit Azure content-filter refusal "
+                                    "('I'm sorry, but I cannot assist with that request.'). "
+                                    "Re-run script creation; if it keeps happening, soften "
+                                    "the chapter topic or audience prompt."
+                                ),
+                                "elapsed": _elapsed,
+                            }
+                        # Otherwise just trim the trailing apology and keep the chapter.
+                        print(
+                            f"   ✂️ [parallel] Chapter {i}/{len(chapters)}: trimmed trailing "
+                            f"refusal apology ({_orig_len}→{_new_len} chars)"
+                        )
+                        _resp = _cleaned
+                    print(
+                        f"   ✅ [parallel] Chapter {i}/{len(chapters)} done "
+                        f"({len(_resp)} chars) in {_elapsed:.1f}s"
+                    )
+                    return {
+                        "index": i, "chapter_topic": chapter_topic,
+                        "success": True, "response": _resp, "elapsed": _elapsed,
+                    }
+                return {
+                    "index": i, "chapter_topic": chapter_topic,
+                    "success": False,
+                    "error": script_result.get("error", "unknown"),
+                    "elapsed": _elapsed,
+                }
+
+            # Run all chapter writes in parallel. Cap concurrency to avoid
+            # hammering the agent endpoint; for typical 3-8 chapter videos
+            # max_workers=8 means all chapters run truly concurrently.
+            _parallel_start = time.time()
+            max_workers = min(len(chapters), 8)
+            print(
+                f"🚀 Launching {len(chapters)} chapter writes in parallel "
+                f"(max_workers={max_workers})..."
+            )
+            chapter_results: List[Dict[str, Any]] = [None] * len(chapters)  # type: ignore
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers, thread_name_prefix="chapter-writer"
+            ) as ex:
+                future_to_idx = {
+                    ex.submit(_write_one_chapter, i, chapter_topic): i - 1
+                    for i, chapter_topic in enumerate(chapters, 1)
+                }
+                for fut in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[fut]
+                    chapter_results[idx] = fut.result()
+
+            _parallel_elapsed = time.time() - _parallel_start
+            print(
+                f"🏁 Parallel chapter writing finished in {_parallel_elapsed:.1f}s "
+                f"(would have been ~{sum(r['elapsed'] for r in chapter_results):.1f}s sequential)"
+            )
+
+            # Bail out on first failure (in chapter order) — same behavior as old loop
+            for r in chapter_results:
+                if not r["success"]:
                     return {
                         "success": False,
-                        "error": f"Script Writer failed on Chapter {i}: {script_result.get('error')}",
+                        "error": f"Script Writer failed on Chapter {r['index']}: {r.get('error')}",
                     }
+
+            # Preserve chapter order
+            all_chapter_scripts = [r["response"] for r in chapter_results]
 
             # Combine all chapters into full script
             combined_script = f"""
@@ -1222,25 +1328,39 @@ specific points to cover, and overall approach. Honor their intent.
             try:
                 # Skip whole-document review (always times out)
                 # Go straight to chapter-by-chapter revision
-                print("🔄 Starting chapter-by-chapter revision...")
+                print("🔄 Starting chapter-by-chapter revision (parallel)...")
 
-                # Review and revise each chapter individually
-                revised_chapters = []
-                revision_feedback = []
                 # Track original vs revised for comparison report
-                chapter_comparisons = []
+                chapter_comparisons: List[Dict[str, Any]] = []
+                revision_feedback: List[Dict[str, Any]] = []
 
-                for i, chapter_script in enumerate(all_chapter_scripts, 1):
-                    chapter_start = get_timestamp()
-                    print(
-                        f"   🔍 Reviewing Chapter {i}/{len(chapters)} [{chapter_start}]"
-                    )
+                def _review_one_chapter(i: int, chapter_script: str) -> Dict[str, Any]:
+                    """Review and revise a single chapter. Runs in a worker thread.
 
-                    # Create a NEW thread for each chapter to avoid "active run" conflicts
-                    chapter_thread = self.script_review_client.project.agents.threads.create()
-                    chapter_thread_id = chapter_thread.id
+                    Each chapter gets its OWN agent thread (no cross-chapter
+                    state) so the review can be safely parallelized. The
+                    review prompt is purely a function of (i, len(chapters),
+                    chapter_script, audience, tone) — there is no dependency
+                    on previously-revised chapters, so the resulting output
+                    is identical to the sequential loop.
+                    """
+                    _start = time.time()
+                    _ts = get_timestamp()
                     print(
-                        f"   📝 Created fresh thread for Chapter {i}: {chapter_thread_id}")
+                        f"   🔍 [parallel] Reviewing Chapter {i}/{len(chapters)} [{_ts}]")
+
+                    try:
+                        chapter_thread = (
+                            self.script_review_client.project.agents.threads.create()
+                        )
+                        chapter_thread_id = chapter_thread.id
+                    except Exception as _e:
+                        return {
+                            "index": i, "success": False,
+                            "original": chapter_script,
+                            "error": f"thread create failed: {_e}",
+                            "elapsed": time.time() - _start,
+                        }
 
                     chapter_review_request = f"""
 INDIVIDUAL CHAPTER REVISION REQUEST:
@@ -1287,117 +1407,147 @@ DO NOT INCLUDE:
 Just provide the clean, production-ready revised chapter content above.
 """
 
-                    chapter_retry_result = self.script_review_client.send_message(
-                        thread_id=chapter_thread_id,
-                        message_content=chapter_review_request,
-                        show_sources=False,
-                        timeout=300,  # 5 minutes per chapter with fresh thread
-                    )
+                    try:
+                        chapter_retry_result = self.script_review_client.send_message(
+                            thread_id=chapter_thread_id,
+                            message_content=chapter_review_request,
+                            show_sources=False,
+                            timeout=300,
+                        )
+                    except Exception as _e:
+                        return {
+                            "index": i, "success": False,
+                            "original": chapter_script,
+                            "error": f"send_message raised: {_e}",
+                            "elapsed": time.time() - _start,
+                        }
 
-                    chapter_end = get_timestamp()
-                    if chapter_retry_result["success"]:
-                        response = chapter_retry_result["response"]
+                    _elapsed = time.time() - _start
+                    if not chapter_retry_result.get("success"):
+                        return {
+                            "index": i, "success": False,
+                            "original": chapter_script,
+                            "error": chapter_retry_result.get("error", "unknown"),
+                            "elapsed": _elapsed,
+                        }
 
-                        # Extract feedback/changes made if present
-                        feedback_section = ""
-                        if "=== REVIEW FEEDBACK ===" in response:
-                            # Extract feedback between the markers
-                            parts = response.split(
-                                "=== REVIEW FEEDBACK ===", 1)
-                            if len(parts) > 1:
-                                # Get everything from REVIEW FEEDBACK to REVISED SCRIPT
-                                feedback_part = parts[1]
-                                if "=== REVISED SCRIPT ===" in feedback_part:
-                                    feedback_section = feedback_part.split(
-                                        "=== REVISED SCRIPT ===")[0].strip()
-                                else:
-                                    feedback_section = feedback_part.strip()
+                    response = chapter_retry_result["response"]
 
-                        # Extract only the revised chapter (ignore feedback)
-                        if "=== REVISED SCRIPT ===" in response:
-                            # Take everything after the marker
-                            revised_chapter = response.split(
-                                "=== REVISED SCRIPT ===", 1)[1].strip()
-                        elif "REVISED CHAPTER:" in response:
-                            # Fallback for old format
-                            revised_chapter = response.split(
-                                "REVISED CHAPTER:", 1)[1].strip()
-                        else:
-                            # Last resort: use entire response
-                            revised_chapter = response
+                    # Extract feedback/changes made if present
+                    feedback_section = ""
+                    if "=== REVIEW FEEDBACK ===" in response:
+                        parts = response.split("=== REVIEW FEEDBACK ===", 1)
+                        if len(parts) > 1:
+                            feedback_part = parts[1]
+                            if "=== REVISED SCRIPT ===" in feedback_part:
+                                feedback_section = feedback_part.split(
+                                    "=== REVISED SCRIPT ===")[0].strip()
+                            else:
+                                feedback_section = feedback_part.strip()
 
-                        # CRITICAL: Remove any === formatted sections or feedback that leaked through
-                        if "===" in revised_chapter:
-                            lines = revised_chapter.split('\n')
-                            clean_lines = []
-                            skip_mode = False
+                    # Extract only the revised chapter (ignore feedback)
+                    if "=== REVISED SCRIPT ===" in response:
+                        revised_chapter = response.split(
+                            "=== REVISED SCRIPT ===", 1)[1].strip()
+                    elif "REVISED CHAPTER:" in response:
+                        revised_chapter = response.split(
+                            "REVISED CHAPTER:", 1)[1].strip()
+                    else:
+                        revised_chapter = response
 
-                            for line in lines:
-                                # Start skipping when we hit === markers or feedback headers
-                                if '===' in line or 'REVIEW FEEDBACK' in line:
-                                    skip_mode = True
-                                    continue
+                    # CRITICAL: Remove any === formatted sections or feedback that leaked through
+                    if "===" in revised_chapter:
+                        lines = revised_chapter.split('\n')
+                        clean_lines = []
+                        skip_mode = False
+                        for line in lines:
+                            if '===' in line or 'REVIEW FEEDBACK' in line:
+                                skip_mode = True
+                                continue
+                            if skip_mode or any(keyword in line.upper() for keyword in [
+                                'FEEDBACK', 'IMPROVEMENTS',
+                                'CHANGES MADE', 'ASSESSMENT', 'ANALYSIS',
+                                'AUDIENCE APPROPRIATENESS', 'TONE & STYLE',
+                                'STRUCTURE & FLOW', 'CONTENT QUALITY'
+                            ]):
+                                skip_mode = True
+                                continue
+                            if skip_mode and (line.startswith('## Chapter') or
+                                              line.startswith('[Visual Cue:') or
+                                              line.startswith('**Host:**')):
+                                skip_mode = False
+                            if not skip_mode:
+                                clean_lines.append(line)
+                        revised_chapter = '\n'.join(clean_lines).strip()
 
-                                # Check if line is a feedback section header
-                                if skip_mode or any(keyword in line.upper() for keyword in [
-                                    'FEEDBACK', 'IMPROVEMENTS',
-                                    'CHANGES MADE', 'ASSESSMENT', 'ANALYSIS',
-                                    'AUDIENCE APPROPRIATENESS', 'TONE & STYLE',
-                                    'STRUCTURE & FLOW', 'CONTENT QUALITY'
-                                ]):
-                                    skip_mode = True
-                                    continue
+                    print(
+                        f"   ✅ [parallel] Chapter {i} revised "
+                        f"({len(revised_chapter)} chars) in {_elapsed:.1f}s")
+                    return {
+                        "index": i, "success": True,
+                        "original": chapter_script,
+                        "revised": revised_chapter,
+                        "feedback": feedback_section,
+                        "elapsed": _elapsed,
+                    }
 
-                                # If we hit actual chapter content, stop skipping
-                                if skip_mode and (line.startswith('## Chapter') or
-                                                  line.startswith('[Visual Cue:') or
-                                                  line.startswith('**Host:**')):
-                                    skip_mode = False
+                # Run all chapter reviews in parallel (each has its own
+                # agent thread → fully independent). Cap concurrency at 8
+                # to match the writer pool and avoid hammering the endpoint.
+                _parallel_start = time.time()
+                _max_workers = min(len(all_chapter_scripts), 8)
+                print(
+                    f"🚀 Launching {len(all_chapter_scripts)} chapter reviews in parallel "
+                    f"(max_workers={_max_workers})..."
+                )
+                review_results: List[Dict[str, Any]] = [None] * len(all_chapter_scripts)  # type: ignore
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=_max_workers, thread_name_prefix="chapter-reviewer"
+                ) as ex:
+                    future_to_idx = {
+                        ex.submit(_review_one_chapter, i, chap): i - 1
+                        for i, chap in enumerate(all_chapter_scripts, 1)
+                    }
+                    for fut in concurrent.futures.as_completed(future_to_idx):
+                        idx = future_to_idx[fut]
+                        review_results[idx] = fut.result()
 
-                                if not skip_mode:
-                                    clean_lines.append(line)
+                _parallel_elapsed = time.time() - _parallel_start
+                print(
+                    f"🏁 Parallel chapter review finished in {_parallel_elapsed:.1f}s "
+                    f"(would have been ~{sum(r['elapsed'] for r in review_results):.1f}s sequential)"
+                )
 
-                            revised_chapter = '\n'.join(clean_lines).strip()
-
-                        revised_chapters.append(revised_chapter)
-
-                        # Track original vs revised for comparison report
+                # Assemble revised chapters in original order. On per-chapter
+                # failure, fall back to the original (same behavior as the
+                # old sequential loop).
+                revised_chapters: List[str] = []
+                for r in review_results:
+                    i = r["index"]
+                    if r["success"]:
+                        revised_chapters.append(r["revised"])
                         chapter_comparisons.append({
                             'chapter_num': i,
-                            'original': chapter_script,
-                            'revised': revised_chapter,
-                            'feedback': feedback_section if feedback_section else "No feedback provided"
+                            'original': r["original"],
+                            'revised': r["revised"],
+                            'feedback': r["feedback"] or "No feedback provided"
                         })
-
-                        # Store feedback for text file summary
-                        if feedback_section:
+                        if r["feedback"]:
                             revision_feedback.append({
                                 'chapter': i,
-                                'feedback': feedback_section,
-                                'length': len(feedback_section)
+                                'feedback': r["feedback"],
+                                'length': len(r["feedback"]),
                             })
-
-                        print(
-                            f"   ✅ Chapter {i} revised ({len(revised_chapter)} chars) [{chapter_end}]"
-                        )
-
-                        # Brief pause to let Azure clean up resources
-                        if i < len(chapters):
-                            time.sleep(1)
                     else:
                         print(
-                            f"   ⚠️ Chapter {i} revision failed, using original")
-                        revised_chapters.append(chapter_script)
-                        fallback_msg = "Used original version (revision failed)"
+                            f"   ⚠️ Chapter {i} revision failed ({r.get('error')}), using original")
+                        revised_chapters.append(r["original"])
+                        fallback_msg = f"Used original version (revision failed: {r.get('error')})"
                         revision_feedback.append({
                             'chapter': i,
                             'feedback': fallback_msg,
-                            'length': len(fallback_msg)
+                            'length': len(fallback_msg),
                         })
-
-                        # Brief pause even on failure
-                        if i < len(chapters):
-                            time.sleep(1)
 
                 # Assemble all revised chapters into complete script
                 print(
@@ -1485,95 +1635,99 @@ Just provide the clean, production-ready revised chapter content above.
                 print("✅ Continuing workflow without quotes/stats section")
 
             # STEP 4: Hook-and-Summary Generation (runs regardless of review status)
-            print("🔍 DEBUG: Reached Hook-and-Summary section!")
-            print(
-                f"🔍 DEBUG: complete_revised_script_content length: {len(complete_revised_script_content)}")
-            hook_summary_start = get_timestamp()
-            print(
-                f"\n🎯 STEP 4: Hook & Summary Generation [{hook_summary_start}]")
-            print("-" * 50)
-
             hook_text = ""
             summary_text = ""
             thumbnail_hook_text = ""
             thumbnail_hook_text_options = []
+            hook_summary_result = {"success": False, "error": "hook_summary not requested"}
 
-            try:
-                print("🔍 DEBUG: About to call generate_hook_and_summary...")
-                hook_summary_result = self.hook_and_summary_client.generate_hook_and_summary(
-                    script_content=complete_revised_script_content,
-                    script_title=script_topic,
-                    target_audience=audience,
-                    tone=tone,
-                    video_length=script_length,
-                    timeout=120
-                )
+            if not hook_summary:
+                print("\n⏭️  STEP 4: Hook & Summary Generation SKIPPED (hook_summary checkbox not selected)")
+            else:
+                print("🔍 DEBUG: Reached Hook-and-Summary section!")
+                print(
+                    f"🔍 DEBUG: complete_revised_script_content length: {len(complete_revised_script_content)}")
+                hook_summary_start = get_timestamp()
+                print(
+                    f"\n🎯 STEP 4: Hook & Summary Generation [{hook_summary_start}]")
+                print("-" * 50)
 
-                hook_summary_end = get_timestamp()
-                if hook_summary_result["success"]:
-                    # Extract all 3 hooks (with backward compatibility)
-                    hook1_text = hook_summary_result.get(
-                        "hook1", hook_summary_result.get("hook", ""))
-                    hook2_text = hook_summary_result.get("hook2", "")
-                    hook3_text = hook_summary_result.get("hook3", "")
-                    summary_text = hook_summary_result.get("summary", "")
-                    flow_analysis = hook_summary_result.get(
-                        "flow_analysis", "")
-                    thumbnail_hook_text = (hook_summary_result.get("thumbnail_hook_text") or "").strip()
-                    thumbnail_hook_text_options = hook_summary_result.get("thumbnail_hook_text_options") or []
+                try:
+                    print("🔍 DEBUG: About to call generate_hook_and_summary...")
+                    hook_summary_result = self.hook_and_summary_client.generate_hook_and_summary(
+                        script_content=complete_revised_script_content,
+                        script_title=script_topic,
+                        target_audience=audience,
+                        tone=tone,
+                        video_length=script_length,
+                        timeout=120
+                    )
 
-                    # Log each hook generation
-                    if hook1_text:
-                        print(
-                            f"✅ Hook 1 generated ({len(hook1_text)} chars) [{hook_summary_end}]")
-                    if hook2_text:
-                        print(
-                            f"✅ Hook 2 generated ({len(hook2_text)} chars) [{hook_summary_end}]")
-                    if hook3_text:
-                        print(
-                            f"✅ Hook 3 generated ({len(hook3_text)} chars) [{hook_summary_end}]")
-                    if summary_text:
-                        print(
-                            f"✅ Summary generated ({len(summary_text)} chars) [{hook_summary_end}]")
-                    if thumbnail_hook_text:
-                        print(
-                            f"✅ Thumbnail hook text generated: '{thumbnail_hook_text}' [{hook_summary_end}]")
-                    if thumbnail_hook_text_options:
-                        print(
-                            f"✅ Thumbnail hook options generated: {thumbnail_hook_text_options} [{hook_summary_end}]")
-                    else:
-                        print("⚠️ Thumbnail hook text missing from Hook-and-Summary output")
+                    hook_summary_end = get_timestamp()
+                    if hook_summary_result["success"]:
+                        # Extract all 3 hooks (with backward compatibility)
+                        hook1_text = hook_summary_result.get(
+                            "hook1", hook_summary_result.get("hook", ""))
+                        hook2_text = hook_summary_result.get("hook2", "")
+                        hook3_text = hook_summary_result.get("hook3", "")
+                        summary_text = hook_summary_result.get("summary", "")
+                        flow_analysis = hook_summary_result.get(
+                            "flow_analysis", "")
+                        thumbnail_hook_text = (hook_summary_result.get("thumbnail_hook_text") or "").strip()
+                        thumbnail_hook_text_options = hook_summary_result.get("thumbnail_hook_text_options") or []
 
-                    # Display flow analysis if available
-                    if flow_analysis:
-                        print("\n📊 Flow Analysis Between Chapters:")
-                        print("-" * 50)
-                        print(flow_analysis)
-                        print("-" * 50)
-
-                    # Insert hooks at the beginning and summary at the end
-                    if hook1_text:
-                        hook_section = "\n" + "=" * 80 + "\n"
-                        hook_section += "# 🎬 OPENING HOOK OPTIONS\n"
-                        hook_section += "=" * 80 + "\n\n"
-                        hook_section += "*Choose one of these three hooks for your video:*\n\n"
-                        hook_section += f"**OPTION 1:**\n\n{hook1_text}\n\n---\n\n"
+                        # Log each hook generation
+                        if hook1_text:
+                            print(
+                                f"✅ Hook 1 generated ({len(hook1_text)} chars) [{hook_summary_end}]")
                         if hook2_text:
-                            hook_section += f"**OPTION 2:**\n\n{hook2_text}\n\n---\n\n"
+                            print(
+                                f"✅ Hook 2 generated ({len(hook2_text)} chars) [{hook_summary_end}]")
                         if hook3_text:
-                            hook_section += f"**OPTION 3:**\n\n{hook3_text}\n\n---\n\n"
-                        complete_revised_script_content = hook_section + complete_revised_script_content
-                        hook_count = 1 + (1 if hook2_text else 0) + \
-                            (1 if hook3_text else 0)
-                        print(
-                            f"✅ {hook_count} hook option(s) prepended to script")
+                            print(
+                                f"✅ Hook 3 generated ({len(hook3_text)} chars) [{hook_summary_end}]")
+                        if summary_text:
+                            print(
+                                f"✅ Summary generated ({len(summary_text)} chars) [{hook_summary_end}]")
+                        if thumbnail_hook_text:
+                            print(
+                                f"✅ Thumbnail hook text generated: '{thumbnail_hook_text}' [{hook_summary_end}]")
+                        if thumbnail_hook_text_options:
+                            print(
+                                f"✅ Thumbnail hook options generated: {thumbnail_hook_text_options} [{hook_summary_end}]")
+                        else:
+                            print("⚠️ Thumbnail hook text missing from Hook-and-Summary output")
 
-                    # NOTE: Quotes & Statistics insertion moved OUTSIDE this
-                    # hook-success branch so it is appended even when Hook-and-Summary
-                    # fails. See block after the outer try/except.
+                        # Display flow analysis if available
+                        if flow_analysis:
+                            print("\n📊 Flow Analysis Between Chapters:")
+                            print("-" * 50)
+                            print(flow_analysis)
+                            print("-" * 50)
 
-                    if summary_text:
-                        summary_section = f"""
+                        # Insert hooks at the beginning and summary at the end
+                        if hook1_text:
+                            hook_section = "\n" + "=" * 80 + "\n"
+                            hook_section += "# 🎬 OPENING HOOK OPTIONS\n"
+                            hook_section += "=" * 80 + "\n\n"
+                            hook_section += "*Choose one of these three hooks for your video:*\n\n"
+                            hook_section += f"**OPTION 1:**\n\n{hook1_text}\n\n---\n\n"
+                            if hook2_text:
+                                hook_section += f"**OPTION 2:**\n\n{hook2_text}\n\n---\n\n"
+                            if hook3_text:
+                                hook_section += f"**OPTION 3:**\n\n{hook3_text}\n\n---\n\n"
+                            complete_revised_script_content = hook_section + complete_revised_script_content
+                            hook_count = 1 + (1 if hook2_text else 0) + \
+                                (1 if hook3_text else 0)
+                            print(
+                                f"✅ {hook_count} hook option(s) prepended to script")
+
+                        # NOTE: Quotes & Statistics insertion moved OUTSIDE this
+                        # hook-success branch so it is appended even when Hook-and-Summary
+                        # fails. See block after the outer try/except.
+
+                        if summary_text:
+                            summary_section = f"""
 
 ---
 
@@ -1581,16 +1735,16 @@ Just provide the clean, production-ready revised chapter content above.
 
 {summary_text}
 """
-                        complete_revised_script_content = complete_revised_script_content + summary_section
-                        print("✅ Summary appended to script")
-                else:
-                    print(
-                        f"⚠️ Hook-and-Summary generation failed: {hook_summary_result.get('error')}")
-                    print("⚠️ Continuing without hook and summary")
+                            complete_revised_script_content = complete_revised_script_content + summary_section
+                            print("✅ Summary appended to script")
+                    else:
+                        print(
+                            f"⚠️ Hook-and-Summary generation failed: {hook_summary_result.get('error')}")
+                        print("⚠️ Continuing without hook and summary")
 
-            except Exception as hook_error:
-                print(f"⚠️ Hook-and-Summary error: {hook_error}")
-                print("⚠️ Continuing without hook and summary")
+                except Exception as hook_error:
+                    print(f"⚠️ Hook-and-Summary error: {hook_error}")
+                    print("⚠️ Continuing without hook and summary")
 
             # Insert Quotes & Statistics section (if available) — runs regardless
             # of Hook-and-Summary success/failure so generated quotes are never lost.
