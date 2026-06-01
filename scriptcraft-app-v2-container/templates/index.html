@@ -1204,6 +1204,163 @@
             </div>
         </div>
 
+        <!-- ============================================================
+             Mobile-only Workflow Documentation
+             Visual reference of the Script Creation and Script Processing
+             pipelines. Documentation only — not interactive. Hidden on
+             screens > 768px so the desktop UI is unchanged.
+             ============================================================ -->
+        <style>
+            @media (min-width: 769px) {
+                #mobileWorkflowDocs { display: none !important; }
+            }
+            @media (max-width: 768px) {
+                #mobileWorkflowDocs {
+                    display: block;
+                    margin: 10px 0 14px 0;
+                    padding: 12px;
+                    background: #0b1220;
+                    border: 1px solid #1e293b;
+                    border-radius: 10px;
+                    color: #e2e8f0;
+                    font-size: 0.85em;
+                }
+                #mobileWorkflowDocs h4 {
+                    margin: 0 0 4px 0;
+                    font-size: 0.95em;
+                    color: #e2e8f0;
+                }
+                #mobileWorkflowDocs .mwd-sub {
+                    margin: 0 0 10px 0;
+                    color: #94a3b8;
+                    font-size: 0.78em;
+                }
+                #mobileWorkflowDocs .mwd-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                    padding: 10px 4px;
+                    overflow-x: auto;
+                    -webkit-overflow-scrolling: touch;
+                    background: #020617;
+                    border: 1px solid #1e293b;
+                    border-radius: 8px;
+                    pointer-events: auto; /* allow horizontal scroll */
+                }
+                #mobileWorkflowDocs .mwd-step {
+                    position: relative;
+                    flex: 0 0 auto;
+                    width: 64px;
+                    height: 64px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 1.6em;
+                    background: #0f172a;
+                    border: 2px solid #334155;
+                    color: #cbd5e1;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+                    user-select: none;
+                }
+                #mobileWorkflowDocs .mwd-step .mwd-num {
+                    position: absolute;
+                    top: -6px;
+                    right: -6px;
+                    background: #334155;
+                    color: #e2e8f0;
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 0.62rem;
+                    font-weight: 700;
+                    border: 2px solid #020617;
+                }
+                #mobileWorkflowDocs .mwd-step .mwd-label {
+                    position: absolute;
+                    bottom: -18px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    font-size: 0.62rem;
+                    color: #94a3b8;
+                    white-space: nowrap;
+                }
+                #mobileWorkflowDocs .mwd-arrow {
+                    flex: 0 0 auto;
+                    width: 14px;
+                    height: 3px;
+                    border-radius: 2px;
+                    background: linear-gradient(90deg, #334155, #475569);
+                    margin: 0 2px;
+                }
+                #mobileWorkflowDocs .mwd-pipeline + .mwd-pipeline { margin-top: 28px; }
+                #mobileWorkflowDocs .mwd-row { padding-bottom: 26px; } /* room for labels */
+                #mobileWorkflowDocs .mwd-badge {
+                    display: inline-block;
+                    margin-left: 6px;
+                    padding: 1px 6px;
+                    background: #1e293b;
+                    border: 1px solid #334155;
+                    border-radius: 4px;
+                    color: #94a3b8;
+                    font-size: 0.7em;
+                }
+            }
+        </style>
+        <div id="mobileWorkflowDocs" aria-label="Workflow documentation (mobile)">
+            <div class="mwd-pipeline">
+                <h4>🚀 Script Creation Pipeline <span class="mwd-badge">visual reference</span></h4>
+                <p class="mwd-sub">Stages run end-to-end when you tap <strong>Create Script</strong> on desktop.</p>
+                <div class="mwd-row" role="img" aria-label="Script creation pipeline steps">
+                    <div class="mwd-step">✍️<span class="mwd-num">1</span><span class="mwd-label">Script</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🎯<span class="mwd-num">2</span><span class="mwd-label">Hook</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">✂️<span class="mwd-num">3</span><span class="mwd-label">Shorten</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🔄<span class="mwd-num">4</span><span class="mwd-label">Flow</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🎥<span class="mwd-num">5</span><span class="mwd-label">B-Roll Tbl</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🎨<span class="mwd-num">6</span><span class="mwd-label">B-Roll Img</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🤖<span class="mwd-num">7</span><span class="mwd-label">Grok</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🎬<span class="mwd-num">8</span><span class="mwd-label">HeyGen</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">📺<span class="mwd-num">9</span><span class="mwd-label">YouTube</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🧪<span class="mwd-num">10</span><span class="mwd-label">Demo</span></div>
+                </div>
+            </div>
+            <div class="mwd-pipeline">
+                <h4>⚙️ Script Processing Pipeline <span class="mwd-badge">visual reference</span></h4>
+                <p class="mwd-sub">Run any stage independently after loading an existing script on desktop.</p>
+                <div class="mwd-row" role="img" aria-label="Script processing pipeline steps">
+                    <div class="mwd-step">📁<span class="mwd-num">1</span><span class="mwd-label">Load</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🔄<span class="mwd-num">2</span><span class="mwd-label">Flow</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">✂️<span class="mwd-num">3</span><span class="mwd-label">Shorten</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🎯<span class="mwd-num">4</span><span class="mwd-label">Hook</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🎥<span class="mwd-num">5</span><span class="mwd-label">B-Roll Tbl</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🎨<span class="mwd-num">6</span><span class="mwd-label">B-Roll Img</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🤖<span class="mwd-num">7</span><span class="mwd-label">Grok</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🎬<span class="mwd-num">8</span><span class="mwd-label">HeyGen</span></div>
+                    <div class="mwd-arrow"></div>
+                    <div class="mwd-step">🧪<span class="mwd-num">9</span><span class="mwd-label">Demo</span></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Current Output Directory display strip -->
         <div id="outputDirStrip" style="display:none; padding:6px 14px; margin:6px 0 4px 0; background:#0f172a; border:1px solid #334155; border-radius:6px; color:#94a3b8; font-size:0.78em;">
             <span style="color:#64748b;">📁 Output Dir:</span>
