@@ -484,11 +484,6 @@
                 display: none !important;
             }
 
-            /* Hide Test Generate and API Keys buttons on mobile. */
-            .hide-on-mobile {
-                display: none !important;
-            }
-
             /* HeyGen config row: keep inline flex; each divider acts as a
                full-width line break so each label+input keeps its buttons
                on the same row. Inputs shrink to share width. */
@@ -983,7 +978,6 @@
             flex-direction: column;
             cursor: pointer;
             transition: border-color 0.15s, transform 0.1s;
-            position: relative;
         }
         .vg-card:hover { border-color: #475569; }
         .vg-thumb {
@@ -1121,9 +1115,17 @@
         <div class="toolbar">
             <div class="toolbar-section">
                 <span class="toolbar-label">Actions</span>
-                <button class="toolbar-btn" id="primaryBtn" onclick="processWorkflow()" title="Generate selected outputs">
+                <button class="toolbar-btn" id="primaryBtn" onclick="openCreateScriptModal()" title="Open the Create Script dialog (title, description, tone, duration, audience, etc.)">
                     <span class="toolbar-icon">🚀</span>
-                    <span class="toolbar-text">Generate Script</span>
+                    <span class="toolbar-text">Create Script</span>
+                </button>
+                <button class="toolbar-btn" onclick="openScriptProcessingModal()" title="Open the Script Processing pipeline. Load an existing script first, then run any stage independently.">
+                    <span class="toolbar-icon">⚙️</span>
+                    <span class="toolbar-text">Process Script…</span>
+                </button>
+                <button class="toolbar-btn" onclick="openTestVideoDialog()" title="Quick HeyGen test render with a short clip">
+                    <span class="toolbar-icon">🧪</span>
+                    <span class="toolbar-text">Test Generate</span>
                 </button>
             </div>
             
@@ -1143,47 +1145,31 @@
                     <span class="toolbar-icon">📝</span>
                     <span class="toolbar-text">Markdown</span>
                 </button>
-                <button class="toolbar-btn" onclick="exportHeyGenCurls()" id="heygenBtn" style="display:none;" title="Export HeyGen Curls">
-                    <span class="toolbar-icon">🎬</span>
-                    <span class="toolbar-text">HeyGen</span>
-                </button>
-                <button class="toolbar-btn" onclick="openComparisonFile()" id="comparisonBtn" style="display:none;" title="View Chapter Comparison Report">
-                    <span class="toolbar-icon">📊</span>
-                    <span class="toolbar-text">Comparison</span>
-                </button>
-                <button class="toolbar-btn" onclick="saveResult()" id="saveBtn" style="display:none;" title="Save Result">
-                    <span class="toolbar-icon">💾</span>
-                    <span class="toolbar-text">Save</span>
-                </button>
+                <!-- Hidden shims preserve the IDs that other JS toggles via .style.display -->
+                <span id="heygenBtn" style="display:none;"></span>
+                <span id="comparisonBtn" style="display:none;"></span>
+                <span id="saveBtn" style="display:none;"></span>
             </div>
             
             <div class="toolbar-divider"></div>
             
             <div class="toolbar-section">
                 <span class="toolbar-label">Tools</span>
-                <button class="toolbar-btn" onclick="document.getElementById('fileInput').click()" title="Load script from .md, .txt, or .docx">
-                    <span class="toolbar-icon">📁</span>
-                    <span class="toolbar-text">Load Script</span>
-                </button>
                 <button class="toolbar-btn" onclick="testThumbnails()" id="testThumbBtn" title="Test Thumbnails">
                     <span class="toolbar-icon">🖼️</span>
                     <span class="toolbar-text">Thumbnails</span>
                 </button>
                 <button class="toolbar-btn" onclick="openGrokTestVideoDialog()" title="Test Grok Video API">
-                    <span class="toolbar-icon">🤖</span>
+                    <span class="toolbar-icon" style="display:inline-flex; align-items:center;"><img src="{{ url_for('static', filename='grok_icon.png') }}" alt="Grok" style="height:28px; width:auto; vertical-align:middle; display:inline-block;"></span>
                     <span class="toolbar-text">Grok Test</span>
                 </button>
                 <button class="toolbar-btn" onclick="openResolveInspector()" title="Inspect current DaVinci Resolve timeline">
                     <span class="toolbar-icon">🔍</span>
                     <span class="toolbar-text">Inspect Resolve</span>
                 </button>
-                <button class="toolbar-btn" onclick="openRenderAudioModal()" title="Render audio-only WAV from a DaVinci Resolve timeline">
-                    <span class="toolbar-icon">🎵</span>
-                    <span class="toolbar-text">Render Audio</span>
-                </button>
-                <button class="toolbar-btn" onclick="openTranscribeAudioModal()" title="Transcribe a local audio or video file using Whisper">
-                    <span class="toolbar-icon">🎙️</span>
-                    <span class="toolbar-text">Transcribe Audio</span>
+                <button class="toolbar-btn" onclick="openYouTubePipelineModal()" title="Render audio → transcribe → generate YouTube details → publish" style="background:#7f1d1d; border-color:#b91c1c; color:#fff;">
+                    <span class="toolbar-icon" style="display:inline-flex; align-items:center;"><img src="{{ url_for('static', filename='youtube_icon.png') }}" alt="YouTube" style="height:28px; width:auto; vertical-align:middle; display:inline-block;"></span>
+                    <span class="toolbar-text">Publish to YouTube</span>
                 </button>
                 <button class="toolbar-btn" onclick="openVideoGalleryModal()" title="Browse finished videos from iCloud/Desktop/Podcast/Videos/Final">
                     <span class="toolbar-icon">🎬</span>
@@ -1193,7 +1179,7 @@
                     <span class="toolbar-icon">🌬️</span>
                     <span class="toolbar-text">Swipe Test</span>
                 </button>
-                <button class="toolbar-btn hide-on-mobile" onclick="openApiKeysModal()" title="Manage API Keys">
+                <button class="toolbar-btn" onclick="openApiKeysModal()" title="Manage API Keys">
                     <span class="toolbar-icon">🔑</span>
                     <span class="toolbar-text">API Keys</span>
                 </button>
@@ -1306,16 +1292,40 @@
                     Loading project and timelines from DaVinci Resolve…
                 </div>
                 <div style="display:flex; flex-direction:column; gap:6px;">
+                    <label style="color:#cbd5e1; font-size:0.85em; font-weight:600;">Resolve project:</label>
+                    <div style="display:flex; gap:6px; align-items:center;">
+                        <select id="renderAudioProjectSelect"
+                            style="flex:1; background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:6px; padding:7px 10px; font-size:0.88em; outline:none;">
+                            <option value="">Loading projects…</option>
+                        </select>
+                        <button id="renderAudioOpenProjectBtn" onclick="openSelectedResolveProject()"
+                            style="padding:7px 12px; background:#1e293b; border:1px solid #334155; color:#cbd5e1; border-radius:6px; cursor:pointer; font-size:0.82em;">
+                            📂 Open
+                        </button>
+                    </div>
+                    <div style="color:#64748b; font-size:0.72em;">Only projects in the current Resolve project folder are listed.</div>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:6px;">
                     <label style="color:#cbd5e1; font-size:0.85em; font-weight:600;">Timeline to render:</label>
                     <div id="renderAudioTimelineList" style="display:flex; flex-direction:column; gap:4px; max-height:200px; overflow-y:auto; background:#020617; border:1px solid #1e293b; border-radius:6px; padding:8px;">
                         <div style="color:#64748b; font-size:0.82em;">Loading…</div>
                     </div>
                 </div>
                 <div style="display:flex; flex-direction:column; gap:4px;">
+                    <label style="color:#cbd5e1; font-size:0.85em; font-weight:600;">📁 Output Directory:</label>
+                    <div style="display:flex; gap:6px; align-items:center;">
+                        <input id="renderAudioOutputDir" type="text" placeholder="(defaults to main output dir)"
+                            style="flex:1; background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:6px; padding:7px 10px; font-size:0.85em; outline:none;"
+                            onchange="setSharedOutputDir(this.value)">
+                        <button type="button" onclick="pickRenderAudioOutputDir()"
+                            style="padding:7px 12px; background:#1e293b; border:1px solid #334155; color:#cbd5e1; border-radius:6px; cursor:pointer; font-size:0.82em;">📂 Browse…</button>
+                    </div>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:4px;">
                     <label style="color:#cbd5e1; font-size:0.85em; font-weight:600;">Output filename (no extension):</label>
                     <input id="renderAudioFilename" type="text" placeholder="e.g. my-script-title"
                         style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:6px; padding:7px 10px; font-size:0.9em; outline:none;">
-                    <div style="color:#64748b; font-size:0.75em;">Saved as <strong style="color:#94a3b8;">.wav</strong> in the current Output Directory</div>
+                    <div style="color:#64748b; font-size:0.75em;">Saved as <strong style="color:#94a3b8;">.wav</strong> in the Output Directory above. The same dir + base name is used for the transcript.</div>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center;">
                     <button id="renderAudioStartBtn" onclick="startAudioRender()"
@@ -1337,22 +1347,7 @@
                         <div id="renderAudioProgressBar" style="height:100%; width:0%; background:#0ea5e9; transition:width 0.4s;"></div>
                     </div>
                     <div id="renderAudioLog" style="background:#020617; border:1px solid #1e293b; border-radius:6px; padding:10px; color:#94a3b8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.78em; height:160px; overflow-y:auto; white-space:pre-wrap;"></div>
-                    <div id="renderAudioPostActions" style="display:none; gap:8px; align-items:center; flex-wrap:wrap;">
-                        <label style="color:#cbd5e1; font-size:0.8em;">Whisper model:</label>
-                        <select id="whisperModelSelect" style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; padding:4px 8px; font-size:0.82em;">
-                            <option value="tiny">tiny (fastest)</option>
-                            <option value="base">base</option>
-                            <option value="small">small</option>
-                            <option value="medium" selected>medium (balanced)</option>
-                            <option value="large">large (best)</option>
-                        </select>
-                        <button id="transcribeAudioBtn" onclick="transcribeRenderedAudio()"
-                            style="padding:8px 16px; background:linear-gradient(135deg,#a855f7,#7c3aed); border:none; color:#fff; border-radius:6px; cursor:pointer; font-size:0.88em; font-weight:600;">
-                            🎙️ Transcribe to Script
-                        </button>
-                        <span id="transcribeAudioStatus" style="color:#94a3b8; font-size:0.8em;"></span>
-                    </div>
-                    <pre id="transcribeAudioLog" style="display:none; max-height:240px; overflow:auto; margin-top:8px; padding:10px 12px; background:#0b1220; border:1px solid #1e293b; border-radius:6px; color:#cbd5e1; font-family:'SF Mono', Menlo, monospace; font-size:0.78em; white-space:pre-wrap; line-height:1.45;"></pre>
+                    <!-- Transcribe controls intentionally removed: transcription is now driven from the Publish to YouTube dialog. -->
                 </div>
             </div>
         </div>
@@ -1390,6 +1385,19 @@
                         <input id="transcribeAudioLang" type="text" placeholder="e.g. en (auto-detect if blank)"
                             style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; padding:5px 8px; font-size:0.85em; width:220px;">
                     </div>
+                </div>
+                <div id="transcribeAudioPipelineFields" style="display:flex; flex-direction:column; gap:6px; padding:8px 10px; background:#0b1220; border:1px solid #1e3a8a; border-radius:6px;">
+                    <label style="color:#93c5fd; font-size:0.8em; font-weight:600;">📁 Save transcript to:</label>
+                    <div style="display:flex; gap:6px; align-items:center;">
+                        <input id="transcribeAudioOutputDir" type="text" placeholder="/absolute/path/to/output/dir (leave blank for default)"
+                            style="flex:1; background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; padding:5px 8px; font-size:0.85em;">
+                        <button type="button" onclick="pickTranscribeOutputDir()"
+                            style="padding:5px 10px; background:#1e293b; border:1px solid #334155; color:#cbd5e1; border-radius:4px; cursor:pointer; font-size:0.8em;">📂 Browse…</button>
+                    </div>
+                    <label style="color:#93c5fd; font-size:0.8em; font-weight:600; margin-top:4px;">Filename (no extension):</label>
+                    <input id="transcribeAudioFilename" type="text" placeholder="e.g. my_episode"
+                        style="background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; padding:5px 8px; font-size:0.85em;">
+                    <div style="color:#64748b; font-size:0.72em;">Saved as <strong style="color:#94a3b8;">&lt;filename&gt;_transcript.md</strong> (+ .docx). When opened from the YouTube Publish pipeline, the script box is NOT modified.</div>
                 </div>
                 <div style="display:flex; gap:8px; align-items:center;">
                     <button id="transcribeAudioStartBtn" onclick="startTranscribeAudio()"
@@ -1480,6 +1488,29 @@
                     <input type="password" id="modalGrokApiKey" autocomplete="off" placeholder="xai-..." style="display:block; width:100%; padding:8px 10px; background:#1e293b; border:1px solid #334155; border-radius:4px; color:#e2e8f0; font-family:monospace; font-size:0.9em; box-sizing:border-box;">
                 </div>
 
+                <div style="margin:18px 0; padding:14px; background:#0b1220; border:1px solid #1e293b; border-radius:6px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;">
+                        <label style="font-size:0.9em; color:#e2e8f0; font-weight:700;">📺 YouTube Publishing (OAuth)</label>
+                        <span id="ytCredStatus" style="font-size:0.78em; color:#64748b;">checking…</span>
+                    </div>
+                    <p style="margin:0 0 8px 0; color:#64748b; font-size:0.78em; line-height:1.5;">
+                        Required to publish videos to YouTube. Create a <strong style="color:#94a3b8;">Desktop app OAuth client</strong>
+                        in Google Cloud Console (YouTube Data API v3 enabled) and upload the downloaded
+                        <code style="color:#60a5fa;">client_secret*.json</code>. Stored at
+                        <code style="color:#60a5fa;">~/.scriptcraft/youtube_client_secret.json</code>.
+                    </p>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <input type="file" id="ytClientSecretFile" accept=".json,application/json"
+                            style="flex:1; min-width:200px; color:#cbd5e1; font-size:0.8em;">
+                        <button type="button" onclick="uploadYouTubeClientSecret()"
+                            style="padding:7px 12px; background:#0ea5e9; color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.8em; font-weight:600;">⬆ Upload</button>
+                        <button type="button" onclick="clearYouTubeToken()"
+                            title="Delete the cached OAuth token (forces re-login next publish)"
+                            style="padding:7px 12px; background:#334155; color:#e2e8f0; border:none; border-radius:4px; cursor:pointer; font-size:0.8em; font-weight:600;">🗑 Clear cached token</button>
+                    </div>
+                    <div id="ytCredMsg" style="margin-top:8px; font-size:0.78em; color:#64748b; min-height:1.1em;"></div>
+                </div>
+
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
                     <label style="display:flex; align-items:center; gap:6px; color:#94a3b8; font-size:0.8em; cursor:pointer;">
                         <input type="checkbox" id="apiKeysShowToggle" onchange="toggleApiKeysVisible(this.checked)">
@@ -1558,187 +1589,144 @@
         </div>
         
         <div class="main-content">
-            <!-- Workflow Selection Checkboxes -->
-            <div class="form-group script-options-row" style="background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; margin-bottom: 10px; display: flex; align-items: center; gap: 10px;">
-                <span class="toolbar-label" style="flex: 0 0 auto;">Script Options</span>
-                <div class="script-options-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 4px; flex: 1 1 auto;">
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
-                        <input type="checkbox" id="checkScript" onclick="toggleScriptInput()" checked style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">📝 Script</span>
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
-                        <input type="checkbox" id="checkYouTubeDetails" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">📺 Publish to Youtube</span>
-                        <button type="button" onclick="event.preventDefault(); event.stopPropagation(); loadYouTubeDetailsFromFile();" title="Load existing YouTube details .docx/.md (skips the agent)" style="margin-left:6px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:0 6px; border-radius:3px; font-size:0.85em; cursor:pointer;">📂</button>
-                        <span id="ytLoadedBadge" style="display:none; margin-left:4px; color:#10b981; font-size:0.75em;" title="YouTube details pre-loaded">●</span>
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
-                        <input type="checkbox" id="checkHeyGenReady" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎬 Heygen Script and Curl Commands</span>
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
-                        <input type="checkbox" id="checkBRollTable" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎥 B-Roll Table and Shutterstock Links</span>
-                        <button type="button" onclick="event.preventDefault(); event.stopPropagation(); loadBrollTableFromFile();" title="Load existing B-Roll table .docx/.md (skips the agent)" style="margin-left:6px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; padding:0 6px; border-radius:3px; font-size:0.85em; cursor:pointer;">📂</button>
-                        <span id="brollLoadedBadge" style="display:none; margin-left:4px; color:#10b981; font-size:0.75em;" title="B-Roll table pre-loaded">●</span>
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
-                        <input type="checkbox" id="checkBRollImages" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎨 B-Roll Images</span>
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
-                        <input type="checkbox" id="checkGrokVideos" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🤖 Grok Videos from B-Roll Table</span>
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
-                        <input type="checkbox" id="checkHookSummary" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🎯 Hook & Summary</span>
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;" title="Condense Host: dialogue to match the requested video length">
-                        <input type="checkbox" id="checkShortenScript" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">✂️ Shorten Script</span>
-                        <select id="shortenPercent" title="Reduce Host: word count by this much" style="margin-left:6px; padding:2px 4px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:3px; font-size:0.85em;" onclick="event.stopPropagation();" onchange="event.stopPropagation();">
-                            <option value="10">−10%</option>
-                            <option value="20">−20%</option>
-                            <option value="25" selected>−25%</option>
-                            <option value="33">−33%</option>
-                            <option value="50">−50%</option>
-                            <option value="target">to video length</option>
-                        </select>
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
-                        <input type="checkbox" id="checkFlowAnalysis" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🔄 Script Flow Quality</span>
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
-                        <input type="checkbox" id="checkThumbnails" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🖼️ Thumbnails</span>
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; padding: 4px 6px !important; background: #1e293b; border-radius: 4px; border: 1px solid #334155; font-size: 0.8em !important;">
-                        <input type="checkbox" id="checkDemoScript" style="width: auto; margin-right: 4px;">
-                        <span style="font-size: 0.8em !important;">🧪 Demo Scripts</span>
-                    </label>
-                </div>
-            </div>
+            <!--
+                ============================================================
+                Script Options / HeyGen config / Script Input have moved into
+                the new "⚙️ Process Script…" modal (#scriptProcessingModal).
+                The hidden shim below preserves the element IDs so existing
+                JS continues to find checkboxes/inputs without crashing.
+                Phase 2 will relocate these into the modal's stage panels.
+                Thumbnails pill has been removed entirely (#checkThumbnails
+                kept as a permanently-unchecked hidden input so any pipeline
+                code that still queries it sees `false`).
+                ============================================================
+            -->
+            <div id="scriptOptionsShim" aria-hidden="true" style="display:none;">
+                <!-- Script Options checkboxes -->
+                <input type="checkbox" id="checkScript" checked>
+                <input type="checkbox" id="checkHeyGenReady">
+                <input type="checkbox" id="checkBRollTable">
+                <span id="brollLoadedBadge" title="B-Roll table pre-loaded">●</span>
+                <input type="checkbox" id="checkBRollImages">
+                <input type="checkbox" id="checkGrokVideos">
+                <input type="checkbox" id="checkHookSummary">
+                <input type="checkbox" id="checkShortenScript">
+                <select id="shortenPercent">
+                    <option value="10">−10%</option>
+                    <option value="20">−20%</option>
+                    <option value="25" selected>−25%</option>
+                    <option value="33">−33%</option>
+                    <option value="50">−50%</option>
+                    <option value="target">to video length</option>
+                </select>
+                <input type="checkbox" id="checkFlowAnalysis">
+                <input type="checkbox" id="checkThumbnails"><!-- legacy; always unchecked -->
+                <input type="checkbox" id="checkDemoScript">
 
-            <!-- HeyGen Configuration -->
-            <div class="form-group heygen-config-group" style="background: #0f172a; padding: 10px; border-radius: 6px; border: 1px solid #334155; margin-bottom: 10px;">
-                <div class="heygen-config-row" style="display: flex; gap: 15px; align-items: center;">
-                    <label for="heygenTemplateId" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;"><span class="label-full">Template </span>ID:</label>
-                    <input type="text" id="heygenTemplateId" value="92c09f8e9a1c4f078f7ae53886b7ad80" style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
-                    <button onclick="browseHeyGenTemplates()" style="padding: 4px 10px; background: linear-gradient(135deg, #0ea5e9, #0284c7); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">📋 Browse</button>
-                    <button onclick="viewHeyGenTemplateDetails()" style="padding: 4px 10px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🔍 Details</button>
-                    <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
-                    <label for="heygenVoiceId" style="font-size: 0.8em; color: #94a3b8; white-space: nowrap;"><span class="label-full">Voice </span><span class="label-mobile-voice">V</span>ID:</label>
-                    <input type="text" id="heygenVoiceId" value="{{ saved_heygen_voice_id or '' }}" placeholder="Select a voice..." autocomplete="off" style="width: 250px; padding: 4px 6px; background: #1e293b; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; font-size: 0.8em;">
-                    <button onclick="browseHeyGenVoices()" style="padding: 4px 10px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🎤 Voices</button>
-                    <span style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
-                    <button class="hide-on-mobile" onclick="openTestVideoDialog()" style="padding: 4px 10px; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;">🧪 Test Generate</button>
-                    <span class="hide-on-mobile" style="display:inline-block; width:1px; height:20px; background:#334155; margin:0 4px;"></span>
-                    <button class="hide-on-mobile" onclick="openApiKeysModal()" style="padding: 4px 10px; background: linear-gradient(135deg, #6366f1, #4f46e5); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; white-space: nowrap;" title="Manage Google / HeyGen / Grok API keys">🔑 API Keys…</button>
-                    <input type="hidden" id="heygenApiKey" value="{{ saved_heygen_api_key or 'sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC' }}">
-                </div>
-            </div>
+                <!-- HeyGen config (moves into modal in Phase 2) -->
+                <input type="text" id="heygenTemplateId" value="92c09f8e9a1c4f078f7ae53886b7ad80">
+                <input type="text" id="heygenVoiceId" value="{{ saved_heygen_voice_id or '' }}">
+                <input type="hidden" id="heygenApiKey" value="{{ saved_heygen_api_key or 'sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC' }}">
 
-            <!-- Mode Selector - Now simpler since checkboxes control workflow -->
-            
-            <!-- Script Input (shown when Script checkbox is NOT checked) -->
-            <div id="scriptInputSection" style="display: none;">
-                <button type="button" class="sc-collapse-btn" aria-expanded="true" onclick="toggleCollapsible(this)" title="Show / hide the input script editor">
-                    <span class="sc-collapse-icon">▼</span>
-                    <span>📝 Input Script</span>
-                    <span class="sc-collapse-sub">Click to collapse / expand</span>
-                </button>
-                <div>
-                <div class="form-group">
-                    <label for="scriptInput">📝 Enter Your Script (Required when Script checkbox is unchecked):</label>
-                    <div id="scriptInputDurationBadge" style="margin:6px 0 8px 0; padding:6px 10px; background:#0f172a; border:1px solid #334155; border-left:3px solid #10b981; border-radius:6px; font-size:12px; color:#10b981; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; display:inline-block;" title="Estimated HeyGen avatar render time at 150 wpm — counts only words inside **Host:** sections">⏱ ~0:00 (0 words @ 150 wpm)</div>
-                    <div class="script-input-tabs">
-                        <button class="script-input-tab active" id="scriptTabEdit" onclick="switchScriptInputTab('edit')">✏️ Edit</button>
-                        <button class="script-input-tab" id="scriptTabPreview" onclick="switchScriptInputTab('preview')">👁 Preview</button>
-                        <button type="button" onclick="downloadScriptTemplateDocx(this)" style="margin-left:auto; padding:4px 10px; background:linear-gradient(135deg, #6366f1, #4f46e5); color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.8em; font-weight:600;" title="Download a blank ScriptCraft script template as a Word document. Fill it out in Word, then paste back here.">📄 Download Template (.docx)</button>
-                    </div>
-                    <textarea id="scriptInput" oninput="updateScriptInputDurationBadge()" placeholder="Paste or type your script content here, or click 'Load' button above to load a .md or .txt file..."></textarea>
+                <!-- Script Input (moves into modal Load Script stage in Phase 2) -->
+                <div id="scriptInputSection">
+                    <div id="scriptInputDurationBadge">⏱ ~0:00 (0 words @ 150 wpm)</div>
+                    <button id="scriptTabEdit" type="button">Edit</button>
+                    <button id="scriptTabPreview" type="button">Preview</button>
+                    <textarea id="scriptInput" oninput="if(typeof updateScriptInputDurationBadge==='function')updateScriptInputDurationBadge()"></textarea>
                     <div id="scriptInputPreview"></div>
                 </div>
+            </div>
+
+            <!-- Create-Script form fields live inside the Create Script modal (opened via the 🚀 Create Script toolbar button). -->
+            <div id="createScriptModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:10070; align-items:center; justify-content:center;">
+                <div style="background:#0f172a; border:1px solid #334155; border-radius:10px; width:min(720px, 94vw); max-height:90vh; overflow-y:auto; padding:22px 24px; box-shadow:0 20px 50px rgba(0,0,0,0.6);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                        <h2 style="margin:0; color:#e2e8f0; font-size:1.15em;">🚀 Create New Script</h2>
+                        <button type="button" onclick="closeCreateScriptModal()" style="background:transparent; color:#94a3b8; border:none; font-size:1.4em; cursor:pointer;">×</button>
+                    </div>
+
+                    <div id="topicInputSection">
+                        <div class="form-group">
+                            <label for="createTopic">🎬 Script Title:</label>
+                            <textarea id="createTopic" oninput="refreshOutputDirPreview()" placeholder="Enter the title / topic of the script you want to create...">Top 5 AI Tools for Consumers</textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="createDescription">📝 Script Description (Optional):</label>
+                            <textarea id="createDescription" placeholder="Additional details, context, or specific requirements for the script..."></textarea>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="scriptDuration">⏱️ Script Duration:</label>
+                            <select id="scriptDuration">
+                                <option value="5">5 minutes</option>
+                                <option value="10" selected>10 minutes</option>
+                                <option value="15">15 minutes</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="audience">🎯 Target Audience:</label>
+                            <select id="audience">
+                                <option value="general">General Audience</option>
+                                <option value="beginners" selected>Beginners</option>
+                                <option value="professionals">Professionals</option>
+                                <option value="students">Students</option>
+                                <option value="experts">Experts</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="tone">🎭 Tone:</label>
+                            <select id="tone">
+                                <option value="professional">Professional</option>
+                                <option value="casual" selected>Casual</option>
+                                <option value="enthusiastic">Enthusiastic</option>
+                                <option value="informative">Informative</option>
+                                <option value="humorous">Humorous</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" style="display:none;">
+                            <label for="productionType">🎥 Production Type:</label>
+                            <select id="productionType">
+                                <option value="video" selected>Video</option>
+                                <option value="podcast">Podcast</option>
+                                <option value="live-stream">Live Stream</option>
+                                <option value="webinar">Webinar</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="technicalLevel">🎓 Technical Level:</label>
+                            <select id="technicalLevel">
+                                <option value="100" selected>Level 100</option>
+                                <option value="200">Level 200</option>
+                                <option value="300">Level 300</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="quickTest" style="width: auto; margin-right: 8px;">
+                                ⚡ Quick Test Mode (1 chapter, no thumbnails/YouTube details - ~2 min)
+                            </label>
+                        </div>
+                    </div>
+
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px; padding-top:14px; border-top:1px solid #334155;">
+                        <button type="button" onclick="closeCreateScriptModal()" style="padding:8px 16px; background:#334155; color:#e2e8f0; border:none; border-radius:4px; cursor:pointer; font-size:0.9em; font-weight:600;">Cancel</button>
+                        <button type="button" onclick="submitCreateScriptModal()" style="padding:8px 18px; background:linear-gradient(135deg, #10b981, #059669); color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.9em; font-weight:600;">🚀 Create</button>
+                    </div>
                 </div>
             </div>
 
-            <!-- Topic Input (shown when Script checkbox IS checked) -->
-            <div id="topicInputSection">
-                <div class="form-group">
-                    <label for="createTopic">💡 Topic/Subject:</label>
-                    <textarea id="createTopic" oninput="refreshOutputDirPreview()" placeholder="Enter the topic or subject you want to create a script about...">Top 5 AI Tools for Consumers</textarea>
-                </div>
-                
-                <div class="form-group">
-                    <label for="createDescription">📝 Description (Optional):</label>
-                    <textarea id="createDescription" placeholder="Provide additional details, context, or specific requirements for your script..."></textarea>
-                </div>
-            </div>
-            
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="scriptDuration">⏱️ Script Duration:</label>
-                    <select id="scriptDuration">
-                        <option value="5">5 minutes</option>
-                        <option value="10" selected>10 minutes</option>
-                        <option value="15">15 minutes</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label for="audience">🎯 Target Audience:</label>
-                    <select id="audience">
-                        <option value="general">General Audience</option>
-                        <option value="beginners" selected>Beginners</option>
-                        <option value="professionals">Professionals</option>
-                        <option value="students">Students</option>
-                        <option value="experts">Experts</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label for="tone">🎭 Tone:</label>
-                    <select id="tone">
-                        <option value="professional">Professional</option>
-                        <option value="casual" selected>Casual</option>
-                        <option value="enthusiastic">Enthusiastic</option>
-                        <option value="informative">Informative</option>
-                        <option value="humorous">Humorous</option>
-                    </select>
-                </div>
-                
-                <div class="form-group" style="display:none;">
-                    <label for="productionType">🎥 Production Type:</label>
-                    <select id="productionType">
-                        <option value="video" selected>Video</option>
-                        <option value="podcast">Podcast</option>
-                        <option value="live-stream">Live Stream</option>
-                        <option value="webinar">Webinar</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label for="technicalLevel">🎓 Technical Level:</label>
-                    <select id="technicalLevel">
-                        <option value="100" selected>Level 100</option>
-                        <option value="200">Level 200</option>
-                        <option value="300">Level 300</option>
-                    </select>
-                </div>
-            </div>
-            
-            <div class="form-row">
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="quickTest" style="width: auto; margin-right: 8px;">
-                        ⚡ Quick Test Mode (1 chapter, no thumbnails/YouTube details - ~2 min)
-                    </label>
-                </div>
-            </div>
-            
-            <!-- Hidden file input -->
+            <!-- Hidden file input (used by Process Script modal's Load Script stage) -->
             <input type="file" id="fileInput" accept=".md,.txt,.markdown,.docx,.doc" style="display: none;" onchange="loadFile(event)">
             
             <div id="progress" class="progress">
@@ -1751,8 +1739,12 @@
                 <div class="progress-header">
                     <div class="spinner"></div>
                     <p id="progressText">🔄 Processing...</p>
+                    <button id="cancelWorkflowBtn" onclick="cancelWorkflow()" title="Cancel script creation and kill all running agents"
+                            style="display:none; margin-left:auto; margin-top:4px; padding:6px 14px; background:linear-gradient(135deg,#b91c1c,#7f1d1d); color:#fff; border:1px solid #ef4444; border-radius:4px; font-weight:700; cursor:pointer; font-size:0.85em;">
+                        🛑 Cancel Script Creation
+                    </button>
                     <button id="stopBrollImagesBtn" onclick="stopBrollImageGeneration()" title="Stop B-roll image generation and keep what's been generated so far"
-                            style="display:none; margin-left:auto; margin-top:4px; padding:6px 12px; background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:0.85em;">
+                            style="display:none; margin-left:8px; margin-top:4px; padding:6px 12px; background:linear-gradient(135deg,#ef4444,#dc2626); color:#fff; border:none; border-radius:4px; font-weight:600; cursor:pointer; font-size:0.85em;">
                         🛑 Stop B-roll Images
                     </button>
                     <button id="stopThumbnailsBtn" onclick="stopThumbnailGeneration()" title="Stop thumbnail generation and keep what's been generated so far"
@@ -2349,7 +2341,7 @@ Time management content here...`;
             
             window.grokVideosData = grokVideos;
             let html = `<div class="thumbnail-gallery">
-                <h3>🤖 Grok AI Generated Videos (${grokVideos.length} videos)
+                <h3><img src="/static/grok_icon.png" alt="Grok" style="height:24px; width:auto; vertical-align:middle; margin-right:6px;"> Grok AI Generated Videos (${grokVideos.length} videos)
                     <button onclick="downloadAllGrokVideos()" style="margin-left:12px;padding:6px 12px;background:#2563eb;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;" title="Download all Grok videos as a ZIP">⬇️ Download All</button>
                 </h3>
                 <p style="color: #94a3b8; font-size: 13px; margin-bottom: 15px;">Videos generated by xAI Grok from your B-Roll scene descriptions</p>
@@ -2454,7 +2446,7 @@ Time management content here...`;
                 if (typeof onSkip === 'function') onSkip();
             });
 
-            document.getElementById('generateSelectedGrokBtn').addEventListener('click', async function() {
+            document.getElementById('generateSelectedGrokBtn').addEventListener('click', function() {
                 const selected = [];
                 document.querySelectorAll('.grok-row-check:checked').forEach(cb => {
                     const idx = parseInt(cb.getAttribute('data-index'), 10);
@@ -2465,12 +2457,6 @@ Time management content here...`;
                     alert('Select at least one row to generate.');
                     return;
                 }
-
-                // Make sure an Output Directory is set before kicking off
-                // Grok video generation, otherwise the server falls back to
-                // its default Final/<title>/broll folder.
-                const __okOD = await ensureOutputDirSet('generating Grok videos');
-                if (!__okOD) return;
 
                 modal.remove();
                 onGenerateSelected(selected);
@@ -3657,7 +3643,7 @@ Time management content here...`;
             }
             
             if (grokVideos && grokVideos.length > 0) {
-                html += '<button class="tab-button" onclick="switchTab(\'grokVideos\')">🤖 Grok Videos</button>';
+                html += '<button class="tab-button" onclick="switchTab(\'grokVideos\')"><img src="/static/grok_icon.png" alt="Grok" style="height:16px; width:auto; vertical-align:middle; margin-right:4px;"> Grok Videos</button>';
             }
 
             const shutterstockLinks = buildShutterstockLinks(brollTable, mainScript);
@@ -3956,29 +3942,14 @@ Time management content here...`;
         }
         
         function toggleScriptInput() {
-            const scriptChecked = document.getElementById('checkScript')?.checked || false;
-            const scriptInputSection = document.getElementById('scriptInputSection');
-            const topicInputSection = document.getElementById('topicInputSection');
-            const primaryBtn = document.getElementById('primaryBtn');
-            
-            if (scriptInputSection && topicInputSection && primaryBtn) {
-                if (scriptChecked) {
-                    // Script will be generated, show topic inputs
-                    scriptInputSection.style.display = 'none';
-                    topicInputSection.style.display = 'block';
-                    primaryBtn.onclick = processWorkflow;
-                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Generate Script</span>';
-                    primaryBtn.title = 'Generate selected outputs from topic';
-                } else {
-                    // Script must be provided, show script input
-                    scriptInputSection.style.display = 'block';
-                    topicInputSection.style.display = 'none';
-                    primaryBtn.onclick = processWorkflow;
-                    primaryBtn.innerHTML = '<span class="toolbar-icon">🚀</span><span class="toolbar-text">Process Updated Script</span>';
-                    primaryBtn.title = 'Process script with selected outputs';
-                }
-            }
-            
+            // Legacy helper. The visible main GUI no longer has the script-input
+            // pills or topic form (both moved into modals), so this function is
+            // now a no-op for the primary toolbar button. It MUST NOT rebind
+            // #primaryBtn — that button is owned by the Create Script modal
+            // (openCreateScriptModal). Leaving the rebinding in place broke the
+            // toolbar by replacing "🚀 Create Script" with "Generate Script"
+            // pointing at processWorkflow.
+
             // If "All" is checked, uncheck it since individual selection changed
             const allCheckbox = document.getElementById('checkAll');
             if (allCheckbox && allCheckbox.checked) {
@@ -4133,7 +4104,9 @@ Time management content here...`;
                         // Pre-loaded artifacts let the backend skip the corresponding
                         // agents (Load .docx/.md from the YouTube / B-Roll tabs).
                         youtube_details_override: window._currentYoutubeDetails || null,
-                        broll_table_override: window._currentBrollTable || null
+                        broll_table_override: window._currentBrollTable || null,
+                        script_filename: window.currentScriptFilename || '',
+                        script_dir: (document.getElementById('spsShortenOutputDir')?.value || '').trim()
                     })
                 });
                 
@@ -4461,6 +4434,38 @@ Time management content here...`;
             }
         }
 
+        // ────────────────────────────────────────────────────────────────
+        // Create Script modal — wraps the title/description/options form
+        // so the main GUI shows only the log + output tabs.
+        // ────────────────────────────────────────────────────────────────
+        function openCreateScriptModal() {
+            const modal = document.getElementById('createScriptModal');
+            if (modal) {
+                modal.style.display = 'flex';
+                setTimeout(() => {
+                    const t = document.getElementById('createTopic');
+                    if (t) t.focus();
+                }, 50);
+            }
+        }
+
+        function closeCreateScriptModal() {
+            const modal = document.getElementById('createScriptModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function submitCreateScriptModal() {
+            const topic = (document.getElementById('createTopic')?.value || '').trim();
+            if (!topic) {
+                alert('Please enter a Script Title.');
+                return;
+            }
+            // Hand off to the existing createScript() pipeline (which will
+            // prompt for Output Directory if needed, then start the run).
+            closeCreateScriptModal();
+            await createScript();
+        }
+
         async function createScript() {
             const topicInput = document.getElementById('createTopic');
             const descriptionInput = document.getElementById('createDescription');
@@ -4486,7 +4491,15 @@ Time management content here...`;
                 alert('Please enter a topic to create a script about!');
                 return;
             }
-            
+
+            // Prompt for an Output Directory if one isn't set yet. User can
+            // also change it any time via the 📁 Output Directory toolbar button.
+            const __odOk = await ensureOutputDirSet('creating a new script');
+            if (!__odOk) {
+                addProgressMessage('❌ Script creation cancelled — no Output Directory set.', 'error');
+                return;
+            }
+
             progressDiv.style.display = 'block';
             progressText.textContent = quickTest ? '⚡ Quick test: Creating 1-chapter script...' : '🎬 Creating your script with AI...';
             resultDiv.style.display = 'none';
@@ -4694,6 +4707,16 @@ Time management content here...`;
                         
                         // Store scripts globally for export functions
                         window.currentScript = finalScript;
+                        // Mark Process Script pipeline as having a script available
+                        if (finalScript && finalScript.trim()) {
+                            window._spsScriptLoaded = true;
+                            try {
+                                if (window._spsStages && window._spsStages.load) {
+                                    if (typeof spsSetStageStatus === 'function') spsSetStageStatus('load', 'done');
+                                }
+                                if (typeof spsRefreshLoadStatus === 'function') spsRefreshLoadStatus();
+                            } catch (_) {}
+                        }
                         window.currentFlowOriginal = flowOriginal;
                         window.currentFlowImproved = flowImproved;
                         window.currentComparisonFile = comparisonFile;
@@ -5457,10 +5480,6 @@ Time management content here...`;
                 alert('⚠️ Please select at least one curl command to execute');
                 return;
             }
-            // Make sure an Output Directory is set before launching HeyGen
-            // curl execution — generated videos and artifacts are saved under it.
-            const __okOD = await ensureOutputDirSet('executing HeyGen curl commands');
-            if (!__okOD) return;
             // Mark execute-mode and show the template picker; footer buttons drive next step.
             window._heygenExecuteAfterPick = true;
             console.log('[heygen-picker] _heygenExecuteAfterPick set to true; opening picker');
@@ -6130,6 +6149,20 @@ Thank you for watching!`;
                     text = await file.text();
                 }
                 document.getElementById('scriptInput').value = text;
+                // Remember the loaded filename so the backend can use it as
+                // the stem for derived files (e.g. {stem}_shortened.md/.docx).
+                window.currentScriptFilename = file.name || '';
+                // Persistent flag so the Process Script modal recognizes the
+                // script even if other code paths clear/replace #scriptInput.
+                window._spsScriptLoaded = true;
+                // Also reflect this in the Process Script stepper immediately.
+                try {
+                    if (typeof spsSetStageStatus === 'function' && window._spsStages && window._spsStages.load) {
+                        spsSetStageStatus('load', 'done');
+                    }
+                    if (typeof spsRefreshLoadStatus === 'function') spsRefreshLoadStatus();
+                    if (typeof spsUpdateRunFooter === 'function') spsUpdateRunFooter();
+                } catch (_) {}
                 updateScriptInputDurationBadge();
 
                 // Loading a script means we should process from script input mode.
@@ -6142,6 +6175,9 @@ Thank you for watching!`;
                 refreshOutputDirPreview();
                 // Auto-switch to formatted preview after loading
                 switchScriptInputTab('preview');
+                // Tell the Process Script modal that a script is now loaded so
+                // Stage 1 flips to Done and the other stages unlock.
+                if (typeof spsRefreshLoadStatus === 'function') spsRefreshLoadStatus();
             } catch (error) {
                 alert('❌ Error loading file: ' + error.message);
             } finally {
@@ -6428,29 +6464,132 @@ Thank you for watching!`;
         let _renderAudioSelectedTimeline = null;
         let _renderAudioEventSource = null;
 
+        function _resetRenderAudioModalUI() {
+            // Reset everything that can carry over from a previous render so the
+            // modal is always usable without a full page refresh.
+            _renderAudioSelectedTimeline = null;
+            if (_renderAudioEventSource) {
+                try { _renderAudioEventSource.close(); } catch (_) {}
+                _renderAudioEventSource = null;
+            }
+            const startBtn = document.getElementById('renderAudioStartBtn');
+            if (startBtn) {
+                startBtn.disabled = false;
+                startBtn.textContent = '🎵 Start Render';
+            }
+            const logWrap = document.getElementById('renderAudioLogWrap');
+            if (logWrap) logWrap.style.display = 'none';
+            const logEl = document.getElementById('renderAudioLog');
+            if (logEl) logEl.textContent = '';
+            const bar = document.getElementById('renderAudioProgressBar');
+            if (bar) { bar.style.width = '0%'; bar.style.background = '#0ea5e9'; }
+            const post = document.getElementById('renderAudioPostActions');
+            if (post) post.style.display = 'none';
+            const tStatus = document.getElementById('transcribeAudioStatus');
+            if (tStatus) tStatus.textContent = '';
+            const tBtn = document.getElementById('transcribeAudioBtn');
+            if (tBtn) { tBtn.disabled = false; tBtn.textContent = '🎙️ Transcribe to Script'; }
+            window._lastRenderedAudioFile = null;
+        }
+
         function openRenderAudioModal() {
             const modal = document.getElementById('renderAudioModal');
             if (!modal) return;
+            _resetRenderAudioModalUI();
             modal.style.display = 'flex';
             // Pre-fill filename from current script title
             const fnInput = document.getElementById('renderAudioFilename');
             if (fnInput && !fnInput.value) {
                 fnInput.value = _safeName(window.currentScriptTitle || '');
             }
+            // Pre-fill output dir from shared "last-wins" (falls back to main GUI output dir)
+            const odInput = document.getElementById('renderAudioOutputDir');
+            if (odInput && !odInput.value) {
+                odInput.value = (typeof getSharedOutputDir === 'function' ? getSharedOutputDir() : '');
+            }
+            refreshRenderAudioProjects();
             refreshRenderAudioTimelines();
         }
 
         function closeRenderAudioModal() {
             const modal = document.getElementById('renderAudioModal');
             if (modal) modal.style.display = 'none';
-            if (_renderAudioEventSource) {
-                _renderAudioEventSource.close();
-                _renderAudioEventSource = null;
-            }
+            _resetRenderAudioModalUI();
         }
 
         function _safeName(s) {
             return (s || '').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'audio_export';
+        }
+
+        async function refreshRenderAudioProjects() {
+            const sel = document.getElementById('renderAudioProjectSelect');
+            if (!sel) return;
+            sel.innerHTML = '<option value="">Loading projects…</option>';
+            try {
+                const res = await fetch('/api/resolve/list-projects');
+                const data = await res.json();
+                if (!data.success) {
+                    sel.innerHTML = `<option value="">❌ ${(data.error || 'Failed to list projects')}</option>`;
+                    return;
+                }
+                const projects = data.projects || [];
+                if (!projects.length) {
+                    sel.innerHTML = '<option value="">(no projects in current folder)</option>';
+                    return;
+                }
+                sel.innerHTML = '';
+                projects.forEach(name => {
+                    const opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name + (name === data.current_project ? ' (open)' : '');
+                    if (name === data.current_project) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+            } catch (e) {
+                sel.innerHTML = `<option value="">❌ ${e.message}</option>`;
+            }
+        }
+
+        async function openSelectedResolveProject() {
+            const sel = document.getElementById('renderAudioProjectSelect');
+            const btn = document.getElementById('renderAudioOpenProjectBtn');
+            const info = document.getElementById('renderAudioInfo');
+            if (!sel || !sel.value) {
+                alert('Pick a project first.');
+                return;
+            }
+            const projectName = sel.value;
+            const prevText = btn ? btn.textContent : '';
+            if (btn) { btn.disabled = true; btn.textContent = '⏳ Opening…'; }
+            if (info) {
+                info.textContent = `Opening project '${projectName}'…`;
+                info.style.color = '#94a3b8';
+            }
+            try {
+                const res = await fetch('/api/resolve/load-project', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_name: projectName }),
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    if (info) {
+                        info.textContent = '❌ ' + (data.error || 'Failed to open project');
+                        info.style.color = '#f87171';
+                    }
+                    return;
+                }
+                // Reload timelines for the newly opened project
+                await refreshRenderAudioTimelines();
+                await refreshRenderAudioProjects();
+            } catch (e) {
+                if (info) {
+                    info.textContent = '❌ ' + e.message;
+                    info.style.color = '#f87171';
+                }
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = prevText || '📂 Open'; }
+            }
         }
 
         async function refreshRenderAudioTimelines() {
@@ -6549,13 +6688,22 @@ Thank you for watching!`;
             }
 
             try {
+                const localDirEl = document.getElementById('renderAudioOutputDir');
+                const ytpDirEl = document.getElementById('ytpOutputDir');
+                const overrideDir = ((localDirEl && localDirEl.value.trim())
+                                  || (ytpDirEl && ytpDirEl.value.trim())
+                                  || (typeof getSharedOutputDir === 'function' ? getSharedOutputDir() : '')
+                                  || '');
+                if (overrideDir && typeof setSharedOutputDir === 'function') setSharedOutputDir(overrideDir);
+                const reqBody = {
+                    timeline_name: _renderAudioSelectedTimeline,
+                    script_title: filename,
+                };
+                if (overrideDir) reqBody.output_dir = overrideDir;
                 const res = await fetch('/api/resolve/render-audio', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        timeline_name: _renderAudioSelectedTimeline,
-                        script_title: filename,
-                    }),
+                    body: JSON.stringify(reqBody),
                 });
                 const data = await res.json();
                 if (!data.success) {
@@ -6593,6 +6741,12 @@ Thank you for watching!`;
                                 const tBtn = document.getElementById('transcribeAudioBtn');
                                 if (tBtn) { tBtn.disabled = false; tBtn.textContent = '🎙️ Transcribe to Script'; }
                             }
+                            // Update YouTube pipeline stepper if the pipeline modal exists
+                            try {
+                                if (typeof ytpSetStageStatus === 'function') ytpSetStageStatus('render', 'done');
+                                const rr = document.getElementById('ytpRenderResult');
+                                if (rr && msg.output_file) { rr.style.display = 'block'; rr.textContent = '✓ Rendered: ' + msg.output_file; }
+                            } catch (_) {}
                             _renderAudioEventSource.close();
                             _renderAudioEventSource = null;
                         } else if (msg.type === 'error') {
@@ -6855,7 +7009,7 @@ Thank you for watching!`;
                     play.className = 'vg-play';
                     thumbBox.appendChild(play);
 
-                    // Delete (🗑️) button — top-right of card (sits outside the thumb so it doesn't overlap the play button on mobile)
+                    // Delete (🗑️) button — top-right of thumb
                     const delBtn = document.createElement('button');
                     delBtn.type = 'button';
                     delBtn.title = 'Delete this video from the gallery';
@@ -6865,6 +7019,7 @@ Thank you for watching!`;
                         ev.stopPropagation();
                         await deleteGalleryVideo(v);
                     };
+                    thumbBox.appendChild(delBtn);
 
                     card.appendChild(thumbBox);
 
@@ -6882,7 +7037,6 @@ Thank you for watching!`;
                     meta.appendChild(title);
                     meta.appendChild(sub);
                     card.appendChild(meta);
-                    card.appendChild(delBtn);
                     frag.appendChild(card);
                 });
                 grid.appendChild(frag);
@@ -6945,6 +7099,25 @@ Thank you for watching!`;
             const modal = document.getElementById('transcribeAudioModal');
             if (!modal) return;
             modal.style.display = 'flex';
+            // Detect pipeline mode: pipeline modal currently visible
+            const pipeModal = document.getElementById('youtubePipelineModal');
+            const inPipeline = !!(pipeModal && pipeModal.style.display !== 'none' && pipeModal.style.display !== '');
+            window._transcribeFromPipeline = inPipeline;
+            // Prefill output dir — from pipeline if active, else shared "last-wins" dir
+            const odInput = document.getElementById('transcribeAudioOutputDir');
+            if (odInput) {
+                const ytpDir = (document.getElementById('ytpOutputDir')?.value || '').trim();
+                if (inPipeline && ytpDir) odInput.value = ytpDir;
+                else if (!odInput.value) odInput.value = (typeof getSharedOutputDir === 'function' ? getSharedOutputDir() : '');
+                odInput.onchange = () => { if (typeof setSharedOutputDir === 'function') setSharedOutputDir(odInput.value); };
+            }
+            const fnInput = document.getElementById('transcribeAudioFilename');
+            if (fnInput) {
+                const ytpTitle = (document.getElementById('ytpScriptTitle')?.value || '').trim();
+                const fallback = (window.currentScriptTitle || '').trim();
+                const stem = (ytpTitle || fallback || 'transcript').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
+                fnInput.value = stem || 'transcript';
+            }
             const fileInput = document.getElementById('transcribeAudioFile');
             const info = document.getElementById('transcribeAudioFileInfo');
             const status = document.getElementById('transcribeAudioStatus2');
@@ -6963,6 +7136,22 @@ Thank you for watching!`;
             if (status) { status.style.color = '#94a3b8'; status.textContent = ''; }
             if (logEl) { logEl.style.display = 'none'; logEl.textContent = ''; }
             if (btn) { btn.disabled = false; btn.textContent = '🎙️ Start Transcription'; }
+        }
+
+        async function pickTranscribeOutputDir() {
+            try {
+                const res = await fetch('/api/youtube/pick-output-dir');
+                const data = await res.json();
+                if (data && data.cancelled) return;
+                if (data && data.success && data.path) {
+                    const odInput = document.getElementById('transcribeAudioOutputDir');
+                    if (odInput) odInput.value = data.path;
+                } else if (data && data.error) {
+                    alert('❌ ' + data.error);
+                }
+            } catch (e) {
+                alert('❌ Could not open folder picker: ' + e.message);
+            }
         }
 
         function closeTranscribeAudioModal() {
@@ -7000,6 +7189,14 @@ Thank you for watching!`;
                 fd.append('model', model);
                 if (language) fd.append('language', language);
 
+                // Always honor the modal's Output Dir + Filename inputs when filled.
+                // (Pipeline mode prefills these from the YouTube Publish dialog, but the user
+                //  may override or set them manually outside pipeline mode too.)
+                const ytpDir = (document.getElementById('transcribeAudioOutputDir')?.value || '').trim();
+                const fname  = (document.getElementById('transcribeAudioFilename')?.value || '').trim();
+                if (ytpDir)  fd.append('output_dir', ytpDir);
+                if (fname)   fd.append('project_name', fname);
+
                 const startRes = await fetch('/api/transcribe-audio/upload', {
                     method: 'POST',
                     body: fd,
@@ -7031,19 +7228,36 @@ Thank you for watching!`;
                     } else if (msg.type === 'done') {
                         es.close();
                         const text = msg.text || segments.join(' ');
-                        const scriptInput = document.getElementById('scriptInput');
-                        if (scriptInput) {
-                            scriptInput.value = text;
-                            const checkScript = document.getElementById('checkScript');
-                            if (checkScript && checkScript.checked) {
-                                checkScript.checked = false;
-                                if (typeof toggleScriptInput === 'function') toggleScriptInput();
+                        const isPipeline = !!window._transcribeFromPipeline;
+                        if (!isPipeline) {
+                            const scriptInput = document.getElementById('scriptInput');
+                            if (scriptInput) {
+                                scriptInput.value = text;
+                                const checkScript = document.getElementById('checkScript');
+                                if (checkScript && checkScript.checked) {
+                                    checkScript.checked = false;
+                                    if (typeof toggleScriptInput === 'function') toggleScriptInput();
+                                }
+                                scriptInput.dispatchEvent(new Event('input', { bubbles: true }));
                             }
-                            scriptInput.dispatchEvent(new Event('input', { bubbles: true }));
-                        }
-                        if (status) {
-                            status.style.color = '#34d399';
-                            status.textContent = `✅ Inserted ${text.length.toLocaleString()} chars into script box (model: ${msg.model || model}).`;
+                            if (status) {
+                                status.style.color = '#34d399';
+                                status.textContent = `✅ Inserted ${text.length.toLocaleString()} chars into script box (model: ${msg.model || model}).`;
+                            }
+                        } else {
+                            // Pipeline mode — record path, update pipeline stepper, do NOT touch scriptInput
+                            if (msg.saved_md_path) {
+                                window._lastTranscriptPath = msg.saved_md_path;
+                                const tp = document.getElementById('ytpTranscriptPath');
+                                if (tp) tp.value = msg.saved_md_path;
+                                const tr = document.getElementById('ytpTranscribeResult');
+                                if (tr) { tr.style.display = 'block'; tr.textContent = '✓ Saved: ' + msg.saved_md_path + (msg.saved_docx_path ? ' (+ .docx)' : ''); }
+                                if (typeof ytpSetStageStatus === 'function') ytpSetStageStatus('transcribe', 'done');
+                            }
+                            if (status) {
+                                status.style.color = '#34d399';
+                                status.textContent = `✅ Transcript saved (${text.length.toLocaleString()} chars, model: ${msg.model || model}). You can close this dialog.`;
+                            }
                         }
                         if (btn) { btn.disabled = false; btn.textContent = '🎙️ Re-transcribe'; }
                     } else if (msg.type === 'error') {
@@ -7088,10 +7302,33 @@ Thank you for watching!`;
             };
 
             try {
+                // Honor the Render dialog's own Output Dir (fallback: pipeline dir,
+                // then the shared last-set dir). Filename is derived from the rendered
+                // file's basename so the .md/.docx land next to the .wav.
+                const localDirEl = document.getElementById('renderAudioOutputDir');
+                const ytpDirEl   = document.getElementById('ytpOutputDir');
+                const outDir = ((localDirEl && localDirEl.value.trim())
+                             || (ytpDirEl   && ytpDirEl.value.trim())
+                             || (typeof getSharedOutputDir === 'function' ? getSharedOutputDir() : '')
+                             || '');
+                if (outDir && typeof setSharedOutputDir === 'function') setSharedOutputDir(outDir);
+
+                let projectName = (document.getElementById('renderAudioFilename')?.value || '').trim();
+                if (!projectName && file) {
+                    try {
+                        const base = file.split('/').pop() || '';
+                        projectName = base.replace(/\.[^/.]+$/, '');
+                    } catch (_) {}
+                }
+
+                const body = { file_path: file, model: model };
+                if (outDir)      body.output_dir = outDir;
+                if (projectName) body.project_name = projectName;
+
                 const startRes = await fetch('/api/transcribe-audio', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ file_path: file, model: model }),
+                    body: JSON.stringify(body),
                 });
                 const startData = await startRes.json();
                 if (!startRes.ok || !startData.success) {
@@ -7118,19 +7355,35 @@ Thank you for watching!`;
                     } else if (msg.type === 'done') {
                         es.close();
                         const text = msg.text || segments.join(' ');
-                        const scriptInput = document.getElementById('scriptInput');
-                        if (scriptInput) {
-                            scriptInput.value = text;
-                            const checkScript = document.getElementById('checkScript');
-                            if (checkScript && checkScript.checked) {
-                                checkScript.checked = false;
-                                if (typeof toggleScriptInput === 'function') toggleScriptInput();
+                        // Detect pipeline mode (YouTube Publish modal visible) — when active,
+                        // do NOT clobber the script box; just record the saved transcript
+                        // and advance the pipeline stepper.
+                        const pipeModal = document.getElementById('youtubePipelineModal');
+                        const inPipeline = !!(pipeModal && pipeModal.style.display !== 'none' && pipeModal.style.display !== '');
+                        if (!inPipeline) {
+                            const scriptInput = document.getElementById('scriptInput');
+                            if (scriptInput) {
+                                scriptInput.value = text;
+                                const checkScript = document.getElementById('checkScript');
+                                if (checkScript && checkScript.checked) {
+                                    checkScript.checked = false;
+                                    if (typeof toggleScriptInput === 'function') toggleScriptInput();
+                                }
+                                scriptInput.dispatchEvent(new Event('input', { bubbles: true }));
                             }
-                            scriptInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                        if (msg.saved_md_path) {
+                            window._lastTranscriptPath = msg.saved_md_path;
+                            const tp = document.getElementById('ytpTranscriptPath');
+                            if (tp) tp.value = msg.saved_md_path;
+                            const tr = document.getElementById('ytpTranscribeResult');
+                            if (tr) { tr.style.display = 'block'; tr.textContent = '✓ Saved: ' + msg.saved_md_path + (msg.saved_docx_path ? ' (+ .docx)' : ''); }
+                            try { if (typeof ytpSetStageStatus === 'function') ytpSetStageStatus('transcribe', 'done'); } catch (_) {}
                         }
                         if (status) {
                             status.style.color = '#34d399';
-                            status.textContent = `✅ Inserted ${text.length.toLocaleString()} chars into script box (model: ${msg.model || model}).`;
+                            const savedNote = msg.saved_md_path ? ` — saved to ${msg.saved_md_path}` : '';
+                            status.textContent = `✅ Transcript ready (${text.length.toLocaleString()} chars, model: ${msg.model || model})${savedNote}.`;
                         }
                         if (btn) { btn.disabled = false; btn.textContent = '🎙️ Re-transcribe'; }
                     } else if (msg.type === 'error') {
@@ -7555,6 +7808,35 @@ Thank you for watching!`;
             });
         }
 
+        // ---- Shared "last-wins" Output Directory (per-dialog) ----
+        // Each dialog has its own Output Directory input; the main GUI output dir is
+        // only the initial default. Once any dialog changes its dir, we remember it
+        // here so the next dialog that opens with an empty input gets prefilled with
+        // the most recently chosen value.
+        window._sharedOutputDir = window._sharedOutputDir || '';
+        function getSharedOutputDir() {
+            try {
+                if (window._sharedOutputDir && window._sharedOutputDir.trim()) return window._sharedOutputDir.trim();
+                const mainEl = document.getElementById('outputDir');
+                if (mainEl && mainEl.value.trim()) return mainEl.value.trim();
+            } catch (_) {}
+            return '';
+        }
+        function setSharedOutputDir(val) {
+            const v = (val || '').trim();
+            if (v) window._sharedOutputDir = v;
+        }
+        async function pickRenderAudioOutputDir() {
+            try {
+                const res = await fetch('/api/youtube/pick-output-dir');
+                const data = await res.json();
+                if (data && data.success && data.path) {
+                    const od = document.getElementById('renderAudioOutputDir');
+                    if (od) { od.value = data.path; setSharedOutputDir(data.path); }
+                }
+            } catch (_) { /* user cancelled */ }
+        }
+
         // Minimal HTML escaper for safe text injection in hook picker.
         // (Reuses the project-wide escapeHtml defined earlier in this file.)
 
@@ -7588,6 +7870,73 @@ Thank you for watching!`;
                     }
                 })
                 .catch(err => { status.textContent = 'Could not reach server: ' + err.message; });
+            // Also refresh YouTube OAuth status
+            refreshYouTubeCredentialStatus();
+        }
+
+        async function refreshYouTubeCredentialStatus() {
+            const st = document.getElementById('ytCredStatus');
+            if (!st) return;
+            st.style.color = '#64748b';
+            st.textContent = 'checking…';
+            try {
+                const res = await fetch('/api/youtube/credentials/status');
+                const data = await res.json();
+                if (!data.success) { st.style.color = '#f87171'; st.textContent = '❌ ' + (data.error || 'error'); return; }
+                if (data.has_client_secret) {
+                    const when = data.client_secret_mtime
+                        ? new Date(data.client_secret_mtime * 1000).toLocaleString()
+                        : '';
+                    st.style.color = '#34d399';
+                    st.textContent = '✓ client_secret installed' + (when ? ' (' + when + ')' : '')
+                        + (data.has_token ? ' • token cached' : ' • no token yet');
+                } else {
+                    st.style.color = '#fbbf24';
+                    st.textContent = '⚠ no client_secret installed';
+                }
+            } catch (err) {
+                st.style.color = '#f87171';
+                st.textContent = '❌ ' + err.message;
+            }
+        }
+
+        async function uploadYouTubeClientSecret() {
+            const fileEl = document.getElementById('ytClientSecretFile');
+            const msg = document.getElementById('ytCredMsg');
+            const f = fileEl && fileEl.files && fileEl.files[0];
+            if (!f) { if (msg) { msg.style.color = '#f87171'; msg.textContent = 'Pick a client_secret*.json file first.'; } return; }
+            if (msg) { msg.style.color = '#94a3b8'; msg.textContent = 'Uploading ' + f.name + '…'; }
+            try {
+                const fd = new FormData();
+                fd.append('file', f);
+                const res = await fetch('/api/youtube/credentials', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (!res.ok || !data.success) {
+                    if (msg) { msg.style.color = '#f87171'; msg.textContent = '❌ ' + (data.error || ('HTTP ' + res.status)); }
+                    return;
+                }
+                if (msg) { msg.style.color = '#34d399'; msg.textContent = '✅ Saved to ' + data.path; }
+                refreshYouTubeCredentialStatus();
+            } catch (err) {
+                if (msg) { msg.style.color = '#f87171'; msg.textContent = '❌ ' + err.message; }
+            }
+        }
+
+        async function clearYouTubeToken() {
+            const msg = document.getElementById('ytCredMsg');
+            if (msg) { msg.style.color = '#94a3b8'; msg.textContent = 'Clearing cached token…'; }
+            try {
+                const res = await fetch('/api/youtube/credentials/token', { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok || !data.success) {
+                    if (msg) { msg.style.color = '#f87171'; msg.textContent = '❌ ' + (data.error || ('HTTP ' + res.status)); }
+                    return;
+                }
+                if (msg) { msg.style.color = '#34d399'; msg.textContent = data.removed ? '✅ Cached token removed.' : 'ℹ No cached token to remove.'; }
+                refreshYouTubeCredentialStatus();
+            } catch (err) {
+                if (msg) { msg.style.color = '#f87171'; msg.textContent = '❌ ' + err.message; }
+            }
         }
 
         function closeApiKeysModal() {
@@ -7907,12 +8256,16 @@ Thank you for watching!`;
         }
 
         // ---------- Directory Browser ----------
-        function openDirBrowser() {
+        function openDirBrowser(targetInputId) {
             const modal = document.getElementById('dirBrowserModal');
             if (!modal) return;
+            // Remember which input the user is browsing for so dirBrowserSelect()
+            // can write back to the right field (main modal vs Process Script modal).
+            window._dirBrowserTargetInput = targetInputId || 'outputDirInput';
             modal.style.display = 'flex';
-            // Seed from current input value (or saved dir, or home)
-            const seed = (document.getElementById('outputDirInput').value || window.currentOutputDirBase || '').trim();
+            // Seed from the target input's current value, falling back to the saved dir.
+            const targetEl = document.getElementById(window._dirBrowserTargetInput);
+            const seed = ((targetEl && targetEl.value) || window.currentOutputDirBase || '').trim();
             dirBrowserGo(seed);
         }
 
@@ -7963,10 +8316,16 @@ Thank you for watching!`;
         function dirBrowserSelect() {
             const path = window._dirBrowserCurrent || document.getElementById('dirBrowserPath').value;
             if (!path) return;
-            const input = document.getElementById('outputDirInput');
+            const targetId = window._dirBrowserTargetInput || 'outputDirInput';
+            const input = document.getElementById(targetId);
             if (input) input.value = path;
             closeDirBrowser();
-            saveOutputDir();
+            // Only the main Output Directory modal auto-persists on select.
+            // The Process Script modal saves on Run instead, so we just write
+            // the value back and let the user click Run.
+            if (targetId === 'outputDirInput') {
+                saveOutputDir();
+            }
         }
 
         async function dirBrowserNewFolder() {
@@ -8737,6 +9096,1206 @@ Thank you for watching!`;
     </script>
 
     <!-- ============================================================
+         Script Processing modal — orchestrates the script pipeline
+         as discrete, skippable stages (mirrors YT Publish modal).
+         Phase 1: UI scaffold only. Run buttons are TODO placeholders
+         that will be wired to existing endpoints in Phase 2.
+         ============================================================ -->
+    <div id="scriptProcessingModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9997; align-items:flex-start; justify-content:center; overflow-y:auto; padding:30px 20px;">
+      <div style="background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:10px; max-width:980px; width:100%; padding:24px; box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <h3 style="margin:0;">⚙️ Process Script — Pipeline</h3>
+          <button onclick="closeScriptProcessingModal()" style="background:transparent; color:#94a3b8; border:none; font-size:24px; cursor:pointer;">×</button>
+        </div>
+        <p style="color:#94a3b8; font-size:0.85em; margin:0 0 14px 0;">Click any stage to expand. Every stage can be run or skipped independently — results still flow into the main GUI tabs.</p>
+
+        <!-- ===== Graphical Stepper ===== -->
+        <div id="spsStepper" style="display:flex; justify-content:space-between; align-items:center; gap:0; margin:8px 0 18px 0; padding:14px; background:#020617; border:1px solid #1e293b; border-radius:10px; flex-wrap:wrap;">
+          <!-- Injected by spsRenderStepper() -->
+        </div>
+
+        <!-- ===== Accordion ===== -->
+        <div id="spsAccordion" style="display:flex; flex-direction:column; gap:8px;">
+
+          <!-- Stage 1: Load Script -->
+          <div class="sps-stage" data-sps-stage="load" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="sps-stage-header" onclick="spsToggleStage('load')" style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span style="font-size:1.3em;">📁</span>
+              <strong style="flex:1;">Stage 1 — Load Script <span style="color:#f59e0b; font-size:0.75em; font-weight:500;">(required first)</span></strong>
+              <span class="sps-stage-status" data-sps-status="load" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="sps-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="sps-stage-body" data-sps-body="load" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">Load an existing <code>.md</code> / <code>.docx</code> script file. All other stages are disabled until a script is loaded. <br><span style="color:#cbd5e1;">Need a brand-new script? Close this dialog and use <strong>🚀 Create Script</strong> on the toolbar instead.</span></p>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" onclick="document.getElementById('fileInput').click()" style="background:#0ea5e9; color:#fff; border:none; padding:8px 14px; border-radius:5px; cursor:pointer; font-weight:600;">📂 Load Script File…</button>
+              </div>
+              <div data-sps-result="load" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 2: Script Flow -->
+          <div class="sps-stage" data-sps-stage="flow" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="sps-stage-header" onclick="spsToggleStage('flow')" style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span style="font-size:1.3em;">🔄</span>
+              <strong style="flex:1;">Stage 2 — Script Flow Quality</strong>
+              <span class="sps-stage-status" data-sps-status="flow" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="sps-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="sps-stage-body" data-sps-body="flow" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">Analyze chapter transitions, pacing, and narrative flow.</p>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              </div>
+              <div data-sps-result="flow" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 3: Shorten -->
+          <div class="sps-stage" data-sps-stage="shorten" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="sps-stage-header" onclick="spsToggleStage('shorten')" style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span style="font-size:1.3em;">✂️</span>
+              <strong style="flex:1;">Stage 3 — Shorten Script</strong>
+              <span class="sps-stage-status" data-sps-status="shorten" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="sps-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="sps-stage-body" data-sps-body="shorten" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">Condense Host: dialogue to match the requested video length.</p>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                <label style="color:#cbd5e1; font-size:0.85em;">Reduce by:</label>
+                <select id="spsShortenPercent" style="background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:4px; padding:5px 8px; font-size:0.85em;">
+                  <option value="10">−10%</option>
+                  <option value="20">−20%</option>
+                  <option value="25" selected>−25%</option>
+                  <option value="33">−33%</option>
+                  <option value="50">−50%</option>
+                  <option value="target">to video length</option>
+                </select>
+              </div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+                <label for="spsShortenOutputDir" style="color:#cbd5e1; font-size:0.85em; white-space:nowrap;">Save shortened script to:</label>
+                <input type="text" id="spsShortenOutputDir" placeholder="(blank = run output folder)" style="flex:1; min-width:240px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:4px; padding:6px 8px; font-size:0.85em;">
+                <button type="button" onclick="openDirBrowser('spsShortenOutputDir')" title="Browse folders" style="padding:6px 10px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; cursor:pointer; font-size:0.82em; white-space:nowrap;">📂 Browse…</button>
+              </div>
+              <p style="margin:6px 0 0 0; font-size:0.75em; color:#94a3b8;">Writes <code>{loaded-filename}_shortened.md</code> and <code>.docx</code> into this folder. Leave blank to save into the current run's output folder.</p>
+              <div data-sps-result="shorten" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 4: Hook & Summary -->
+          <div class="sps-stage" data-sps-stage="hook" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="sps-stage-header" onclick="spsToggleStage('hook')" style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span style="font-size:1.3em;">🎯</span>
+              <strong style="flex:1;">Stage 4 — Hook &amp; Summary</strong>
+              <span class="sps-stage-status" data-sps-status="hook" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="sps-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="sps-stage-body" data-sps-body="hook" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">Generate an attention-grabbing hook and a concise summary.</p>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              </div>
+              <div data-sps-result="hook" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 5: B-Roll Table -->
+          <div class="sps-stage" data-sps-stage="broll_table" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="sps-stage-header" onclick="spsToggleStage('broll_table')" style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span style="font-size:1.3em;">🎥</span>
+              <strong style="flex:1;">Stage 5 — B-Roll Table &amp; Shutterstock Links</strong>
+              <span class="sps-stage-status" data-sps-status="broll_table" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="sps-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="sps-stage-body" data-sps-body="broll_table" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">Build the B-Roll scene table with Shutterstock search links, or load an existing one.</p>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" onclick="loadBrollTableFromFile()" style="background:#334155; color:#e2e8f0; border:none; padding:8px 14px; border-radius:5px; cursor:pointer;">📂 Load Existing…</button>
+              </div>
+              <div data-sps-result="broll_table" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 6: B-Roll Images -->
+          <div class="sps-stage" data-sps-stage="broll_images" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="sps-stage-header" onclick="spsToggleStage('broll_images')" style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span style="font-size:1.3em;">🎨</span>
+              <strong style="flex:1;">Stage 6 — B-Roll Images</strong>
+              <span class="sps-stage-status" data-sps-status="broll_images" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="sps-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="sps-stage-body" data-sps-body="broll_images" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">Generate AI images for each B-Roll scene.</p>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              </div>
+              <div data-sps-result="broll_images" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 7: Grok Videos -->
+          <div class="sps-stage" data-sps-stage="grok" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="sps-stage-header" onclick="spsToggleStage('grok')" style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span style="font-size:1.3em;">🤖</span>
+              <strong style="flex:1;">Stage 7 — Grok Videos from B-Roll Table</strong>
+              <span class="sps-stage-status" data-sps-status="grok" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="sps-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="sps-stage-body" data-sps-body="grok" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">Generate AI videos with xAI Grok from your B-Roll scene descriptions.</p>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              </div>
+              <div data-sps-result="grok" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 8: HeyGen Script & Curl -->
+          <div class="sps-stage" data-sps-stage="heygen" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="sps-stage-header" onclick="spsToggleStage('heygen')" style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span style="font-size:1.3em;">🎬</span>
+              <strong style="flex:1;">Stage 8 — HeyGen Script &amp; Curl Commands</strong>
+              <span class="sps-stage-status" data-sps-status="heygen" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="sps-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="sps-stage-body" data-sps-body="heygen" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">Format script for HeyGen and generate curl commands. (Avatar / Template / Voice pickers move here in Phase 2.)</p>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" onclick="browseHeyGenTemplates()" style="background:#334155; color:#e2e8f0; border:none; padding:8px 14px; border-radius:5px; cursor:pointer;">📋 Browse Templates</button>
+                <button type="button" onclick="browseHeyGenVoices()" style="background:#334155; color:#e2e8f0; border:none; padding:8px 14px; border-radius:5px; cursor:pointer;">🎤 Browse Voices</button>
+              </div>
+              <div data-sps-result="heygen" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 9: Demo Scripts -->
+          <div class="sps-stage" data-sps-stage="demo" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="sps-stage-header" onclick="spsToggleStage('demo')" style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span style="font-size:1.3em;">🧪</span>
+              <strong style="flex:1;">Stage 9 — Demo Scripts</strong>
+              <span class="sps-stage-status" data-sps-status="demo" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="sps-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="sps-stage-body" data-sps-body="demo" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">Generate short demo / preview scripts.</p>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              </div>
+              <div data-sps-result="demo" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+        </div>
+
+        <div id="spsStatus" style="display:none; background:#020617; border:1px solid #334155; border-radius:6px; padding:10px; margin-top:12px; font-size:0.88em;"></div>
+
+        <!-- Output Directory override — defaults to the main GUI's saved dir; saving here updates the default. -->
+        <div style="display:flex; align-items:center; gap:8px; margin-top:14px; padding:10px 12px; background:#020617; border:1px solid #334155; border-radius:6px; flex-wrap:wrap;">
+          <label for="spsOutputDirInput" style="color:#94a3b8; font-size:0.82em; white-space:nowrap;">📁 Output Directory:</label>
+          <input id="spsOutputDirInput" type="text" placeholder="(uses main GUI default)" style="flex:1; min-width:240px; padding:6px 10px; background:#1e293b; border:1px solid #334155; border-radius:4px; color:#e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:0.82em;">
+          <button type="button" onclick="openDirBrowser('spsOutputDirInput')" style="padding:6px 10px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; cursor:pointer; font-size:0.82em; white-space:nowrap;" title="Browse folders — use ➕ New Folder… inside the browser to create one">📂 Browse…</button>
+          <span id="spsOutputDirHint" style="color:#64748b; font-size:0.75em;">Override here updates the default before running.</span>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:14px; flex-wrap:wrap;">
+          <span id="spsSelectedHint" style="color:#64748b; font-size:0.82em;">Select a stage above, then click <strong>Run</strong>.</span>
+          <div style="display:flex; gap:8px;">
+            <button onclick="closeScriptProcessingModal()" style="background:#334155; color:#e2e8f0; border:none; padding:8px 16px; border-radius:6px; cursor:pointer;">Cancel</button>
+            <button id="spsRunSelectedBtn" onclick="spsRunSelectedStage()" disabled style="background:#475569; color:#94a3b8; border:none; padding:8px 22px; border-radius:6px; cursor:not-allowed; font-weight:600;">Run</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    // ---- Script Processing pipeline state ----
+    window._spsStages = {
+      load:         { label: 'Load Script',                       icon: '📁', status: 'pending' },
+      flow:         { label: 'Script Flow Quality',               icon: '🔄', status: 'pending' },
+      shorten:      { label: 'Shorten Script',                    icon: '✂️', status: 'pending' },
+      hook:         { label: 'Hook & Summary',                    icon: '🎯', status: 'pending' },
+      broll_table:  { label: 'B-Roll Table & Shutterstock Links', icon: '🎥', status: 'pending' },
+      broll_images: { label: 'B-Roll Images',                     icon: '🎨', status: 'pending' },
+      grok:         { label: 'Grok Videos',                       icon: '🤖', status: 'pending' },
+      heygen:       { label: 'HeyGen Script & Curl Commands',     icon: '🎬', status: 'pending' },
+      demo:         { label: 'Demo Scripts',                      icon: '🧪', status: 'pending' },
+    };
+    const _SPS_ORDER = ['load','flow','shorten','hook','broll_table','broll_images','grok','heygen','demo'];
+
+    function _spsStatusColor(status) {
+      switch (status) {
+        case 'done':     return { bg:'#065f46', border:'#10b981', text:'#a7f3d0', label:'Done' };
+        case 'selected': return { bg:'#064e3b', border:'#10b981', text:'#a7f3d0', label:'Selected' };
+        case 'active':   return { bg:'#1e3a8a', border:'#3b82f6', text:'#bfdbfe', label:'Active' };
+        case 'skipped':  return { bg:'#1f2937', border:'#6b7280', text:'#d1d5db', label:'Skipped' };
+        case 'error':    return { bg:'#7f1d1d', border:'#ef4444', text:'#fecaca', label:'Error' };
+        default:         return { bg:'#0f172a', border:'#334155', text:'#64748b', label:'Pending' };
+      }
+    }
+
+    function spsRenderStepper() {
+      const wrap = document.getElementById('spsStepper');
+      if (!wrap) return;
+      wrap.innerHTML = '';
+      // A checked stage that isn't already done/active/error/skipped is shown
+      // as "selected" (green) so the workflow graphic reflects the user's
+      // intent before they press Run.
+      const effectiveStatus = (key) => {
+        const real = window._spsStages[key].status;
+        if (real === 'pending' && window._spsChecked && window._spsChecked.has(key)) return 'selected';
+        return real;
+      };
+      _SPS_ORDER.forEach((key, idx) => {
+        const stage = window._spsStages[key];
+        const c = _spsStatusColor(effectiveStatus(key));
+        const shape = document.createElement('button');
+        shape.type = 'button';
+        shape.onclick = () => spsJumpToStage(key);
+        shape.title = 'Step ' + (idx+1) + ': ' + stage.label + ' (' + c.label + ')';
+        shape.setAttribute('aria-label', shape.title);
+        shape.style.cssText = [
+          'position:relative; display:flex; align-items:center; justify-content:center;',
+          'background:' + c.bg + '; border:3px solid ' + c.border + '; color:' + c.text + ';',
+          'border-radius:50%; width:78px; height:78px; cursor:pointer; padding:0;',
+          'transition:transform 0.15s, box-shadow 0.15s; box-shadow:0 2px 8px rgba(0,0,0,0.3);',
+          'flex-shrink:0; margin:4px 0;',
+        ].join('');
+        shape.onmouseenter = () => { shape.style.transform = 'scale(1.1)'; };
+        shape.onmouseleave = () => { shape.style.transform = 'scale(1.0)'; };
+        shape.innerHTML =
+          '<div style="font-size:1.9em; line-height:1;">' + stage.icon + '</div>'
+          + '<div style="position:absolute; top:-6px; right:-6px; background:' + c.border
+          + '; color:#0f172a; width:22px; height:22px; border-radius:50%;'
+          + ' display:flex; align-items:center; justify-content:center; font-weight:700;'
+          + ' font-size:0.75em; border:2px solid ' + c.bg + ';">' + (idx+1) + '</div>';
+        wrap.appendChild(shape);
+
+        if (idx < _SPS_ORDER.length - 1) {
+          const arrow = document.createElement('div');
+          const nextC = _spsStatusColor(effectiveStatus(_SPS_ORDER[idx+1]));
+          arrow.style.cssText = 'flex:1; height:3px; min-width:14px; margin:0 4px; border-radius:2px;'
+                              + 'background:linear-gradient(90deg,' + c.border + ',' + nextC.border + ');';
+          wrap.appendChild(arrow);
+        }
+      });
+    }
+
+    function spsSetStageStatus(key, status) {
+      if (!window._spsStages[key]) return;
+      window._spsStages[key].status = status;
+      spsRenderStepper();
+      const badge = document.querySelector('[data-sps-status="' + key + '"]');
+      if (badge) {
+        const c = _spsStatusColor(status);
+        badge.textContent = c.label;
+        badge.style.color = c.text;
+      }
+    }
+
+    // Track the currently expanded stage (for UI only) and the set of
+    // user-checked stages that will run when Run is pressed.
+    window._spsSelectedStage = null;
+    window._spsChecked = new Set();
+
+    function spsToggleStageChecked(key, ev) {
+      if (ev) ev.stopPropagation();
+      const cb = document.querySelector('input[data-sps-check="' + key + '"]');
+      const checked = !!(cb && cb.checked);
+      if (checked) window._spsChecked.add(key); else window._spsChecked.delete(key);
+      spsRenderStepper();
+      // Also refresh the per-stage status badge so a checked-but-not-yet-run
+      // stage shows "Selected" in its header.
+      _SPS_ORDER.forEach(k => {
+        const badge = document.querySelector('[data-sps-status="' + k + '"]');
+        if (!badge) return;
+        const real = window._spsStages[k].status;
+        const eff = (real === 'pending' && window._spsChecked.has(k)) ? 'selected' : real;
+        const c = _spsStatusColor(eff);
+        badge.textContent = c.label;
+        badge.style.color = c.text;
+      });
+      spsUpdateRunFooter();
+    }
+
+    function spsToggleStage(key) {
+      const body = document.querySelector('[data-sps-body="' + key + '"]');
+      const stage = document.querySelector('[data-sps-stage="' + key + '"]');
+      if (!body || !stage) return;
+      const isOpen = body.style.display !== 'none';
+      if (isOpen) {
+        body.style.display = 'none';
+        const caret = stage.querySelector('.sps-stage-caret');
+        if (caret) caret.textContent = '▸';
+        if (window._spsSelectedStage === key) window._spsSelectedStage = null;
+      } else {
+        document.querySelectorAll('#spsAccordion [data-sps-body]').forEach(b => {
+          if (b !== body && b.style.display !== 'none') {
+            b.style.display = 'none';
+            const otherStage = b.closest('.sps-stage');
+            const otherCaret = otherStage && otherStage.querySelector('.sps-stage-caret');
+            if (otherCaret) otherCaret.textContent = '▸';
+          }
+        });
+        body.style.display = 'block';
+        const caret = stage.querySelector('.sps-stage-caret');
+        if (caret) caret.textContent = '▾';
+        window._spsSelectedStage = key;
+      }
+      spsUpdateRunFooter();
+    }
+
+    function spsUpdateRunFooter() {
+      const btn = document.getElementById('spsRunSelectedBtn');
+      const hint = document.getElementById('spsSelectedHint');
+      if (!btn || !hint) return;
+      btn.textContent = 'Run';
+      const checkedList = _SPS_ORDER.filter(k => window._spsChecked.has(k));
+      const needScript = checkedList.some(k => k !== 'load');
+      if (checkedList.length === 0) {
+        btn.disabled = true;
+        btn.style.background = '#475569';
+        btn.style.color = '#94a3b8';
+        btn.style.cursor = 'not-allowed';
+        hint.innerHTML = 'Check one or more stages above, then click <strong>Run</strong>.';
+        return;
+      }
+      if (needScript && !spsIsScriptLoaded()) {
+        btn.disabled = true;
+        btn.style.background = '#475569';
+        btn.style.color = '#94a3b8';
+        btn.style.cursor = 'not-allowed';
+        hint.innerHTML = '<span style="color:#f59e0b;">⚠️ Load a script (Stage 1) before running these stages.</span>';
+        return;
+      }
+      btn.disabled = false;
+      btn.style.background = '#10b981';
+      btn.style.color = '#fff';
+      btn.style.cursor = 'pointer';
+      const labels = checkedList.map(k => (window._spsStages[k] && window._spsStages[k].label) || k);
+      hint.innerHTML = 'Selected (' + checkedList.length + '): <strong>' + labels.join(' → ') + '</strong>';
+    }
+
+    // Map Process Script stage keys -> legacy checkbox element IDs that
+    // processExistingScript() reads. The legacy checkboxes still exist in the
+    // DOM (hidden) so we just toggle them, then delegate to the existing
+    // /process-script flow which handles SSE + result rendering for us.
+    const _SPS_STAGE_TO_LEGACY = {
+      flow:         ['checkFlowAnalysis'],
+      shorten:      ['checkShortenScript'],
+      hook:         ['checkHookSummary'],
+      broll_table:  ['checkBRollTable'],
+      broll_images: ['checkBRollTable', 'checkBRollImages'],
+      grok:         ['checkGrokVideos'],
+      heygen:       ['checkHeyGenReady'],
+      demo:         ['checkDemoScript'],
+    };
+
+    // Run all checked stages, in pipeline order. Closes the modal and shows
+    // progress in the main GUI log via the existing processExistingScript()
+    // pipeline (which already handles SSE + tab rendering).
+    function spsRunSelectedStage() {
+      const checkedList = _SPS_ORDER.filter(k => k !== 'load' && window._spsChecked.has(k));
+      if (checkedList.length === 0) return;
+      if (!spsIsScriptLoaded()) {
+        spsUpdateRunFooter();
+        return;
+      }
+
+      // If the user changed the Output Directory in the modal, persist it
+      // as the new default BEFORE kicking off the pipeline. We block on the
+      // save so downstream stages see the updated path.
+      const odi = document.getElementById('spsOutputDirInput');
+      const newDir = odi ? (odi.value || '').trim() : '';
+      const origDir = odi ? (odi.dataset.spsOriginal || '') : '';
+      const needsSave = !!odi && newDir !== origDir;
+
+      const proceed = () => _spsRunSelectedStageInner(checkedList);
+
+      if (!needsSave) { proceed(); return; }
+
+      const hint = document.getElementById('spsOutputDirHint');
+      if (hint) { hint.textContent = '💾 Saving output directory…'; hint.style.color = '#94a3b8'; }
+      fetch('/api/output-dir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ output_dir: newDir }),
+      }).then(r => r.json()).then(data => {
+        if (!data || !data.success) {
+          if (hint) { hint.textContent = '❌ Save failed: ' + ((data && data.error) || 'unknown'); hint.style.color = '#f87171'; }
+          return;
+        }
+        window.currentOutputDirBase = data.output_dir || '';
+        window._outputDirUserPath = data.output_dir || '';
+        if (typeof refreshOutputDirPreview === 'function') refreshOutputDirPreview();
+        if (odi) odi.dataset.spsOriginal = data.output_dir || '';
+        if (hint) { hint.textContent = '✅ Saved as default: ' + (data.output_dir || '(cleared)'); hint.style.color = '#34d399'; }
+        proceed();
+      }).catch(err => {
+        if (hint) { hint.textContent = '❌ Save failed: ' + (err && err.message ? err.message : err); hint.style.color = '#f87171'; }
+      });
+    }
+
+    function _spsRunSelectedStageInner(checkedList) {
+      // Make sure #scriptInput is populated for processExistingScript(), which
+      // reads its value. If the script came from Create Script it lives in
+      // window.currentScript; copy it across.
+      const ta = document.getElementById('scriptInput');
+      if (ta && (!ta.value || !ta.value.trim()) && typeof window.currentScript === 'string' && window.currentScript.trim()) {
+        ta.value = window.currentScript;
+      }
+
+      // Reset all legacy stage checkboxes, then set the ones the user picked.
+      const allLegacy = ['checkFlowAnalysis','checkHookSummary','checkShortenScript','checkBRollTable','checkBRollImages','checkGrokVideos','checkHeyGenReady','checkDemoScript','checkYouTubeDetails','checkThumbnails'];
+      allLegacy.forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
+      checkedList.forEach(key => {
+        (_SPS_STAGE_TO_LEGACY[key] || []).forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.checked = true;
+        });
+      });
+
+      // Propagate Shorten % from the modal control to the legacy control.
+      if (window._spsChecked.has('shorten')) {
+        const src = document.getElementById('spsShortenPercent');
+        const dst = document.getElementById('shortenPercent');
+        if (src && dst) dst.value = src.value;
+      }
+
+      // Mark all selected stages active in the stepper.
+      checkedList.forEach(key => spsSetStageStatus(key, 'active'));
+
+      closeScriptProcessingModal();
+      if (typeof addProgressMessage === 'function') {
+        addProgressMessage('▶ Running ' + checkedList.length + ' stage(s): ' + checkedList.map(k => (window._spsStages[k] && window._spsStages[k].label) || k).join(', '), 'info');
+      }
+
+      // Delegate to the existing pipeline (handles fetch /process-script + SSE
+      // + result tabs). Errors mark all active stages as error.
+      try {
+        const p = (typeof processExistingScript === 'function') ? processExistingScript() : null;
+        if (p && typeof p.then === 'function') {
+          p.catch(e => {
+            if (typeof addProgressMessage === 'function') addProgressMessage('❌ Processing failed: ' + (e && e.message ? e.message : e), 'error');
+            checkedList.forEach(key => spsSetStageStatus(key, 'error'));
+          });
+        }
+      } catch (e) {
+        if (typeof addProgressMessage === 'function') addProgressMessage('❌ Processing failed to start: ' + (e && e.message ? e.message : e), 'error');
+        checkedList.forEach(key => spsSetStageStatus(key, 'error'));
+      }
+    }
+
+    function spsJumpToStage(key) {
+      const body = document.querySelector('[data-sps-body="' + key + '"]');
+      const stage = document.querySelector('[data-sps-stage="' + key + '"]');
+      if (!body || !stage) return;
+      if (body.style.display === 'none') spsToggleStage(key);
+      stage.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function spsSkipStage(key) {
+      spsSetStageStatus(key, 'skipped');
+      const res = document.querySelector('[data-sps-result="' + key + '"]');
+      if (res) {
+        res.style.display = 'block';
+        res.style.color = '#94a3b8';
+        res.textContent = '⏭ Skipped.';
+      }
+    }
+
+    function spsTodo(key, action) {
+      if (key !== 'load' && !spsIsScriptLoaded()) {
+        const res = document.querySelector('[data-sps-result="' + key + '"]');
+        if (res) {
+          res.style.display = 'block';
+          res.style.color = '#ef4444';
+          res.textContent = '⚠️ Load a script first (Stage 1) before running this stage.';
+        }
+        spsJumpToStage('load');
+        return;
+      }
+      const res = document.querySelector('[data-sps-result="' + key + '"]');
+      if (res) {
+        res.style.display = 'block';
+        res.style.color = '#f59e0b';
+        res.textContent = '🚧 Phase 2 — will wire "' + action + '" to existing endpoint for stage "' + key + '".';
+      }
+    }
+
+    // True iff a script has been loaded. We accept multiple signals because
+    // scripts can arrive via several paths (file picker, /api/extract-docx,
+    // /create, Load Existing buttons): an explicit window._spsScriptLoaded
+    // flag, the hidden compat-shim textarea, OR the load-stage status flag.
+    function spsIsScriptLoaded() {
+      if (window._spsScriptLoaded === true) return true;
+      if (typeof window.currentScript === 'string' && window.currentScript.trim().length > 0) return true;
+      const ta = document.getElementById('scriptInput');
+      if (ta && ta.value && ta.value.trim().length > 0) return true;
+      if (window._spsStages && window._spsStages.load && window._spsStages.load.status === 'done') return true;
+      return false;
+    }
+
+    // Reflect script-loaded state in Stage 1 + the stepper. Call this whenever
+    // #scriptInput changes (loadFile, drag-drop, manual paste).
+    function spsRefreshLoadStatus() {
+      const loaded = spsIsScriptLoaded();
+      const res = document.querySelector('[data-sps-result="load"]');
+      if (loaded) {
+        spsSetStageStatus('load', 'done');
+        if (res) {
+          res.style.display = 'block';
+          res.style.color = '#10b981';
+          const ta = document.getElementById('scriptInput');
+          const txt = (ta && ta.value) || (window.currentScript || '');
+          const words = (txt.match(/\S+/g) || []).length;
+          // Host-only word count drives the runtime estimate, matching the
+          // shorten agent's target (150 wpm against Host: dialogue only).
+          const hostBlocks = txt.match(/(?:^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*([\s\S]*?)(?=\n\s*(?:#{1,6}\s+\S|(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|chapter\s+\d|visual\s+cue\s*:|b-?roll\s*:)|---+|===+)|$)/gi) || [];
+          let hostWords = 0;
+          hostBlocks.forEach(b => { hostWords += (b.replace(/^[^:]*:/, '').match(/\S+/g) || []).length; });
+          const wpm = 150;
+          const mins = hostWords / wpm;
+          const m = Math.floor(mins);
+          const s = Math.round((mins - m) * 60);
+          const dur = hostWords > 0
+            ? (m + 'm ' + (s < 10 ? '0' : '') + s + 's')
+            : '—';
+          res.innerHTML = '✅ Script loaded — '
+            + '<strong>' + words.toLocaleString() + '</strong> total words · '
+            + '<strong>' + hostWords.toLocaleString() + '</strong> Host words · '
+            + 'est. runtime <strong>' + dur + '</strong> @ ' + wpm + ' wpm';
+        }
+      } else {
+        spsSetStageStatus('load', 'pending');
+        if (res) res.style.display = 'none';
+      }
+      if (typeof spsUpdateRunFooter === 'function') spsUpdateRunFooter();
+    }
+
+    function openScriptProcessingModal() {
+      const m = document.getElementById('scriptProcessingModal');
+      if (!m) return;
+      m.style.display = 'flex';
+      spsRefreshLoadStatus();
+      spsRenderStepper();
+      // Populate the Output Directory override with the current default
+      // (from the main GUI). User can change it here; on Run we POST the
+      // override to /api/output-dir so it becomes the new default.
+      (async () => {
+        const odi = document.getElementById('spsOutputDirInput');
+        if (!odi) return;
+        let cur = (window.currentOutputDirBase || '').trim();
+        if (!cur) {
+          try {
+            const resp = await fetch('/api/output-dir');
+            const data = await resp.json();
+            if (data && data.success) cur = (data.output_dir || '').trim();
+          } catch (_) { /* ignore */ }
+        }
+        odi.value = cur;
+        odi.dataset.spsOriginal = cur;
+      })();
+      // Always open Stage 1 first if no script is loaded; otherwise open the
+      // first non-done stage.
+      const target = spsIsScriptLoaded()
+        ? (_SPS_ORDER.find(k => window._spsStages[k].status === 'pending') || 'flow')
+        : 'load';
+      const body = document.querySelector('[data-sps-body="' + target + '"]');
+      if (body && body.style.display === 'none') spsToggleStage(target);
+      spsInjectStageCheckboxes();
+      spsUpdateRunFooter();
+    }
+
+    // Inject a checkbox at the start of every stage header so the user can
+    // select multiple stages to run in one click. Idempotent — only inserts
+    // once per stage.
+    function spsInjectStageCheckboxes() {
+      _SPS_ORDER.forEach(key => {
+        // Stage 1 (load) is performed via its own "Load Script File…" button —
+        // there is nothing to "run" via the footer for it, so don't show a
+        // checkbox at all. The other stages require an explicit checkbox.
+        if (key === 'load') return;
+        const stage = document.querySelector('[data-sps-stage="' + key + '"]');
+        if (!stage) return;
+        const header = stage.querySelector('.sps-stage-header');
+        if (!header) return;
+        if (header.querySelector('input[data-sps-check]')) return; // already injected
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.setAttribute('data-sps-check', key);
+        cb.checked = window._spsChecked.has(key);
+        cb.style.cssText = 'margin:0 4px 0 0; width:18px; height:18px; cursor:pointer; accent-color:#10b981;';
+        cb.title = 'Select this stage to run';
+        cb.addEventListener('click', (ev) => spsToggleStageChecked(key, ev));
+        header.insertBefore(cb, header.firstChild);
+      });
+    }
+
+    function closeScriptProcessingModal() {
+      const m = document.getElementById('scriptProcessingModal');
+      if (m) m.style.display = 'none';
+    }
+
+    // ---- Workflow cancel button: auto show/hide based on whether a
+    // script-creation / script-processing session is currently active.
+    // Hooks into window.currentProcessingSessionId via a property setter so
+    // every existing assignment site (there are many) toggles the button
+    // without per-site edits.
+    (function installWorkflowCancelObserver(){
+      try {
+        let _sid = null;
+        Object.defineProperty(window, 'currentProcessingSessionId', {
+          configurable: true,
+          get(){ return _sid; },
+          set(v){
+            _sid = v;
+            const btn = document.getElementById('cancelWorkflowBtn');
+            if (!btn) return;
+            if (v) {
+              btn.style.display = 'inline-block';
+              btn.disabled = false;
+              btn.textContent = '🛑 Cancel Script Creation';
+            } else {
+              btn.style.display = 'none';
+            }
+          },
+        });
+      } catch (e) {
+        console.warn('Could not install currentProcessingSessionId observer:', e);
+      }
+    })();
+
+    async function cancelWorkflow() {
+      const sid = window.currentProcessingSessionId;
+      if (!sid) return;
+      if (!confirm('Cancel script creation and kill all running agents?\n\n(Any LLM call already in flight will finish its current request; cancel takes effect at the next step.)')) return;
+      const btn = document.getElementById('cancelWorkflowBtn');
+      if (btn) { btn.disabled = true; btn.textContent = '🛑 Cancelling…'; }
+      try {
+        const r = await fetch('/api/cancel-workflow/' + encodeURIComponent(sid), { method: 'POST' });
+        const j = await r.json().catch(() => ({}));
+        if (typeof addProgressMessage === 'function') {
+          addProgressMessage(
+            j && j.success
+              ? '🛑 Cancel signal sent — agents will stop at next await point.'
+              : ('⚠️ Cancel request failed: ' + (j.error || 'unknown')),
+            j && j.success ? 'info' : 'error'
+          );
+        }
+      } catch (e) {
+        console.error('cancelWorkflow fetch failed', e);
+        if (typeof addProgressMessage === 'function') {
+          addProgressMessage('❌ Cancel request error: ' + e.message, 'error');
+        }
+      }
+      // UI cleanup happens when the SSE stream emits its terminal message
+      // and clears window.currentProcessingSessionId (which hides the button).
+    }
+    </script>
+
+    <!-- ============================================================
+         YouTube Pipeline modal — orchestrates the full flow:
+         render audio → transcribe → generate YT details → publish
+         Graphical stepper + accordion design.
+         ============================================================ -->
+    <div id="youtubePipelineModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9998; align-items:flex-start; justify-content:center; overflow-y:auto; padding:30px 20px;">
+      <div style="background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:10px; max-width:900px; width:100%; padding:24px; box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <h3 style="margin:0;">🚀 Publish to YouTube — Pipeline</h3>
+          <button onclick="closeYouTubePipelineModal()" style="background:transparent; color:#94a3b8; border:none; font-size:24px; cursor:pointer;">×</button>
+        </div>
+        <p style="color:#94a3b8; font-size:0.85em; margin:0 0 14px 0;">Click any stage shape to jump to that step. Stages are independent — skip any you don't need.</p>
+
+        <!-- ===== Graphical Stepper ===== -->
+        <div id="ytpStepper" style="display:flex; justify-content:space-between; align-items:center; gap:0; margin:8px 0 18px 0; padding:14px; background:#020617; border:1px solid #1e293b; border-radius:10px;">
+          <!-- Stages get injected by JS so we can rebuild status dynamically -->
+        </div>
+
+        <!-- ===== Output Directory (shared) ===== -->
+        <div style="background:#1e293b; padding:10px 12px; border-radius:6px; border:1px solid #334155; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+          <span style="font-size:1.1em;">📂</span>
+          <strong style="font-size:0.9em;">Output Directory</strong>
+          <input type="text" id="ytpOutputDir" placeholder="(current output dir if blank)"
+                 style="flex:1; padding:5px 8px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:4px; font-size:0.85em;">
+          <button type="button" onclick="ytpBrowseOutputDir()"
+                  style="background:#334155; color:#e2e8f0; border:none; padding:5px 10px; border-radius:4px; cursor:pointer; font-size:0.82em;">Browse…</button>
+        </div>
+
+        <!-- ===== Accordion ===== -->
+        <div id="ytpAccordion" style="display:flex; flex-direction:column; gap:8px;">
+
+          <!-- Stage 1: Render Audio -->
+          <div class="ytp-stage" data-stage="render" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="ytp-stage-header" onclick="ytpToggleStage('render')"
+                 style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span class="ytp-stage-icon" style="font-size:1.3em;">🎵</span>
+              <strong style="flex:1;">Stage 1 — Render Audio from DaVinci Resolve</strong>
+              <span class="ytp-stage-status" data-status="render" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="ytp-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="ytp-stage-body" data-body="render" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">
+                Render audio-only WAV from a Resolve timeline. Skip this if you already have an audio or video file.
+              </p>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <button type="button" onclick="openRenderAudioModal()"
+                        style="background:#0ea5e9; color:#fff; border:none; padding:8px 14px; border-radius:5px; cursor:pointer; font-weight:600;">
+                  🎵 Open Render Audio Tool…
+                </button>
+                <span style="color:#64748b; font-size:0.82em;">or skip — point Stage 2 at an existing file.</span>
+              </div>
+              <div id="ytpRenderResult" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 2: Transcribe -->
+          <div class="ytp-stage" data-stage="transcribe" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="ytp-stage-header" onclick="ytpToggleStage('transcribe')"
+                 style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span class="ytp-stage-icon" style="font-size:1.3em;">🎙️</span>
+              <strong style="flex:1;">Stage 2 — Transcribe Audio (Whisper)</strong>
+              <span class="ytp-stage-status" data-status="transcribe" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="ytp-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="ytp-stage-body" data-body="transcribe" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">
+                Produce a timestamped transcript (the key to accurate YouTube chapter markers).
+              </p>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <button type="button" onclick="openTranscribeAudioModal()"
+                        style="background:linear-gradient(135deg,#a855f7,#7c3aed); color:#fff; border:none; padding:8px 14px; border-radius:5px; cursor:pointer; font-weight:600;">
+                  🎙️ Open Transcribe Tool…
+                </button>
+                <span style="color:#64748b; font-size:0.82em;">or skip — point Stage 3 at an existing transcript.</span>
+              </div>
+              <div id="ytpTranscribeResult" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 3: Generate YouTube Details -->
+          <div class="ytp-stage" data-stage="details" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="ytp-stage-header" onclick="ytpToggleStage('details')"
+                 style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span class="ytp-stage-icon" style="font-size:1.3em;">📺</span>
+              <strong style="flex:1;">Stage 3 — Generate YouTube Details</strong>
+              <span class="ytp-stage-status" data-status="details" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="ytp-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="ytp-stage-body" data-body="details" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">
+                Generate the YouTube details (title, description, tags, chapters) from a timestamped transcript. Chapters use real timestamps.
+              </p>
+
+              <div style="display:flex; flex-direction:column; gap:8px;">
+                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:0.88em;">
+                  <input type="radio" name="ytpDetailsSrc" value="loaded" id="ytpDetailsLoaded" onchange="ytpOnDetailsSrcChange()">
+                  <span><strong>Use already-loaded</strong> details — <span id="ytpLoadedStatus" style="color:#64748b;">none loaded yet.</span></span>
+                </label>
+                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:0.88em;">
+                  <input type="radio" name="ytpDetailsSrc" value="file" onchange="ytpOnDetailsSrcChange()">
+                  <span><strong>Load existing</strong> .md / .docx
+                    <button type="button" onclick="event.preventDefault(); ytpLoadFromFile()"
+                            style="margin-left:6px; background:#334155; color:#e2e8f0; border:none; padding:3px 8px; border-radius:4px; cursor:pointer; font-size:0.8em;">📂 Choose…</button>
+                  </span>
+                </label>
+                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:0.88em;">
+                  <input type="radio" name="ytpDetailsSrc" value="transcript" onchange="ytpOnDetailsSrcChange()" checked>
+                  <span><strong>Generate from transcript</strong> (recommended)</span>
+                </label>
+              </div>
+
+              <div id="ytpGenSection" style="margin-top:10px; padding:10px; background:#0f172a; border:1px solid #334155; border-radius:5px;">
+                <div style="display:flex; gap:6px; margin-bottom:6px;">
+                  <input type="text" id="ytpTranscriptPath" placeholder="/path/to/transcript.md"
+                         style="flex:1; padding:6px 8px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:4px; font-size:0.85em;">
+                  <button type="button" onclick="ytpBrowseTranscript()"
+                          style="background:#334155; color:#e2e8f0; border:none; padding:6px 10px; border-radius:4px; cursor:pointer; font-size:0.82em;">Browse…</button>
+                </div>
+                <input type="text" id="ytpScriptTitle" placeholder="Video title"
+                       style="width:100%; padding:6px 8px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:4px; font-size:0.85em; margin-bottom:6px; box-sizing:border-box;">
+                <button type="button" onclick="ytpGenerateFromTranscript()" id="ytpGenerateBtn"
+                        style="background:#1d4ed8; color:#fff; border:none; padding:8px 14px; border-radius:4px; cursor:pointer; font-weight:600;">
+                  🤖 Generate YouTube Details
+                </button>
+              </div>
+              <div id="ytpDetailsResult" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
+            </div>
+          </div>
+
+          <!-- Stage 4: Publish -->
+          <div class="ytp-stage" data-stage="publish" style="background:#1e293b; border:1px solid #334155; border-radius:8px; overflow:hidden;">
+            <div class="ytp-stage-header" onclick="ytpToggleStage('publish')"
+                 style="display:flex; align-items:center; gap:10px; padding:10px 14px; cursor:pointer; user-select:none;">
+              <span class="ytp-stage-icon" style="font-size:1.3em;">🚀</span>
+              <strong style="flex:1;">Stage 4 — Publish to YouTube</strong>
+              <span class="ytp-stage-status" data-status="publish" style="font-size:0.8em; color:#64748b;">Pending</span>
+              <span class="ytp-stage-caret" style="color:#64748b;">▸</span>
+            </div>
+            <div class="ytp-stage-body" data-body="publish" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">
+                Final step — pick the video file, SRT (optional), thumbnail (optional), and publish.
+              </p>
+              <button type="button" onclick="ytpProceedToPublish()" id="ytpOpenPublishBtn"
+                      style="background:#dc2626; color:#fff; border:none; padding:10px 18px; border-radius:5px; cursor:pointer; font-weight:600; font-size:0.95em;">
+                🚀 Open Publish Dialog →
+              </button>
+              <div id="ytpPublishHint" style="margin-top:8px; font-size:0.82em; color:#f59e0b; display:none;">
+                ⚠️ No YouTube details loaded yet — finish Stage 3 first.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Global status -->
+        <div id="ytpStatus" style="display:none; background:#020617; border:1px solid #334155; border-radius:6px; padding:10px; margin-top:12px; font-size:0.88em;"></div>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+          <button onclick="closeYouTubePipelineModal()"
+                  style="background:#334155; color:#e2e8f0; border:none; padding:8px 16px; border-radius:6px; cursor:pointer;">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    // ---- Pipeline stage state ----
+    window._ytpStages = {
+      render:     { label: 'Render Audio from DaVinci Resolve', icon: '🎵', status: 'pending' },
+      transcribe: { label: 'Transcribe Audio with Whisper',     icon: '🎙️', status: 'pending' },
+      details:    { label: 'Generate Youtube Details',          icon: '📺', status: 'pending' },
+      publish:    { label: 'Publish to YouTube',                icon: '🚀', status: 'pending' },
+    };
+    const _YTP_ORDER = ['render', 'transcribe', 'details', 'publish'];
+
+    function _ytpStatusColor(status) {
+      switch (status) {
+        case 'done':    return { bg:'#065f46', border:'#10b981', text:'#a7f3d0', label:'Complete' };
+        case 'active':  return { bg:'#1e3a8a', border:'#3b82f6', text:'#bfdbfe', label:'Active' };
+        case 'error':   return { bg:'#7f1d1d', border:'#ef4444', text:'#fecaca', label:'Error' };
+        default:        return { bg:'#0f172a', border:'#334155', text:'#64748b', label:'Pending' };
+      }
+    }
+
+    function ytpRenderStepper() {
+      const wrap = document.getElementById('ytpStepper');
+      if (!wrap) return;
+      wrap.innerHTML = '';
+      _YTP_ORDER.forEach((key, idx) => {
+        const stage = window._ytpStages[key];
+        const c = _ytpStatusColor(stage.status);
+
+        const shape = document.createElement('button');
+        shape.type = 'button';
+        shape.onclick = () => { ytpJumpToStage(key); };
+        shape.title = 'Step ' + (idx+1) + ': ' + stage.label + ' (' + c.label + ')';
+        shape.setAttribute('aria-label', shape.title);
+        shape.style.cssText = [
+          'position:relative; display:flex; align-items:center; justify-content:center;',
+          'background:' + c.bg + '; border:3px solid ' + c.border + '; color:' + c.text + ';',
+          'border-radius:50%; width:110px; height:110px; cursor:pointer; padding:0;',
+          'transition:transform 0.15s, box-shadow 0.15s; box-shadow:0 2px 8px rgba(0,0,0,0.3);',
+          'flex-shrink:0;',
+        ].join('');
+        shape.onmouseenter = () => {
+          shape.style.transform = 'scale(1.1)';
+          shape.style.boxShadow = '0 4px 16px rgba(0,0,0,0.5)';
+        };
+        shape.onmouseleave = () => {
+          shape.style.transform = 'scale(1.0)';
+          shape.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+        };
+        shape.innerHTML =
+          '<div style="font-size:3em; line-height:1;">' + stage.icon + '</div>'
+          + '<div style="position:absolute; top:-8px; right:-8px; background:' + c.border
+          + '; color:#0f172a; width:26px; height:26px; border-radius:50%;'
+          + ' display:flex; align-items:center; justify-content:center; font-weight:700;'
+          + ' font-size:0.85em; border:2px solid ' + c.bg + ';">' + (idx+1) + '</div>';
+        wrap.appendChild(shape);
+
+        if (idx < _YTP_ORDER.length - 1) {
+          const arrow = document.createElement('div');
+          arrow.style.cssText = 'flex:1; height:3px; background:linear-gradient(90deg,'
+                              + c.border + ',' + _ytpStatusColor(window._ytpStages[_YTP_ORDER[idx+1]].status).border + ');'
+                              + 'margin:0 6px; border-radius:2px; min-width:20px;';
+          wrap.appendChild(arrow);
+        }
+      });
+    }
+
+    function ytpSetStageStatus(key, status) {
+      if (!window._ytpStages[key]) return;
+      window._ytpStages[key].status = status;
+      ytpRenderStepper();
+      // Also update the inline accordion status badge
+      const badge = document.querySelector('[data-status="' + key + '"]');
+      if (badge) {
+        const c = _ytpStatusColor(status);
+        badge.textContent = c.label;
+        badge.style.color = c.text;
+      }
+    }
+
+    function ytpToggleStage(key) {
+      const body = document.querySelector('[data-body="' + key + '"]');
+      const stage = document.querySelector('[data-stage="' + key + '"]');
+      if (!body || !stage) return;
+      const caret = stage.querySelector('.ytp-stage-caret');
+      const isOpen = body.style.display !== 'none';
+      if (isOpen) {
+        body.style.display = 'none';
+        if (caret) caret.textContent = '▸';
+      } else {
+        body.style.display = 'block';
+        if (caret) caret.textContent = '▾';
+      }
+    }
+
+    function ytpJumpToStage(key) {
+      // Collapse all, expand the target, scroll into view
+      _YTP_ORDER.forEach(k => {
+        const body = document.querySelector('[data-body="' + k + '"]');
+        const stage = document.querySelector('[data-stage="' + k + '"]');
+        if (!body || !stage) return;
+        const caret = stage.querySelector('.ytp-stage-caret');
+        if (k === key) {
+          body.style.display = 'block';
+          if (caret) caret.textContent = '▾';
+          setTimeout(() => stage.scrollIntoView({ behavior:'smooth', block:'center' }), 50);
+        } else {
+          body.style.display = 'none';
+          if (caret) caret.textContent = '▸';
+        }
+      });
+    }
+
+    function openYouTubePipelineModal() {
+      const m = document.getElementById('youtubePipelineModal');
+      if (!m) return;
+      // Refresh "already loaded" status for stage 3
+      const loaded = !!(window._currentYoutubeDetails && window._currentYoutubeDetails.trim());
+      const st = document.getElementById('ytpLoadedStatus');
+      const loadedRadio = document.getElementById('ytpDetailsLoaded');
+      if (loaded) {
+        st.textContent = '✓ Already loaded.';
+        st.style.color = '#10b981';
+        if (loadedRadio) { loadedRadio.disabled = false; loadedRadio.checked = true; }
+        ytpSetStageStatus('details', 'done');
+      } else {
+        st.textContent = 'none loaded yet.';
+        st.style.color = '#64748b';
+        if (loadedRadio) { loadedRadio.disabled = true; }
+        const tRadio = document.querySelector('input[name="ytpDetailsSrc"][value="transcript"]');
+        if (tRadio) tRadio.checked = true;
+      }
+
+      // Auto-detect prior pipeline state from globals
+      if (window._lastRenderedAudioFile) {
+        ytpSetStageStatus('render', 'done');
+        const rr = document.getElementById('ytpRenderResult');
+        if (rr) { rr.style.display = 'block'; rr.textContent = '✓ Rendered: ' + window._lastRenderedAudioFile; }
+      } else {
+        ytpSetStageStatus('render', 'pending');
+      }
+      if (window._lastTranscriptPath) {
+        ytpSetStageStatus('transcribe', 'done');
+        const tr = document.getElementById('ytpTranscribeResult');
+        if (tr) { tr.style.display = 'block'; tr.textContent = '✓ Transcript: ' + window._lastTranscriptPath; }
+        const tp = document.getElementById('ytpTranscriptPath');
+        if (tp && !tp.value) tp.value = window._lastTranscriptPath;
+      } else {
+        ytpSetStageStatus('transcribe', 'pending');
+      }
+
+      ytpRenderStepper();
+      ytpOnDetailsSrcChange();
+      m.style.display = 'flex';
+      // Wire shared "last-wins" output dir for the pipeline's own dir input
+      const ytpDir = document.getElementById('ytpOutputDir');
+      if (ytpDir) {
+        if (!ytpDir.value && typeof getSharedOutputDir === 'function') ytpDir.value = getSharedOutputDir();
+        ytpDir.oninput = () => { if (typeof setSharedOutputDir === 'function') setSharedOutputDir(ytpDir.value); };
+      }
+      // Auto-expand the first not-done stage
+      const firstPending = _YTP_ORDER.find(k => window._ytpStages[k].status !== 'done') || 'render';
+      ytpJumpToStage(firstPending);
+    }
+
+    function closeYouTubePipelineModal() {
+      const m = document.getElementById('youtubePipelineModal');
+      if (m) m.style.display = 'none';
+    }
+
+    function ytpSetStatus(msg, kind) {
+      const el = document.getElementById('ytpStatus');
+      if (!el) return;
+      el.style.display = 'block';
+      const colors = { info: '#3b82f6', ok: '#10b981', err: '#ef4444', warn: '#f59e0b' };
+      el.style.borderColor = colors[kind] || '#334155';
+      el.style.color = colors[kind] || '#e2e8f0';
+      el.textContent = msg;
+    }
+
+    function ytpOnDetailsSrcChange() {
+      const sel = document.querySelector('input[name="ytpDetailsSrc"]:checked');
+      const genSection = document.getElementById('ytpGenSection');
+      if (!sel || !genSection) return;
+      genSection.style.opacity = (sel.value === 'transcript') ? '1' : '0.4';
+      genSection.style.pointerEvents = (sel.value === 'transcript') ? 'auto' : 'none';
+    }
+
+    async function ytpBrowseOutputDir() {
+      try {
+        const r = await fetch('/api/youtube/pick-output-dir');
+        const d = await r.json();
+        if (d && d.cancelled) return;
+        if (d && d.success && d.path) {
+          document.getElementById('ytpOutputDir').value = d.path;
+          if (typeof setSharedOutputDir === 'function') setSharedOutputDir(d.path);
+        } else if (d && d.error) {
+          ytpSetStatus(d.error, 'err');
+        }
+      } catch (e) {
+        const p = prompt('Output directory path:');
+        if (p) {
+          document.getElementById('ytpOutputDir').value = p.trim();
+          if (typeof setSharedOutputDir === 'function') setSharedOutputDir(p.trim());
+        }
+      }
+    }
+
+    async function ytpBrowseTranscript() {
+      try {
+        const r = await fetch('/api/youtube/pick-transcript');
+        const d = await r.json();
+        if (d && d.success && d.path) {
+          document.getElementById('ytpTranscriptPath').value = d.path;
+          const t = document.getElementById('ytpScriptTitle');
+          if (t && !t.value.trim()) {
+            const stem = (d.filename || '').replace(/\.(md|markdown|txt|docx)$/i, '')
+                                            .replace(/_transcript$/i, '')
+                                            .replace(/[_-]+/g, ' ').trim();
+            t.value = stem;
+          }
+          // If the user hasn't picked an output dir for this pipeline yet,
+          // default it to the transcript's parent so YouTube details land
+          // next to the transcript rather than in the main GUI's output dir.
+          const od = document.getElementById('ytpOutputDir');
+          if (od && !od.value.trim()) {
+            const parent = d.path.replace(/\/[^/]+$/, '');
+            if (parent) {
+              od.value = parent;
+              if (typeof setSharedOutputDir === 'function') setSharedOutputDir(parent);
+            }
+          }
+        } else if (d && d.error) {
+          ytpSetStatus(d.error, 'err');
+        }
+      } catch (e) {
+        const p = prompt('Transcript file path:');
+        if (p) document.getElementById('ytpTranscriptPath').value = p.trim();
+      }
+    }
+
+    function ytpLoadFromFile() {
+      try {
+        loadYouTubeDetailsFromFile();
+        ytpSetStatus('File picker opened — once loaded, this dialog will use it.', 'info');
+        setTimeout(() => {
+          if (window._currentYoutubeDetails) {
+            const st = document.getElementById('ytpLoadedStatus');
+            const loadedRadio = document.getElementById('ytpDetailsLoaded');
+            if (st) { st.textContent = '✓ Loaded from file.'; st.style.color = '#10b981'; }
+            if (loadedRadio) { loadedRadio.disabled = false; loadedRadio.checked = true; }
+            ytpOnDetailsSrcChange();
+            ytpSetStageStatus('details', 'done');
+            ytpSetStatus('YouTube details loaded. Open Stage 4 to publish.', 'ok');
+          }
+        }, 1500);
+      } catch (e) {
+        ytpSetStatus('Failed to open file picker: ' + e.message, 'err');
+      }
+    }
+
+    async function ytpGenerateFromTranscript() {
+      const path = document.getElementById('ytpTranscriptPath').value.trim();
+      const title = document.getElementById('ytpScriptTitle').value.trim();
+      let outDir = document.getElementById('ytpOutputDir').value.trim();
+      // Fallback chain so we never silently land in the main GUI output dir:
+      //   (1) pipeline output dir field
+      //   (2) parent directory of the transcript file
+      //   (3) shared last-wins output dir (set by any other dialog)
+      if (!outDir && path) {
+        outDir = path.replace(/\/[^/]+$/, '');
+      }
+      if (!outDir && typeof getSharedOutputDir === 'function') {
+        outDir = getSharedOutputDir();
+      }
+      if (outDir) {
+        const od = document.getElementById('ytpOutputDir');
+        if (od && !od.value.trim()) od.value = outDir;
+        if (typeof setSharedOutputDir === 'function') setSharedOutputDir(outDir);
+      }
+      if (!path) { ytpSetStatus('Pick a transcript file first.', 'warn'); return; }
+      if (!title) { ytpSetStatus('Enter a video title.', 'warn'); return; }
+
+      const btn = document.getElementById('ytpGenerateBtn');
+      const orig = btn.textContent;
+      btn.disabled = true; btn.textContent = '⏳ Generating…';
+      ytpSetStageStatus('details', 'active');
+      ytpSetStatus('Calling YouTube details agent — this can take 30-90 seconds…', 'info');
+      try {
+        const r = await fetch('/api/youtube/generate-details-from-transcript', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transcript_path: path, script_title: title, output_dir: outDir || undefined })
+        });
+        const d = await r.json();
+        if (!d.success) throw new Error(d.error || 'agent failed');
+
+        window._currentYoutubeDetails = d.youtube_details_md;
+        const contentEl = document.getElementById('youtubeDetailsContent');
+        const editorEl = document.getElementById('youtubeDetailsEditor');
+        if (contentEl && typeof marked !== 'undefined') {
+          contentEl.innerHTML = marked.parse(d.youtube_details_md);
+        } else if (contentEl) {
+          contentEl.textContent = d.youtube_details_md;
+        }
+        if (editorEl) editorEl.value = d.youtube_details_md;
+
+        const st = document.getElementById('ytpLoadedStatus');
+        const loadedRadio = document.getElementById('ytpDetailsLoaded');
+        if (st) { st.textContent = '✓ Generated from transcript.'; st.style.color = '#10b981'; }
+        if (loadedRadio) { loadedRadio.disabled = false; loadedRadio.checked = true; }
+        ytpOnDetailsSrcChange();
+
+        const dr = document.getElementById('ytpDetailsResult');
+        if (dr) {
+          dr.style.display = 'block';
+          dr.textContent = '✓ Saved: ' + (d.saved_md_path || '(in memory)') + (d.saved_docx_path ? ' (+ .docx)' : '');
+        }
+        ytpSetStageStatus('details', 'done');
+        ytpSetStatus('✓ YouTube details ready. Open Stage 4 to publish.', 'ok');
+      } catch (e) {
+        ytpSetStageStatus('details', 'error');
+        ytpSetStatus('❌ ' + (e.message || e), 'err');
+      } finally {
+        btn.disabled = false; btn.textContent = orig;
+      }
+    }
+
+    function ytpProceedToPublish() {
+      if (!window._currentYoutubeDetails || !window._currentYoutubeDetails.trim()) {
+        const hint = document.getElementById('ytpPublishHint');
+        if (hint) hint.style.display = 'block';
+        ytpSetStatus('No YouTube details available yet — finish Stage 3 first.', 'warn');
+        return;
+      }
+      ytpSetStageStatus('publish', 'active');
+      // Don't close — let the user return to the pipeline modal if needed.
+      try {
+        openPublishToYouTube();
+      } catch (e) {
+        ytpSetStageStatus('publish', 'error');
+        alert('Could not open Publish dialog: ' + e.message);
+      }
+    }
+    </script>
+
+    <!-- ============================================================
          Publish to YouTube modal (AI for Roz channel)
          ============================================================ -->
     <div id="publishYouTubeModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:flex-start; justify-content:center; overflow-y:auto; padding:40px 20px;">
@@ -8883,16 +10442,31 @@ Thank you for watching!`;
 
             <div style="margin-top:14px; padding:10px 12px; background:#0b1220; border:1px solid #334155; border-radius:6px;">
               <div style="font-weight:600; margin-bottom:6px;">🎙️ Captions (.srt)</div>
-              <div style="font-size:12px; color:#94a3b8; margin-bottom:8px;">
-                Generate a YouTube-uploadable <code>.srt</code> from the
-                video's audio using local Whisper. The DaVinci timeline is
-                <strong>not</strong> modified — you upload the file in
-                YouTube Studio → Subtitles.
+              <div style="font-size:12px; color:#94a3b8; margin-bottom:10px;">
+                Attach a <code>.srt</code> caption track that will be uploaded
+                with the video for SEO and accessibility. <strong>Recommended:</strong>
+                use the SRT that DaVinci Resolve exported alongside your render
+                (it matches the on-screen captions). Or generate one from the
+                video's audio with local Whisper as a fallback.
               </div>
+
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                <button onclick="pickYouTubeSrtFile()" id="ytPickSrtBtn"
+                        style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">
+                  📂 Use existing .srt…
+                </button>
+                <input type="text" id="ytSrtPath" placeholder="(no caption file selected)" readonly
+                       style="flex:1; min-width:240px; background:#020617; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:6px 8px; font-size:12px; font-family:monospace;">
+                <button onclick="clearYouTubeSrt()" id="ytClearSrtBtn"
+                        style="background:#1e293b; color:#94a3b8; border:1px solid #334155; padding:6px 10px; border-radius:6px; cursor:pointer; font-size:12px;">
+                  Clear
+                </button>
+              </div>
+
               <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                 <button onclick="generateYouTubeSrt()" id="ytSrtBtn"
                         style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:12px;">
-                  Generate captions (.srt)
+                  …or generate from audio
                 </button>
                 <select id="ytSrtModel" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:6px; font-size:12px; height:auto;">
                   <option value="tiny">tiny (fastest, low quality)</option>
@@ -9056,8 +10630,9 @@ Thank you for watching!`;
             document.getElementById('ytTitle').value = j.metadata.title || '';
             document.getElementById('ytDescription').value = j.metadata.description || '';
             document.getElementById('ytTags').value = (j.metadata.tags || []).join(', ');
-            // Hashtags are also user-entered (start blank).
-            document.getElementById('ytHashtags').value = '';
+            // Prefill hashtags from the parsed details (agent puts them in the
+            // description or a ## Hashtags section). User can still edit/clear.
+            document.getElementById('ytHashtags').value = (j.metadata.hashtags || []).join(', ');
             const cat = j.metadata.category_id || '28';
             const sel = document.getElementById('ytCategoryId');
             // Add option if not present.
@@ -9124,6 +10699,27 @@ Thank you for watching!`;
         document.getElementById('publishYouTubeModal').style.display = 'none';
       }
 
+      // Pick an existing .srt file from disk (e.g. exported alongside
+      // the DaVinci render) to attach as the YouTube caption track.
+      async function pickYouTubeSrtFile() {
+        const status = document.getElementById('ytSrtStatus');
+        try {
+          const r = await fetch('/api/youtube/pick-srt-path');
+          const j = await r.json();
+          if (j.cancelled) return;
+          if (!j.success) throw new Error(j.error || 'pick failed');
+          document.getElementById('ytSrtPath').value = j.path;
+          status.innerHTML = '✅ Will upload <code>' + j.filename + '</code> ('
+            + (j.size_bytes/1024).toFixed(0) + ' KB) as the caption track.';
+        } catch (e) {
+          status.innerHTML = '<span style="color:#fca5a5;">❌ ' + e.message + '</span>';
+        }
+      }
+      function clearYouTubeSrt() {
+        document.getElementById('ytSrtPath').value = '';
+        document.getElementById('ytSrtStatus').textContent = '';
+      }
+
       // Generate an SRT caption file from the chosen video using the
       // local Whisper CLI (server-side). Does NOT touch DaVinci.
       async function generateYouTubeSrt() {
@@ -9147,10 +10743,11 @@ Thank you for watching!`;
           });
           const j = await r.json();
           if (!j.success) throw new Error(j.error || 'failed');
-          status.innerHTML = '✅ Saved <code>' + j.filename + '</code> ('
-            + (j.size_bytes/1024).toFixed(0) + ' KB) — '
-            + '<a href="#" onclick="revealYouTubeSrt(\'' + j.srt_path.replace(/'/g, "\\'") + '\'); return false;" style="color:#60a5fa;">Reveal in Finder</a>'
-            + ' — drag into YouTube Studio → Subtitles.';
+          // Auto-select the generated SRT as the caption track for publish.
+          document.getElementById('ytSrtPath').value = j.srt_path;
+          status.innerHTML = '✅ Generated <code>' + j.filename + '</code> ('
+            + (j.size_bytes/1024).toFixed(0) + ' KB) — will upload as the caption track. '
+            + '<a href="#" onclick="revealYouTubeSrt(\'' + j.srt_path.replace(/'/g, "\\'") + '\'); return false;" style="color:#60a5fa;">Reveal in Finder</a>';
         } catch (e) {
           status.innerHTML = '<span style="color:#fca5a5;">❌ ' + e.message + '</span>';
         } finally {
@@ -9532,6 +11129,7 @@ Thank you for watching!`;
           privacy_status: document.getElementById('ytPrivacy').value,
           notify_subscribers: document.getElementById('ytNotifySubs').checked,
           thumbnail_path: document.getElementById('ytThumbnailPath').value || null,
+          srt_path: (document.getElementById('ytSrtPath').value || '').trim() || null,
           playlist_ids: _selectedPlaylistIds(),
           overrides: overrides
         };
@@ -9592,13 +11190,18 @@ Thank you for watching!`;
               if (s.thumbnail_set === true) {
                 extras += 'Thumbnail: <strong>✅ set</strong><br>';
               } else if (s.thumbnail_error) {
-                extras += 'Thumbnail: <strong style="color:#fca5a5;">❌ failed</strong> — '
-                  + String(s.thumbnail_error).replace(/</g, '&lt;') + '<br>';
-                // Also pop up an alert so the user can't miss it.
-                setTimeout(() => alert('Thumbnail upload FAILED:\n\n'
-                  + s.thumbnail_error
-                  + '\n\nNote: YouTube custom thumbnails require a verified channel. '
-                  + 'Check https://www.youtube.com/verify if you see a 403 / youtubeSignupRequired error.'), 100);
+                const isUnverified = /forbidden|youtubeSignupRequired|verified/i.test(String(s.thumbnail_error));
+                extras += 'Thumbnail: <strong style="color:#fca5a5;">❌ not set</strong> '
+                  + '<span style="color:#94a3b8; font-size:0.85em;">(video was published successfully; thumbnail step is optional)</span><br>'
+                  + '<div style="margin:6px 0 8px 0; padding:8px 10px; background:#1f1108; border:1px solid #7c2d12; border-radius:6px; font-size:0.85em; color:#fed7aa;">'
+                  + (isUnverified
+                      ? '⚠️ Your YouTube channel is not verified for custom thumbnails. '
+                        + 'One-time fix: go to <a href="https://www.youtube.com/verify" target="_blank" style="color:#fcd34d; text-decoration:underline;">youtube.com/verify</a> '
+                        + 'and complete phone verification. Then re-set the thumbnail directly in YouTube Studio for this video.'
+                      : 'Error: ' + String(s.thumbnail_error).replace(/</g, '&lt;'))
+                  + '</div>';
+                // No modal alert — the inline notice above is clearer and
+                // doesn't hide the "Published!" link underneath.
               } else if (document.getElementById('ytThumbnailPath').value) {
                 extras += 'Thumbnail: <strong style="color:#fbbf24;">⚠️ not set (no error reported)</strong><br>';
               }
