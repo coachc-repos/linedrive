@@ -3499,14 +3499,14 @@ async def process_existing_script(
                     _hook_search_text = f"{final_output}\n{cleaned_script}"
                     _final_hook_text = ""
                     _hm = re.search(
-                        r"\*{0,2}\s*(?:🎯\s*)?FINAL\s+HOOK\s*:?\s*\*{0,2}\s*\n+"
+                        r"\*{0,2}\s*(?:🎯\s*)?(?:FINAL\s+|OPENING\s+)?HOOK\s*:?\s*\*{0,2}\s*"
                         r"(?:\*{0,2}\s*Host\s*:?\s*\*{0,2}\s*\n+)?"
                         r"([\s\S]*?)"
                         r"(?="
                         r"\n\s*---"
                         r"|\n\s*={3,}"
                         r"|\n\s*#{1,6}\s"
-                        r"|\n\s*\*{0,2}\s*(?:Heading|Visual\s*Cue|B-?Roll|Chapter|VISUAL|HEADING|OPTION\s*\d+|Host|Summary|Conclusion|Outro|Intro)\s*[:\-]"
+                        r"|\n\s*\*{0,2}\s*(?:Title|Heading|Visual\s*Cue|B-?Roll|Chapter|VISUAL|HEADING|OPTION\s*\d+|Host|Summary|Conclusion|Outro|Intro)\s*[:\-]"
                         r"|\n\s*\*{2}[^*\n]+\*{2}\s*:"
                         r"|\n\s*\n\s*\*{0,2}\s*OPTION\s*\d+"
                         r"|\Z)",
@@ -3515,6 +3515,32 @@ async def process_existing_script(
                     )
                     if _hm:
                         _final_hook_text = _hm.group(1).strip()
+                        # Defensive: scripts sometimes carry a stray bold
+                        # transition line (e.g. **We will start with...**)
+                        # or a lingering `Host:` / `FINAL HOOK:` label
+                        # between the header and the actual hook prose. The
+                        # extraction regex above only consumes ONE optional
+                        # `Host:` line directly after the header, so any
+                        # intervening junk leaks into the capture and
+                        # inflates the `-hook` curl's word count. Peel off
+                        # any leading blank lines, bold-only lines, and
+                        # stray Host/FINAL HOOK label lines before further
+                        # processing.
+                        _peel_re = re.compile(
+                            r"^\s*(?:"
+                            r"\*{1,2}[^\n]+\*{1,2}"          # **bold-only line**
+                            r"|\*{0,2}\s*Host\s*:?\s*\*{0,2}"  # stray Host: label
+                            r"|\*{0,2}\s*(?:🎯\s*)?(?:FINAL\s+|OPENING\s+)?HOOK\s*:?\s*\*{0,2}"  # stray header
+                            r")\s*$",
+                            re.IGNORECASE,
+                        )
+                        _peeled_lines = _final_hook_text.split("\n")
+                        while _peeled_lines and (
+                            not _peeled_lines[0].strip()
+                            or _peel_re.match(_peeled_lines[0])
+                        ):
+                            _peeled_lines.pop(0)
+                        _final_hook_text = "\n".join(_peeled_lines).strip()
                         # PRIMARY terminator: a hook is ONE paragraph. Cut at
                         # the first BLANK line so any intro paragraph that
                         # follows the hook doesn't bleed into the HeyGen
@@ -3558,8 +3584,8 @@ async def process_existing_script(
                             _final_hook_text.lower()).strip()
                         if (
                             not _hook_norm
-                            or _hook_norm in ("final hook", "opening hook", "host")
-                            or _hook_norm.startswith(("final hook ", "opening hook "))
+                            or _hook_norm in ("final hook", "opening hook", "hook", "host")
+                            or _hook_norm.startswith(("final hook ", "opening hook ", "hook "))
                             or len(_final_hook_text.split()) < 6
                         ):
                             logger.warning(
@@ -4039,6 +4065,7 @@ def index():
         "index.html",
         version=VERSION,
         agent_mode=(os.environ.get("FOUNDRY_API_MODE") or "v2").lower(),
+        container_mode=bool(app.config.get("CONTAINER_MODE", False)),
         saved_grok_api_key=_resolve("grok_api_key", "XAI_API_KEY"),
         saved_heygen_api_key=_resolve("heygen_api_key", "HEYGEN_API_KEY"),
         saved_heygen_voice_id=_resolve("heygen_voice_id", "HEYGEN_VOICE_ID"),
@@ -4663,10 +4690,67 @@ def process_script():
             data.get("broll_table_override") or "").strip() or None
         script_filename = (data.get("script_filename") or "").strip()
         script_dir = (data.get("script_dir") or "").strip()
+        # Optional title supplied by the frontend after the user was
+        # prompted because the script had no recognizable title line.
+        provided_title = (data.get("script_title") or "").strip()
 
         if not script_content.strip():
             logger.warning("❌ Empty script received")
             return jsonify({"success": False, "error": "Please provide a script to process"})
+
+        # Title check: every script must carry a recognizable title line
+        # (`# Title`, `## Title`, `Title:`, or `TITLE:`) within its first
+        # ~30 non-blank lines. If one is missing AND the frontend hasn't
+        # already prompted the user for one, ask for it before kicking
+        # off the (long-running) pipeline. The frontend handles the
+        # `needs_title` response by prompting and resending.
+        def _script_has_title(text: str) -> bool:
+            import re as _re_t
+            head_lines = []
+            for _ln in text.splitlines():
+                _s = _ln.strip()
+                if not _s:
+                    continue
+                head_lines.append(_s)
+                if len(head_lines) >= 30:
+                    break
+            for _s in head_lines:
+                if _re_t.match(r"^#{1,6}\s+\S", _s):
+                    return True
+                if _re_t.match(r"^(?:\*{0,2}\s*)?TITLE\s*:\s*\S", _s,
+                               _re_t.IGNORECASE):
+                    return True
+            return False
+
+        if provided_title:
+            # Prepend the supplied title as a level-1 markdown heading so
+            # downstream extractors that look for `# Title` find it. If
+            # the user already typed a `#`/`TITLE:` prefix, strip it
+            # first and re-add a clean `# `.
+            import re as _re_t2
+            _clean_title = _re_t2.sub(
+                r"^\s*(?:#{1,6}\s*|TITLE\s*:\s*)", "", provided_title,
+                flags=_re_t2.IGNORECASE,
+            ).strip()
+            if _clean_title:
+                script_content = f"# {_clean_title}\n\n{script_content.lstrip()}"
+                logger.info(
+                    f"📝 Prepended user-provided title to script: "
+                    f"{_clean_title!r}"
+                )
+        elif not _script_has_title(script_content):
+            logger.warning(
+                "❌ Script has no title line — asking frontend to prompt user"
+            )
+            return jsonify({
+                "success": False,
+                "needs_title": True,
+                "error": (
+                    "This script has no TITLE line. Please add one (e.g. "
+                    "`# My Video Title` or `TITLE: My Video Title`) at the "
+                    "top of the script, or enter a title when prompted."
+                ),
+            }), 400
 
         logger.info(f"📋 Checkboxes: {checkboxes}")
         if heygen_template_id:
@@ -4873,14 +4957,26 @@ def finalize_hook():
         stripped = _strip_sections(stripped, _final_hdr)
 
         # Also strip a stray "**Host:**" / "Host:" line if it was left behind
-        # immediately after we removed a FINAL HOOK header.
-        stripped = _re.sub(
-            r"(?:^|\n)\s*\*{0,2}\s*Host\s*:\s*\*{0,2}\s*\n+([^\n]+\n)(?=\s*\n|$)",
-            "\n",
+        # immediately after we removed a FINAL HOOK header. Only operate on
+        # the very top of the script (before the first chapter / heading), and
+        # only remove the bare Host: label line itself — NEVER the prose line
+        # that follows it (that prose is the first sentence of a chapter).
+        _lead_match = _re.match(
+            r"\A([\s\S]*?)(?=\n\s*(?:#{1,6}\s|Heading\s*:|\*{1,2}\s*(?:Chapter|Part|Section)\b))",
             stripped,
-            count=0,
             flags=_re.IGNORECASE,
         )
+        if _lead_match:
+            _lead = _lead_match.group(1)
+            _tail = stripped[_lead_match.end():]
+            _lead = _re.sub(
+                r"(?:^|\n)\s*\*{0,2}\s*Host\s*:\s*\*{0,2}\s*(?=\n)",
+                "\n",
+                _lead,
+                count=1,
+                flags=_re.IGNORECASE,
+            )
+            stripped = _lead + _tail
         stripped = stripped.lstrip("\n")
 
         hook_block = (

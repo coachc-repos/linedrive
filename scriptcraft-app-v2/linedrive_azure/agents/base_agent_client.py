@@ -127,9 +127,14 @@ def _spotlight_wrap(message_content: str) -> str:
 
 
 def get_api_mode() -> str:
-    """Return 'v1' (default, classic) or 'v2' (new Foundry) based on FOUNDRY_API_MODE env."""
-    mode = (os.environ.get("FOUNDRY_API_MODE") or "v1").strip().lower()
-    return "v2" if mode == "v2" else "v1"
+    """Always 'v2' (new Microsoft Foundry Agents experience).
+
+    The classic v1 Assistants path has been retired — every agent now lives in
+    Foundry and several (e.g. Script-Shorten-Agent) are v2-only. The
+    FOUNDRY_API_MODE env var and the UI toggle are ignored; this function is a
+    constant so v1 can never be selected.
+    """
+    return "v2"
 
 
 class BaseAgentClient(ABC):

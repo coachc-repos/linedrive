@@ -7,7 +7,11 @@ python-docx>=1.1.0
 
 # Azure AI Foundry agents
 azure-ai-agents>=1.0.0
-azure-ai-projects>=1.0.0
+# Pinned to 2.x: the new Foundry Conversations + Responses API (v2 agent path,
+# used by Script-Shorten-Agent and others) is only available in azure-ai-projects
+# >= 2.0. Older 1.x returns an AzureOpenAI client pinned to an api-version that
+# lacks the /openai/conversations endpoint (HTTP 404), breaking v2 agents.
+azure-ai-projects==2.1.0
 azure-identity>=1.17
 azure-storage-blob>=12.20
 

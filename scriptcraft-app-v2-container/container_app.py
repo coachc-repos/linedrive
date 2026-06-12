@@ -25,6 +25,7 @@ from pathlib import Path
 
 # --- 1. Stub out DaVinci/Resolve modules BEFORE web_gui imports them ---------
 
+
 def _make_stub_module(name: str) -> types.ModuleType:
     mod = types.ModuleType(name)
 

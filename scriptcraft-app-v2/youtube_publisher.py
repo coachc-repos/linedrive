@@ -308,7 +308,18 @@ def _build_description(sections: Dict[str, str]) -> str:
         "resources", "links",
     )
     # Labels whose entire body should be dropped from the description.
-    dropped_labels = ("connect with us", "connect",)
+    # All social-link / follow-me style sections are dropped here and a
+    # single canonical X/Twitter line is appended below the description
+    # body so we never accidentally publish placeholder handles or stale
+    # links to platforms the channel no longer uses.
+    dropped_labels = (
+        "connect with us", "connect",
+        "connect with me", "connect with roz",
+        "social links", "social media", "social",
+        "follow", "follow me", "follow us",
+        "find me", "find us",
+        "links", "my links",
+    )
     # Match any of these label shapes (the raw label text is captured):
     #   **OVERVIEW:**       **OVERVIEW**:        **OVERVIEW**
     #   ## OVERVIEW         ### OVERVIEW:        OVERVIEW:
@@ -368,10 +379,34 @@ def _build_description(sections: Dict[str, str]) -> str:
         # Strip a leading inline "Hook:" / "HOOK -" prefix if the agent
         # emitted the hook label on the same line as the sentence.
         line = re.sub(r"^\s*hook\s*[:\-\u2014]\s*", "", line, flags=re.I)
+        # Drop internal production-guidance lines the agent sometimes
+        # emits at the end of its description section. These are useful
+        # for our own QA but should never be uploaded to YouTube.
+        stripped_for_check = line.strip().strip("`").strip()
+        if re.match(r"^timestamp\s*source\b", stripped_for_check, re.I):
+            continue
+        if re.match(r"^(estimated\s+)?video\s+(duration|length)\s*[:=]",
+                    stripped_for_check, re.I):
+            continue
+        # Also drop the bare formula line "~1,790 words ÷ 150 = ~11:56"
+        # whether or not it has a leading label.
+        if re.search(r"\bwords\s*[÷/]\s*150\b", stripped_for_check, re.I):
+            continue
         cleaned_lines.append(line)
     description = "\n".join(cleaned_lines).strip()
     # Collapse 3+ blank lines but keep single blank-line spacing.
     description = re.sub(r"\n{3,}", "\n\n", description)
+
+    # Guarantee exactly one canonical social-link line. Any social-link
+    # sections the agent emitted were already dropped above; append the
+    # X/Twitter handle here so the description always carries it (and
+    # only it) regardless of what the agent produced.
+    canonical_social = "- X / Twitter: @AIwithRoz"
+    if canonical_social not in description:
+        description = (description.rstrip()
+                       + "\n\nCONNECT\n\n"
+                       + canonical_social).strip()
+        description = re.sub(r"\n{3,}", "\n\n", description)
 
     # Append the "PROMPTS MENTIONED IN THIS EPISODE" section (if the
     # agent produced one) verbatim to the end of the description so
@@ -537,6 +572,41 @@ def get_upload_status(upload_id: str) -> Optional[Dict[str, Any]]:
         return dict(state) if state else None
 
 
+_SRT_TAG_RE = re.compile(r"</?(?:b|i|u|font)(?:\s[^>]*)?>", re.IGNORECASE)
+
+
+def _sanitize_srt_for_youtube(src: Path) -> Path:
+    """DaVinci Resolve (and some other NLEs) export .srt files whose cue
+    text is wrapped in HTML-style tags like ``<b>...</b>``, ``<i>...</i>``,
+    or ``<font color="...">...</font>``. YouTube's captions.insert endpoint
+    treats SRT as plain SubRip text and preserves those tags literally,
+    so viewers see ``<b>`` characters around every caption line.
+
+    Strip those styling tags into a sibling ``*.youtube.srt`` file and
+    return the cleaned path. If no tags are present, return the original
+    path unchanged."""
+    try:
+        raw = src.read_text(encoding="utf-8-sig", errors="replace")
+    except Exception:
+        return src
+    if not _SRT_TAG_RE.search(raw):
+        return src
+    cleaned = _SRT_TAG_RE.sub("", raw)
+    # Also collapse any trailing whitespace the tag removal left behind.
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    out = src.with_suffix(".youtube.srt")
+    try:
+        out.write_text(cleaned, encoding="utf-8")
+        logger.info(
+            f"🧹 Stripped HTML tags from SRT before upload: "
+            f"{src.name} → {out.name}")
+        return out
+    except Exception as e:
+        logger.warning(
+            f"Could not write sanitized SRT ({e}); uploading original.")
+        return src
+
+
 def _upload_caption_track(
     service,
     video_id: str,
@@ -550,7 +620,10 @@ def _upload_caption_track(
     write permission with it for the channel's own videos."""
     libs = _import_google_libs()
     MediaFileUpload = libs["MediaFileUpload"]
-    media = MediaFileUpload(str(srt_path), mimetype="application/octet-stream",
+    # Strip <b>/<i>/<u>/<font> tags that DaVinci Resolve writes into its
+    # SRT export; YouTube would otherwise show them literally.
+    clean_srt = _sanitize_srt_for_youtube(srt_path)
+    media = MediaFileUpload(str(clean_srt), mimetype="application/octet-stream",
                             resumable=False)
     body = {
         "snippet": {

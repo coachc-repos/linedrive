@@ -3499,14 +3499,14 @@ async def process_existing_script(
                     _hook_search_text = f"{final_output}\n{cleaned_script}"
                     _final_hook_text = ""
                     _hm = re.search(
-                        r"\*{0,2}\s*(?:🎯\s*)?FINAL\s+HOOK\s*:?\s*\*{0,2}\s*\n+"
+                        r"\*{0,2}\s*(?:🎯\s*)?(?:FINAL\s+|OPENING\s+)?HOOK\s*:?\s*\*{0,2}\s*"
                         r"(?:\*{0,2}\s*Host\s*:?\s*\*{0,2}\s*\n+)?"
                         r"([\s\S]*?)"
                         r"(?="
                         r"\n\s*---"
                         r"|\n\s*={3,}"
                         r"|\n\s*#{1,6}\s"
-                        r"|\n\s*\*{0,2}\s*(?:Heading|Visual\s*Cue|B-?Roll|Chapter|VISUAL|HEADING|OPTION\s*\d+|Host|Summary|Conclusion|Outro|Intro)\s*[:\-]"
+                        r"|\n\s*\*{0,2}\s*(?:Title|Heading|Visual\s*Cue|B-?Roll|Chapter|VISUAL|HEADING|OPTION\s*\d+|Host|Summary|Conclusion|Outro|Intro)\s*[:\-]"
                         r"|\n\s*\*{2}[^*\n]+\*{2}\s*:"
                         r"|\n\s*\n\s*\*{0,2}\s*OPTION\s*\d+"
                         r"|\Z)",
@@ -3558,8 +3558,8 @@ async def process_existing_script(
                             _final_hook_text.lower()).strip()
                         if (
                             not _hook_norm
-                            or _hook_norm in ("final hook", "opening hook", "host")
-                            or _hook_norm.startswith(("final hook ", "opening hook "))
+                            or _hook_norm in ("final hook", "opening hook", "hook", "host")
+                            or _hook_norm.startswith(("final hook ", "opening hook ", "hook "))
                             or len(_final_hook_text.split()) < 6
                         ):
                             logger.warning(
@@ -4039,6 +4039,7 @@ def index():
         "index.html",
         version=VERSION,
         agent_mode=(os.environ.get("FOUNDRY_API_MODE") or "v2").lower(),
+        container_mode=bool(app.config.get("CONTAINER_MODE", False)),
         saved_grok_api_key=_resolve("grok_api_key", "XAI_API_KEY"),
         saved_heygen_api_key=_resolve("heygen_api_key", "HEYGEN_API_KEY"),
         saved_heygen_voice_id=_resolve("heygen_voice_id", "HEYGEN_VOICE_ID"),
@@ -4048,16 +4049,17 @@ def index():
 
 @app.route("/api/agent-mode", methods=["GET", "POST"])
 def agent_mode_api():
-    """Get or set the active Foundry agent API mode (v1=classic Assistants, v2=new Foundry)."""
+    """Report the active Foundry agent API mode.
+
+    The classic v1 Assistants path has been retired — the app is v2-only. POST
+    requests for v1 are rejected; the mode is always 'v2'.
+    """
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
         requested = (data.get("mode") or "").strip().lower()
-        if requested not in ("v1", "v2"):
-            return jsonify({"success": False, "error": "mode must be 'v1' or 'v2'"}), 400
-        os.environ["FOUNDRY_API_MODE"] = requested
-        logger.info(f"\U0001F500 Agent API mode switched to: {requested}")
-    current = (os.environ.get("FOUNDRY_API_MODE") or "v2").lower()
-    return jsonify({"success": True, "mode": current})
+        if requested and requested != "v2":
+            return jsonify({"success": False, "error": "only 'v2' is supported; v1 is retired"}), 400
+    return jsonify({"success": True, "mode": "v2"})
 
 
 @app.route("/test")

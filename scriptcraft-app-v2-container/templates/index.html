@@ -1074,40 +1074,13 @@
             </div>
             <div id="agentModeToggle" style="margin-left:auto;display:flex;align-items:center;gap:10px;padding:8px 14px;background:#1f2937;border-radius:10px;color:#e5e7eb;font-size:14px;">
                 <span style="font-weight:600;">Agent API:</span>
-                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
-                    <input type="radio" name="agentMode" value="v1" {% if (agent_mode or 'v1') == 'v1' %}checked{% endif %} onchange="setAgentMode('v1')">
-                    <span>v1 Classic</span>
-                </label>
-                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
-                    <input type="radio" name="agentMode" value="v2" {% if (agent_mode or 'v1') == 'v2' %}checked{% endif %} onchange="setAgentMode('v2')">
-                    <span>v2 Foundry (new)</span>
-                </label>
-                <span id="agentModeStatus" style="margin-left:6px;padding:2px 8px;border-radius:6px;background:#374151;font-size:12px;">{{ (agent_mode or 'v1')|upper }}</span>
+                <span id="agentModeStatus" style="padding:2px 8px;border-radius:6px;background:#7c3aed;font-size:12px;">V2 Foundry</span>
             </div>
         </div>
         <script>
+        // Agent mode is locked to v2 (Foundry). v1 has been retired.
         async function setAgentMode(mode) {
-            const status = document.getElementById('agentModeStatus');
-            const prev = status.textContent;
-            status.textContent = '...';
-            try {
-                const r = await fetch('/api/agent-mode', {
-                    method: 'POST',
-                    headers: {'Content-Type':'application/json'},
-                    body: JSON.stringify({mode: mode})
-                });
-                const j = await r.json();
-                if (j.success) {
-                    status.textContent = (j.mode || mode).toUpperCase();
-                    status.style.background = mode === 'v2' ? '#7c3aed' : '#374151';
-                } else {
-                    status.textContent = prev;
-                    alert('Failed to switch mode: ' + (j.error || 'unknown'));
-                }
-            } catch (e) {
-                status.textContent = prev;
-                alert('Error switching mode: ' + e);
-            }
+            return; // no-op; v2-only
         }
         </script>
         
@@ -8146,6 +8119,12 @@ Thank you for watching!`;
         // ---------- Output Directory ----------
         const DEFAULT_OUTPUT_DIR_ROOT = '~/Dev/Videos/Edited/Final';
 
+        // In the hosted/cloud container build there is no user-accessible local
+        // filesystem, so the output-directory endpoints are disabled and the
+        // picker is meaningless. The server saves artifacts to its own default
+        // location. This flag lets the UI skip the output-directory gate.
+        window.IS_CONTAINER = {{ container_mode | default(false) | tojson }};
+
         function _safeTitleForOutputDir(rawTitle) {
             const normalized = String(rawTitle || '')
                 .trim()
@@ -8326,6 +8305,13 @@ Thank you for watching!`;
         //   - Otherwise opens the modal and resolves true after Save,
         //     or false if the user closes/cancels without saving.
         async function ensureOutputDirSet(reasonLabel) {
+            // In the hosted/cloud container build there is no local filesystem to
+            // choose, and the output-directory endpoints are disabled. Skip the
+            // gate entirely and let the server use its default save location —
+            // otherwise the user can never proceed (e.g. create a new script).
+            if (window.IS_CONTAINER) {
+                return true;
+            }
             // On mobile we don't expose an output-directory picker, so skip
             // the gate entirely and let the server use its default.
             try {
@@ -8414,6 +8400,16 @@ Thank you for watching!`;
 
         // ---------- Directory Browser ----------
         function openDirBrowser(targetInputId) {
+            // In the hosted/cloud container build there is no local filesystem to
+            // browse and /api/browse-dirs is disabled (returns 503). Instead of
+            // letting the user hit a dead endpoint, explain that the output
+            // location is managed automatically.
+            if (window.IS_CONTAINER) {
+                alert('Folder browsing is not available in the cloud version. '
+                    + 'Generated files are saved automatically and can be downloaded '
+                    + 'from the results. Leave this field blank.');
+                return;
+            }
             const modal = document.getElementById('dirBrowserModal');
             if (!modal) return;
             // Remember which input the user is browsing for so dirBrowserSelect()
@@ -8567,6 +8563,22 @@ Thank you for watching!`;
         }
 
         document.addEventListener('DOMContentLoaded', loadOutputDir);
+
+        // In the hosted/cloud container build there is no local filesystem to
+        // pick, so hide the output-directory picker UI. Files are saved to the
+        // server's default run folder and offered as downloads in the results.
+        document.addEventListener('DOMContentLoaded', function () {
+            if (!window.IS_CONTAINER) return;
+            const idsToHide = [
+                'spsShortenOutputDirRow',
+                'spsShortenOutputDirHelp',
+                'outputDirBtn',
+            ];
+            idsToHide.forEach(function (id) {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            });
+        });
 
         // ============================================================
         // Icon-only mode for the WORKFLOW CHECKBOX ROW only.
@@ -9328,12 +9340,12 @@ Thank you for watching!`;
                   <option value="target">to video length</option>
                 </select>
               </div>
-              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+              <div id="spsShortenOutputDirRow" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
                 <label for="spsShortenOutputDir" style="color:#cbd5e1; font-size:0.85em; white-space:nowrap;">Save shortened script to:</label>
                 <input type="text" id="spsShortenOutputDir" placeholder="(blank = run output folder)" style="flex:1; min-width:240px; background:#0f172a; color:#e2e8f0; border:1px solid #334155; border-radius:4px; padding:6px 8px; font-size:0.85em;">
                 <button type="button" onclick="openDirBrowser('spsShortenOutputDir')" title="Browse folders" style="padding:6px 10px; background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-radius:4px; cursor:pointer; font-size:0.82em; white-space:nowrap;">📂 Browse…</button>
               </div>
-              <p style="margin:6px 0 0 0; font-size:0.75em; color:#94a3b8;">Writes <code>{loaded-filename}_shortened.md</code> and <code>.docx</code> into this folder. Leave blank to save into the current run's output folder.</p>
+              <p id="spsShortenOutputDirHelp" style="margin:6px 0 0 0; font-size:0.75em; color:#94a3b8;">Writes <code>{loaded-filename}_shortened.md</code> and <code>.docx</code> into this folder. Leave blank to save into the current run's output folder.</p>
               <div data-sps-result="shorten" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
             </div>
           </div>

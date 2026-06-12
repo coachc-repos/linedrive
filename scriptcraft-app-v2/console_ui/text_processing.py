@@ -507,6 +507,24 @@ def extract_heygen_host_script(script_content: str) -> str:
         if skip_until_next_section:
             continue
 
+        # Treat a "Heading: ..." line as a chapter boundary: save any
+        # in-progress host paragraph, then re-enter host mode so the
+        # chapter's prose paragraphs are collected as spoken content.
+        # Without this, scripts that use `Heading: Chapter N - ...` as
+        # chapter markers (the docx-extracted / processed format) drop
+        # all chapter prose because they only have ONE explicit `Host:`
+        # (in the FINAL HOOK).
+        if re.match(r"^\s*\*{0,2}\s*Heading\s*:", stripped, re.IGNORECASE):
+            if current_paragraph:
+                paragraph_text = " ".join(current_paragraph)
+                if paragraph_text:
+                    host_paragraphs.append(paragraph_text)
+                current_paragraph = []
+            in_host_section = True
+            if debug:
+                print(f"[DEBUG] Found Heading: chapter boundary")
+            continue
+
         # Check if this line starts with "Host:" (case insensitive)
         if re.match(r"^\s*\*?\*?Host:\*?\*?\s*$", stripped, re.IGNORECASE):
             # "Host:" on its own line - start collecting from next line
@@ -767,8 +785,14 @@ def generate_heygen_curl_commands(
         words = title.split()
         return ' '.join(words[:3])
 
-    # Try to find structured chapters with "Heading:" markers
-    chapter_pattern = r'Heading:\s+(.+?)\n\n(.+?)(?=\nHeading:|$)'
+    # Try to find structured chapters with "Heading:" markers.
+    # IMPORTANT: docx-extracted scripts join paragraphs with a single `\n`
+    # (one paragraph per line) so the title and the first body paragraph
+    # are separated by just one newline, not a blank line. Use `\n+` so
+    # both the docx single-newline and markdown blank-line forms match.
+    chapter_pattern = (
+        r'Heading:[ \t]+([^\n]+)\n+(.+?)(?=\n+Heading:[ \t]+|\Z)'
+    )
     chapter_matches = list(re.finditer(
         chapter_pattern, heygen_content, re.DOTALL))
 
@@ -952,6 +976,23 @@ def generate_heygen_curl_commands(
     # If the hook is long enough, split it in half at a sentence boundary;
     # otherwise duplicate it so HeyGen always gets two hook variants.
     if final_hook_text and final_hook_text.strip():
+        # Defensive: peel off leading blank lines, bold-only transition
+        # lines (e.g. **We will start with...**), and stray Host: /
+        # FINAL HOOK: label lines that may have leaked into the hook
+        # capture upstream. These inflate the hook curl's word count.
+        _peel_re = re.compile(
+            r"^\s*(?:"
+            r"\*{1,2}[^\n]+\*{1,2}"
+            r"|\*{0,2}\s*Host\s*:?\s*\*{0,2}"
+            r"|\*{0,2}\s*(?:🎯\s*)?FINAL\s+HOOK\s*:?\s*\*{0,2}"
+            r")\s*$",
+            re.IGNORECASE,
+        )
+        _peeled = final_hook_text.split("\n")
+        while _peeled and (not _peeled[0].strip()
+                           or _peel_re.match(_peeled[0])):
+            _peeled.pop(0)
+        final_hook_text = "\n".join(_peeled).strip()
         # Defensive: truncate at the first script-structure marker so we never
         # bleed Heading:/Visual Cue:/Chapter lines into the hook curl.
         _hook_raw = re.split(

@@ -569,6 +569,7 @@ def _add_background_audio_clips(media_pool, timeline, audio_bin):
         3. 'Musical, Loop, Serious News Loop, Bass Octave Up Down,
             Stutter Chord SND84939.wav'  (repeated 2x per aRoll clip on V1)
         4. 'Designed, Riser, Epic Sunrise Riser SND64445.wav'  (riser tail)
+        5. 'Mood Background Music.wav'  (mood bed, last A2 clip)
     Sequenced back-to-back starting at the timeline start frame.
 
     Also places a one-shot SFX on A3 ('sound effects') at the timeline
@@ -580,6 +581,7 @@ def _add_background_audio_clips(media_pool, timeline, audio_bin):
         "Musical, Loop, Serious News Loop, Bass Octave Up Down, "
         "Stutter Chord SND84939.wav"
     )
+    mood_bg_name = "Mood Background Music.wav"
     sfx_intro_name = (
         "Computers, Keyboard   Mouse, Classic Keyboard Typing SND81694.wav"
     )
@@ -691,6 +693,7 @@ def _add_background_audio_clips(media_pool, timeline, audio_bin):
         + [riser_name]
         + [main_bg_name] * (aroll_count * main_bg_per_aroll)
         + [riser_name]
+        + [mood_bg_name]
     )
 
     for target in desired_order:

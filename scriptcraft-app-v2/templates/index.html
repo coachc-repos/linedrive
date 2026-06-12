@@ -3462,7 +3462,12 @@ Time management content here...`;
             // and the rest of the script is silently dropped. Detect that and
             // splice in the chapter bodies.
             try {
-                const chapterRe = /(^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?\s*Chapter\s+\d+\b[^\n]*\n/gi;
+                // Accept: `Chapter N`, `## Chapter N`, `**Chapter N**`, AND
+                // `Heading: Chapter N - ...` (the format produced by the
+                // process-existing-script pipeline). Without the `Heading:`
+                // allowance, processed scripts only count the hook's Host:
+                // block and silently drop ~3000+ words of chapter prose.
+                const chapterRe = /(^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:Heading\s*:\s*)?Chapter\s+\d+\b[^\n]*\n/gi;
                 const chapterStarts = [];
                 let cm;
                 while ((cm = chapterRe.exec(text)) !== null) {
@@ -3472,7 +3477,7 @@ Time management content here...`;
                     // End-of-chapter-prose terminator: next Chapter heading,
                     // Summary:, SUPPORTING RESEARCH, ===, YOUTUBE/HEYGEN section,
                     // or end-of-text.
-                    const endRe = /\n\s*(?:(?:#{1,6}\s*)?(?:\*\*)?\s*Chapter\s+\d+\b|Summary\s*:|SUPPORTING\s+RESEARCH|===|🎬\s*HEYGEN|YOUTUBE\s+VIDEO\s+DESCRIPTION|Generated\s+by\s+LineDrive)/i;
+                    const endRe = /\n\s*(?:(?:#{1,6}\s*)?(?:\*\*)?\s*(?:Heading\s*:\s*)?Chapter\s+\d+\b|Summary\s*:|SUPPORTING\s+RESEARCH|===|🎬\s*HEYGEN|YOUTUBE\s+VIDEO\s+DESCRIPTION|Generated\s+by\s+LineDrive)/i;
                     const chapterBodies = [];
                     for (let k = 0; k < chapterStarts.length; k++) {
                         const start = chapterStarts[k];
@@ -4245,29 +4250,60 @@ Time management content here...`;
                 const grokApiKey = (document.getElementById('grokApiKey')?.value || '').trim();
                 
                 // Start the processing job and get session ID
-                const response = await fetch('/process-script', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        script: script,
-                        topic: topic,
-                        audience: audience,
-                        videoLength: videoLength,
-                        checkboxes: checkboxes,
-                        heygen_template_id: heygenTemplateId,
-                        heygen_api_key: heygenApiKey,
-                        heygen_voice_id: heygenVoiceId,
-                        grok_api_key: grokApiKey,
-                        // Pre-loaded artifacts let the backend skip the corresponding
-                        // agents (Load .docx/.md from the YouTube / B-Roll tabs).
-                        youtube_details_override: window._currentYoutubeDetails || null,
-                        broll_table_override: window._currentBrollTable || null,
-                        script_filename: window.currentScriptFilename || '',
-                        script_dir: (document.getElementById('spsShortenOutputDir')?.value || '').trim()
-                    })
-                });
-                
-                const data = await response.json();
+                const _processScriptRequest = async (titleOverride) => {
+                    return await fetch('/process-script', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            script: script,
+                            topic: topic,
+                            audience: audience,
+                            videoLength: videoLength,
+                            checkboxes: checkboxes,
+                            heygen_template_id: heygenTemplateId,
+                            heygen_api_key: heygenApiKey,
+                            heygen_voice_id: heygenVoiceId,
+                            grok_api_key: grokApiKey,
+                            // Pre-loaded artifacts let the backend skip the corresponding
+                            // agents (Load .docx/.md from the YouTube / B-Roll tabs).
+                            youtube_details_override: window._currentYoutubeDetails || null,
+                            broll_table_override: window._currentBrollTable || null,
+                            script_filename: window.currentScriptFilename || '',
+                            script_dir: (document.getElementById('spsShortenOutputDir')?.value || '').trim(),
+                            script_title: titleOverride || ''
+                        })
+                    });
+                };
+
+                let response = await _processScriptRequest('');
+                let data = await response.json();
+
+                // Title check: if the backend says no TITLE was found in the
+                // script, prompt the user for one and retry once.
+                if (!data.success && data.needs_title) {
+                    const userTitle = window.prompt(
+                        'This script has no TITLE line.\n\n' +
+                        'Enter a video title to use for this run (it will be ' +
+                        'prepended to the script as `# Title`):',
+                        ''
+                    );
+                    if (userTitle && userTitle.trim()) {
+                        addProgressMessage(
+                            `📝 Using user-provided title: ${userTitle.trim()}`,
+                            'info'
+                        );
+                        response = await _processScriptRequest(userTitle.trim());
+                        data = await response.json();
+                    } else {
+                        progressDiv.style.display = 'none';
+                        resultDiv.innerHTML = '<h3>⚠️ Cancelled</h3><p>A title is required. ' +
+                            'Add a `# Title` or `TITLE:` line to the top of your script and try again.</p>';
+                        resultDiv.className = 'result error';
+                        resultDiv.style.display = 'block';
+                        updateFooterProgress(0, 'Ready');
+                        return;
+                    }
+                }
                 
                 if (!data.success || !data.session_id) {
                     progressDiv.style.display = 'none';
@@ -8146,6 +8182,12 @@ Thank you for watching!`;
         // ---------- Output Directory ----------
         const DEFAULT_OUTPUT_DIR_ROOT = '~/Dev/Videos/Edited/Final';
 
+        // In the hosted/cloud container build there is no user-accessible local
+        // filesystem, so the output-directory endpoints are disabled and the
+        // picker is meaningless. The server saves artifacts to its own default
+        // location. This flag lets the UI skip the output-directory gate.
+        window.IS_CONTAINER = {{ container_mode | default(false) | tojson }};
+
         function _safeTitleForOutputDir(rawTitle) {
             const normalized = String(rawTitle || '')
                 .trim()
@@ -8326,6 +8368,13 @@ Thank you for watching!`;
         //   - Otherwise opens the modal and resolves true after Save,
         //     or false if the user closes/cancels without saving.
         async function ensureOutputDirSet(reasonLabel) {
+            // In the hosted/cloud container build there is no local filesystem to
+            // choose, and the output-directory endpoints are disabled. Skip the
+            // gate entirely and let the server use its default save location —
+            // otherwise the user can never proceed (e.g. create a new script).
+            if (window.IS_CONTAINER) {
+                return true;
+            }
             // On mobile we don't expose an output-directory picker, so skip
             // the gate entirely and let the server use its default.
             try {
@@ -9805,6 +9854,23 @@ Thank you for watching!`;
           const hostBlocks = txt.match(/(?:^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*([\s\S]*?)(?=\n\s*(?:#{1,6}\s+\S|(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|chapter\s+\d|visual\s+cue\s*:|b-?roll\s*:)|---+|===+)|$)/gi) || [];
           let hostWords = 0;
           hostBlocks.forEach(b => { hostWords += (b.replace(/^[^:]*:/, '').match(/\S+/g) || []).length; });
+          // Chapter-aware augment: many scripts (esp. docx-loaded) only have
+          // a single `Host:` marker in the FINAL HOOK. Chapter bodies are
+          // plain prose under `(Heading:\s+)?Chapter N - ...` markers but
+          // are ALSO spoken content. Count their words too so the runtime
+          // estimate isn't ~hook-only.
+          const chapterRe = /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*{0,2})\s*(?:Heading\s*:\s*)?Chapter\s+\d+\b[^\n]*\n([\s\S]*?)(?=\n\s*(?:#{1,6}\s*)?(?:\*{0,2})\s*(?:Heading\s*:\s*)?Chapter\s+\d+\b|\n\s*(?:#{1,6}\s+)?(?:SUPPORTING\s+RESEARCH|YOUTUBE\s+UPLOAD|VISUAL\s+CUES?|B-?ROLL)\b|\n\s*={3,}\s*\n|$)/gi;
+          let chapterWords = 0;
+          let cm;
+          while ((cm = chapterRe.exec(txt)) !== null) {
+            const body = (cm[1] || '')
+              .replace(/^\s*(?:Heading\s*:|Visual\s+Cue\s*:|B-?Roll\s*:)[^\n]*$/gim, '')
+              .replace(/^\s*(?:\*{0,2})\s*Host\s*:(?:\*{0,2})\s*$/gim, '');
+            chapterWords += (body.match(/\S+/g) || []).length;
+          }
+          if (chapterWords > hostWords * 1.5) {
+            hostWords += chapterWords;
+          }
           const wpm = 150;
           const mins = hostWords / wpm;
           const m = Math.floor(mins);
@@ -11001,6 +11067,29 @@ Thank you for watching!`;
           modal.addEventListener(evt, updateYouTubeAccordionSummaries, true));
       })();
 
+      // Derive a human-readable title from a video file path and write
+      // it into the YouTube Title field. Used whenever the user picks a
+      // new video file in the publish dialog so the title auto-syncs to
+      // the filename (overwrites any existing title — the user can still
+      // edit it before publishing).
+      function _setYouTubeTitleFromVideoPath(path) {
+        if (!path) return;
+        const titleEl = document.getElementById('ytTitle');
+        if (!titleEl) return;
+        // Take just the filename, drop the extension.
+        const base = path.split(/[\\/]/).pop() || '';
+        const stem = base.replace(/\.[^.]+$/, '');
+        // Normalize: replace _, -, . with spaces and collapse whitespace.
+        // Preserve the casing the user typed in their filename.
+        const cleaned = stem.replace(/[._\-]+/g, ' ').replace(/\s+/g, ' ').trim();
+        if (cleaned) {
+          titleEl.value = cleaned;
+          // Trigger input event so accordion summaries / char-count
+          // listeners update.
+          titleEl.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }
+
       // Browse for a local video file using the OS native file picker
       // (via the backend). The browser cannot expose real file paths for
       // security reasons, so we ask the server to show an Open dialog and
@@ -11014,6 +11103,7 @@ Thank you for watching!`;
             throw new Error(j.error || 'pick failed');
           }
           document.getElementById('ytVideoPath').value = j.path;
+          _setYouTubeTitleFromVideoPath(j.path);
           loadYouTubeThumbnails(j.path);
           _setYouTubeVideoPreview(j.path, j.size_bytes);
         } catch (e) {
@@ -11072,12 +11162,14 @@ Thank you for watching!`;
           sel.onchange = () => {
             const v = sel.value;
             document.getElementById('ytVideoPath').value = v;
+            _setYouTubeTitleFromVideoPath(v);
             loadYouTubeThumbnails(v);
           };
           // Pre-fill with most recent.
           if (!document.getElementById('ytVideoPath').value) {
             document.getElementById('ytVideoPath').value = r.videos[0].path;
             sel.value = r.videos[0].path;
+            _setYouTubeTitleFromVideoPath(r.videos[0].path);
           }
           loadYouTubeThumbnails(document.getElementById('ytVideoPath').value);
         } catch (e) { /* non-fatal */ }
