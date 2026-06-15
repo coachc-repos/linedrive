@@ -9332,9 +9332,10 @@ Thank you for watching!`;
               <span class="sps-stage-caret" style="color:#64748b;">▸</span>
             </div>
             <div class="sps-stage-body" data-sps-body="load" style="display:none; padding:12px 14px; border-top:1px solid #0f172a;">
-              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">Load an existing <code>.md</code> / <code>.docx</code> script file. All other stages are disabled until a script is loaded. <br><span style="color:#cbd5e1;">Need a brand-new script? Close this dialog and use <strong>🚀 Create Script</strong> on the toolbar instead.</span></p>
+              <div data-sps-current="load" style="display:none; margin:0 0 12px 0; padding:10px 12px; background:#052e2b; border:1px solid #10b981; border-radius:6px; color:#a7f3d0; font-size:0.85em;"></div>
+              <p style="margin:0 0 10px 0; color:#94a3b8; font-size:0.85em;">By default this processes the script currently open in the editor — no need to save it to Word and re-load. <br>To process a <em>different</em> script, load an existing <code>.md</code> / <code>.docx</code> file below. <br><span style="color:#cbd5e1;">Need a brand-new script? Close this dialog and use <strong>🚀 Create Script</strong> on the toolbar instead.</span></p>
               <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                <button type="button" onclick="document.getElementById('fileInput').click()" style="background:#0ea5e9; color:#fff; border:none; padding:8px 14px; border-radius:5px; cursor:pointer; font-weight:600;">📂 Load Script File…</button>
+                <button type="button" onclick="document.getElementById('fileInput').click()" style="background:#0ea5e9; color:#fff; border:none; padding:8px 14px; border-radius:5px; cursor:pointer; font-weight:600;">📂 Load a different file…</button>
               </div>
               <div data-sps-result="load" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
             </div>
@@ -9839,6 +9840,37 @@ Thank you for watching!`;
     // Reflect script-loaded state in Stage 1 + the stepper. Call this whenever
     // #scriptInput changes (loadFile, drag-drop, manual paste).
     function spsRefreshLoadStatus() {
+      // Default to the script currently open in the GUI (set by Create Script,
+      // a prior process run, or "Load Existing"). Copy it into #scriptInput —
+      // which processExistingScript() reads — so the user never has to save the
+      // open script to Word and re-load it just to process it. Guarded so a
+      // file the user explicitly loaded via the picker is never clobbered
+      // (loadFile() writes #scriptInput but NOT window.currentScript, so once a
+      // file is loaded the two differ and we leave #scriptInput alone).
+      const _ta = document.getElementById('scriptInput');
+      const _open = (typeof window.currentScript === 'string') ? window.currentScript.trim() : '';
+      if (_ta && (!_ta.value || !_ta.value.trim()) && _open) {
+        _ta.value = window.currentScript;
+        if (typeof updateScriptInputDurationBadge === 'function') updateScriptInputDurationBadge();
+      }
+      // Banner: announce when we're defaulting to the open script (i.e. the
+      // content in #scriptInput came from the editor, not a separately loaded
+      // file). Self-correcting: loading a file makes the two differ → hides.
+      const _curBanner = document.querySelector('[data-sps-current="load"]');
+      if (_curBanner) {
+        const _val = ((_ta && _ta.value) || '').trim();
+        const _usingOpen = !!_open && _val === _open;
+        if (_usingOpen) {
+          const _title = (window.currentScriptTitle || '').toString().trim()
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          _curBanner.style.display = 'block';
+          _curBanner.innerHTML = '✅ Using the script currently open in the editor'
+            + (_title ? ' — <strong>' + _title + '</strong>' : '')
+            + '. Pick a stage below and click <strong>Run</strong>.';
+        } else {
+          _curBanner.style.display = 'none';
+        }
+      }
       const loaded = spsIsScriptLoaded();
       const res = document.querySelector('[data-sps-result="load"]');
       if (loaded) {
