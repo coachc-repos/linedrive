@@ -3652,22 +3652,32 @@ def create_resolve_project_with_videos(
                 break
 
         intro_clip = None
+        exit_clip = None
         if intro_bin:
             intro_clips = intro_bin.GetClipList()
-            print(f"\n🔍 Looking for intro video in intro bin...")
+            print(f"\n🔍 Looking for intro/exit videos in intro bin...")
             print(f"   Found {len(intro_clips)} clips in Intro bin")
 
-            # Look for "AI with Roz v2.mov"
+            # Look for "AI with Roz v2.mov" (intro) and
+            # "AI with Roz NEW EXIT 4K Edited 2.mov" (exit)
             for clip in intro_clips:
                 clip_name = clip.GetName()
                 print(f"   - {clip_name}")
-                if "AI with Roz v2" in clip_name or "AI_with_Roz_v2" in clip_name:
+                if intro_clip is None and (
+                        "AI with Roz v2" in clip_name
+                        or "AI_with_Roz_v2" in clip_name):
                     intro_clip = clip
                     print(f"   ✅ Found intro video: {clip_name}")
-                    break
+                elif exit_clip is None and (
+                        "AI with Roz NEW EXIT 4K Edited 2" in clip_name
+                        or "AI_with_Roz_NEW_EXIT_4K_Edited_2" in clip_name):
+                    exit_clip = clip
+                    print(f"   ✅ Found exit video: {clip_name}")
 
             if not intro_clip:
                 print(f"   ⚠️ Intro video 'AI with Roz v2.mov' not found in Intro bin")
+            if not exit_clip:
+                print(f"   ⚠️ Exit video 'AI with Roz NEW EXIT 4K Edited 2.mov' not found in Intro bin")
 
         # Create a mapping of clip name to clip object
         clip_map = {}
@@ -3711,6 +3721,11 @@ def create_resolve_project_with_videos(
 
             if clip:
                 clips_to_add.append(clip)
+
+        # Add exit video last if found (always the final clip on V1)
+        if exit_clip:
+            clips_to_add.append(exit_clip)
+            print(f"\n📺 Exit video will be added last")
 
         print(f"\n� Prepared {len(clips_to_add)} clips to add to timeline")
 
