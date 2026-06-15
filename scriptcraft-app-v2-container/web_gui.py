@@ -6188,6 +6188,106 @@ def _grok_prompt_no_audio(prompt: str) -> str:
     return base.rstrip(".") + "." + GROK_NO_AUDIO_HINT
 
 
+# ---------------------------------------------------------------------------
+# Grok "unique visual" prompt rewriting
+# ---------------------------------------------------------------------------
+# Stock b-roll descriptions (e.g. "person typing on a laptop") make poor Grok
+# prompts: they ask for generic live-action footage that's cheaper and better
+# sourced from real stock libraries. Grok's value is GENERATED visuals you can't
+# get elsewhere — animated diagrams, motion graphics, conceptual artwork — that
+# are specific to the script's theme. We rewrite each selected scene into exactly
+# that before sending it to grok-imagine-video.
+
+# Ops kill-switch: set GROK_VISUAL_REWRITE=0 to send raw descriptions instead.
+GROK_VISUAL_REWRITE_ENABLED = (
+    os.getenv("GROK_VISUAL_REWRITE", "1").strip().lower()
+    not in ("0", "false", "no", "off")
+)
+
+# Text model used to rewrite scene descriptions into visual prompts.
+GROK_REWRITE_MODEL = (
+    os.getenv("GROK_REWRITE_MODEL", "grok-3-mini").strip() or "grok-3-mini"
+)
+
+# Deterministic fallback styling, used when the LLM rewrite is unavailable — it
+# still steers a raw description away from literal live-action footage.
+GROK_VISUAL_STYLE_DIRECTIVE = (
+    " Render this as a unique, theme-specific animation — motion graphics, an "
+    "animated schematic diagram, data visualization, isometric illustration, or "
+    "abstract conceptual artwork — not literal live-action footage. Bold, "
+    "cinematic, and original."
+)
+
+GROK_REWRITE_SYSTEM = (
+    "You turn a single b-roll scene description into ONE prompt for an AI video "
+    "generator (grok-imagine-video) that makes a ~6 second SILENT clip.\n"
+    "Your job: produce a UNIQUE, visually striking GENERATED visual that cannot "
+    "be bought as stock footage and that is SPECIFIC to the video's topic.\n"
+    "Rules:\n"
+    "- Favor animation, motion graphics, animated/schematic diagrams, data "
+    "visualizations, isometric or hand-drawn illustration, infographic motion, "
+    "glowing node networks, particle systems, and abstract conceptual artwork.\n"
+    "- ESPECIALLY for generic, easily-stocked scenes (someone typing on a "
+    "laptop, using a chatbot, sitting in an office, shaking hands, a city "
+    "skyline), DO NOT depict them literally. Replace them with an imaginative "
+    "conceptual visualization of the underlying IDEA, using concrete imagery, "
+    "objects, and metaphors drawn from the specific topic.\n"
+    "- Weave in concrete, topic-specific elements so the clip is clearly about "
+    "THIS subject, not a generic explainer.\n"
+    "- Describe the key animated elements, camera movement, color palette, and "
+    "art style. No on-screen text or captions.\n"
+    "- Output ONLY the final prompt: 1-3 sentences, under ~70 words, no quotes, "
+    "no preamble, no lists."
+)
+
+
+def _grok_build_video_prompt(
+    description: str,
+    scene_context: str = "",
+    theme: str = "",
+    client=None,
+) -> str:
+    """Rewrite a stock-style b-roll description into a unique, theme-specific
+    Grok video prompt (animation / diagram / artwork).
+
+    Falls back to the original description plus a style directive whenever the
+    LLM rewrite is disabled or fails, so generation never breaks on this step.
+    """
+    base = (description or "").strip()
+    if not base:
+        return base
+    styled_fallback = base.rstrip(".") + "." + GROK_VISUAL_STYLE_DIRECTIVE
+
+    if not GROK_VISUAL_REWRITE_ENABLED or client is None:
+        return styled_fallback
+
+    try:
+        from xai_sdk.chat import system as _xai_system, user as _xai_user
+
+        parts = []
+        if (theme or "").strip():
+            parts.append(f"Video topic / theme: {theme.strip()}")
+        parts.append(f"Scene to visualize: {base}")
+        if (scene_context or "").strip():
+            parts.append(f"Scene context: {scene_context.strip()}")
+        user_msg = "\n".join(parts)
+
+        chat = client.chat.create(model=GROK_REWRITE_MODEL, temperature=0.85)
+        chat.append(_xai_system(GROK_REWRITE_SYSTEM))
+        chat.append(_xai_user(user_msg))
+        resp = chat.sample()
+        out = (getattr(resp, "content", "") or "").strip().strip('"').strip()
+        # Reject empty / runaway output (model ignored the length rule).
+        if out and len(out) <= 600:
+            logger.info(f"🎨 Grok prompt rewritten: {out[:140]}")
+            return out
+        return styled_fallback
+    except Exception as e:
+        logger.warning(
+            f"⚠️ Grok prompt rewrite failed; using styled fallback: {e}")
+        return styled_fallback
+
+
 @app.route("/api/grok/key", methods=["POST"])
 def grok_save_key():
     """Persist Grok API key in server settings so it survives browser/session changes."""
@@ -6272,6 +6372,7 @@ def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, sc
             "search_term") or "").strip()
         term = row.get("search_term", f"vid{i}") or f"vid{i}"
         timecode = row.get("timecode", "")
+        scene_context = (row.get("scene_context") or "").strip()
 
         if not prompt:
             failures.append(
@@ -6285,16 +6386,22 @@ def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, sc
             })
             continue
 
+        # Turn the stock-style description into a unique, theme-specific visual
+        # (animation / diagram / artwork) rather than literal live-action.
+        gen_prompt = _grok_build_video_prompt(
+            prompt, scene_context, script_title, client=client)
+
         _grok_emit(session_id, {
             "type": "video_start",
             "index": i, "current": i + 1, "total": total,
             "search_term": term, "timecode": timecode, "description": prompt,
-            "message": f"🎨 [{i+1}/{total}] Generating '{term}'…",
+            "generated_prompt": gen_prompt,
+            "message": f"🎨 [{i+1}/{total}] Generating unique visual for '{term}'…",
         })
 
         try:
             response = client.video.generate(
-                prompt=_grok_prompt_no_audio(prompt),
+                prompt=_grok_prompt_no_audio(gen_prompt),
                 model="grok-imagine-video",
                 duration=6,
                 aspect_ratio="16:9",
@@ -6333,6 +6440,7 @@ def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, sc
                 "timecode": timecode,
                 "search_term": term,
                 "description": prompt,
+                "generated_prompt": gen_prompt,
                 "url": response.url,
                 "filename": str(local_path),
             }

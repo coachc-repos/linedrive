@@ -18,6 +18,10 @@ azure-storage-blob>=12.20
 # OpenAI / Azure OpenAI (used by some agent clients)
 openai>=1.40
 
+# xAI Grok SDK — generates unique b-roll video clips (grok-imagine-video) and
+# rewrites scene descriptions into theme-specific visual prompts (grok-3-mini).
+xai-sdk>=1.11
+
 # AutoGen (used by enhanced multi-agent system)
 autogen-agentchat>=0.4.0
 autogen-core>=0.4.0
