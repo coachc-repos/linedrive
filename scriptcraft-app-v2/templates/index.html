@@ -6358,6 +6358,68 @@ Thank you for watching!`;
             return fallbackList || [];
         }
 
+        // Parse a display title from script text: prefer a "Title:" line, then
+        // the first markdown heading, then the first non-empty content line.
+        function _parseScriptTitleFromText(text) {
+            if (typeof text !== 'string') return '';
+            let m = text.match(/^[ \t]*\**[ \t]*Title[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*\**[ \t]*$/im);
+            if (m && m[1].trim()) return m[1].trim();
+            m = text.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/m);
+            if (m && m[1].trim()) return m[1].trim();
+            for (const raw of text.split('\n').slice(0, 20)) {
+                const ln = raw.trim();
+                if (!ln) continue;
+                if (/^(Script-ID|Script-Version)\s*:/i.test(ln)) continue;
+                if (/^[#*\-\[]/.test(ln)) continue;
+                if (ln.length <= 150) return ln;
+            }
+            return '';
+        }
+
+        // Render a loaded/reopened script into the main result view (tabs +
+        // title), restoring any Grok videos persisted under its Script-ID so a
+        // script reopened from a saved Word doc shows its accumulated videos.
+        async function displayLoadedScriptResult(scriptText) {
+            if (!scriptText || !scriptText.trim()) return;
+            window.currentScript = scriptText;
+            const title = _parseScriptTitleFromText(scriptText);
+            if (title) window.currentScriptTitle = title;
+
+            // Restore persisted Grok videos for this Script-ID (empty if the
+            // doc has no Script-ID or nothing was persisted for it).
+            const vids = await _restoreGrokVideos(window.currentScriptId, []);
+            window.currentGrokVideos = vids;
+
+            const headerTitle = (window.currentScriptTitle || 'Loaded Script')
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            window.currentResultPayload = {
+                resultHeaderHtml: `<h3>📂 Loaded Script</h3><p><strong>Title:</strong> <span id="displayedScriptTitle">${headerTitle}</span></p>`,
+                mainScript: scriptText,
+                demoPackages: null, thumbnails: [], chapterComparisons: null,
+                flowOriginal: null, flowImproved: null, flowAnalysis: null,
+                edlContent: null, edlFilename: null, curlCommands: null,
+                brollImages: [], grokVideos: vids, brollTable: null, youtubeDetails: null
+            };
+            const tabbedHTML = createTabbedInterface(
+                scriptText, null, [], null, null, null, null,
+                null, null, null, [], vids, null, null);
+            const resultDiv = document.getElementById('result');
+            if (!resultDiv) return;
+            resultDiv.innerHTML = window.currentResultPayload.resultHeaderHtml + tabbedHTML;
+            resultDiv.className = 'result';
+            resultDiv.style.display = 'block';
+            ['saveBtn', 'wordBtn', 'markdownBtn', 'heygenBtn'].forEach(id => {
+                const b = document.getElementById(id); if (b) b.style.display = 'inline-block';
+            });
+            setTimeout(() => {
+                try { renderMarkdownContent(scriptText, null, null, null); } catch (_) {}
+                if (vids && vids.length) { try { switchTab('grokVideos'); } catch (_) {} }
+            }, 120);
+            if (vids && vids.length && typeof addProgressMessage === 'function') {
+                addProgressMessage(`📂 Restored ${vids.length} previously generated Grok video(s) for this script.`, 'success');
+            }
+        }
+
         async function loadFile(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -6410,6 +6472,9 @@ Thank you for watching!`;
                 // Tell the Process Script modal that a script is now loaded so
                 // Stage 1 flips to Done and the other stages unlock.
                 if (typeof spsRefreshLoadStatus === 'function') spsRefreshLoadStatus();
+                // Render the loaded script into the main result view (title +
+                // tabs) and restore any Grok videos persisted for its Script-ID.
+                try { await displayLoadedScriptResult(text); } catch (_) {}
             } catch (error) {
                 alert('❌ Error loading file: ' + error.message);
             } finally {
