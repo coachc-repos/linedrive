@@ -901,6 +901,9 @@ def _extract_script_title_for_output(script_text: str, fallback: str = "Untitled
             continue
         if line.startswith(("#", "*", "-", "[")):
             continue
+        # Never treat the machine id lines as a title.
+        if _SCRIPT_ID_RE.match(line) or _SCRIPT_VERSION_RE.match(line):
+            continue
         if all(c in "_=-~" for c in line):
             continue
         if len(line) > 150:
@@ -908,6 +911,79 @@ def _extract_script_title_for_output(script_text: str, fallback: str = "Untitled
         return line
 
     return fallback
+
+
+# --- Script identity: permanent collection id + per-processing version -------
+# Both live as plain labeled lines directly under the Title: line so they
+# survive Word export / round-trips. Script-ID is assigned once and never
+# changes (Grok videos accumulate under it). Script-Version bumps on every
+# processing run; all other artifacts are tied to the current version.
+_SCRIPT_ID_RE = re.compile(
+    r'^[ \t]*\**[ \t]*Script-ID[ \t]*\**[ \t]*:[ \t]*\**[ \t]*([A-Za-z0-9\-]+)',
+    re.MULTILINE | re.IGNORECASE,
+)
+_SCRIPT_VERSION_RE = re.compile(
+    r'^[ \t]*\**[ \t]*Script-Version[ \t]*\**[ \t]*:[ \t]*\**[ \t]*([A-Za-z0-9\-]+)',
+    re.MULTILINE | re.IGNORECASE,
+)
+_TITLE_LINE_RE = re.compile(
+    r'^[ \t]*\**[ \t]*Title[ \t]*\**[ \t]*:', re.IGNORECASE)
+
+
+def _new_ld_id(prefix: str) -> str:
+    """Short, URL/blob-safe id, e.g. 'ld-9f3a1c7b22' or 'v-4b8e0a17de'."""
+    return f"{prefix}-{uuid.uuid4().hex[:10]}"
+
+
+def _parse_script_ids(text: str) -> "tuple[Optional[str], Optional[str]]":
+    """Return (script_id, version_id) found in the script, else (None, None)."""
+    t = text or ""
+    sid = _SCRIPT_ID_RE.search(t)
+    vid = _SCRIPT_VERSION_RE.search(t)
+    return (sid.group(1) if sid else None, vid.group(1) if vid else None)
+
+
+def _ensure_script_ids(
+    text: str,
+    bump_version: bool = False,
+    script_id: "Optional[str]" = None,
+    version_id: "Optional[str]" = None,
+) -> "tuple[str, str, str]":
+    """Ensure Script-ID (permanent) + Script-Version lines sit directly under
+    the Title: line. Returns (new_text, script_id, version_id).
+
+    - script_id/version_id, when given, are forced onto the text (used to
+      re-stamp a script after agents may have stripped the lines, keeping the
+      ids stable across a processing run).
+    - Otherwise: missing Script-ID -> a fresh permanent id; missing
+      Script-Version or bump_version=True -> a fresh version (processing runs
+      pass bump_version=True; manual edits never reach here).
+    Existing id lines are rewritten in place (de-duplicated).
+    """
+    t = text or ""
+    cur_id, cur_version = _parse_script_ids(t)
+    script_id = script_id or cur_id or _new_ld_id("ld")
+    if version_id:
+        pass
+    elif bump_version or not cur_version:
+        version_id = _new_ld_id("v")
+    else:
+        version_id = cur_version
+
+    lines = t.split("\n")
+    # Drop any existing id lines so we reinsert a single clean pair.
+    kept = [ln for ln in lines
+            if not _SCRIPT_ID_RE.match(ln) and not _SCRIPT_VERSION_RE.match(ln)]
+
+    # Insert right after the Title: line if present, else at the very top.
+    insert_at = 0
+    for i, ln in enumerate(kept[:40]):
+        if _TITLE_LINE_RE.match(ln):
+            insert_at = i + 1
+            break
+    id_lines = [f"Script-ID: {script_id}", f"Script-Version: {version_id}"]
+    new_lines = kept[:insert_at] + id_lines + kept[insert_at:]
+    return ("\n".join(new_lines), script_id, version_id)
 
 
 async def _save_script_md_and_docx(script_title: str, script_content: str) -> tuple[Optional[str], Optional[str]]:
@@ -2350,6 +2426,11 @@ async def process_script_creation(session_id, topic, audience, tone,
                 finally:
                     thumbnail_cancel_events.pop(session_id, None)
 
+            # Stamp a permanent Script-ID + initial Script-Version into the
+            # script so every downstream artifact can be tied back to it.
+            final_script_with_tools, _new_script_id, _new_script_version = (
+                _ensure_script_ids(final_script_with_tools))
+
             saved_markdown_path, saved_docx_path = await _save_script_md_and_docx(
                 resolved_script_title,
                 final_script_with_tools,
@@ -2359,6 +2440,8 @@ async def process_script_creation(session_id, topic, audience, tone,
                 "success": True,
                 "enhanced_script": final_script_with_tools,
                 "script_title": resolved_script_title,
+                "script_id": _new_script_id,
+                "script_version": _new_script_version,
                 "demo_packages": demo_packages,
                 "youtube_details": youtube_upload_details,
                 "thumbnail_results": thumbnail_results,
@@ -2457,6 +2540,17 @@ async def process_existing_script(
             logger.info(
                 "🧹 Stripped legacy 'AI Digital Twin' boilerplate intro from script_content")
             script_content = _new.lstrip()
+
+    # Every processing run bumps the Script-Version (a no-op-bump is impossible
+    # here since manual edits don't reach this path). The permanent Script-ID is
+    # preserved if present, else assigned. We fix both ids for the whole run so
+    # all artifacts produced below can be tied to this exact version, then
+    # re-stamp the final script with the same ids at the end (agents may strip
+    # the lines while rewriting).
+    script_content, proc_script_id, proc_script_version = _ensure_script_ids(
+        script_content, bump_version=True)
+    logger.info(
+        f"🆔 Processing run: Script-ID={proc_script_id} Version={proc_script_version}")
 
     try:
         # Initialize EDL variables
@@ -3860,6 +3954,11 @@ async def process_existing_script(
             except Exception as e:
                 logger.error(f"❌ Flow analysis error: {e}")
 
+        # Re-stamp the final script with the SAME ids fixed at the start of the
+        # run (agents may have stripped the lines while rewriting the script).
+        final_output, _, _ = _ensure_script_ids(
+            final_output, script_id=proc_script_id, version_id=proc_script_version)
+
         # Complete — save files and set result BEFORE sending done=True so the
         # SSE handler always finds a valid streamer.result when it reads on progress==100.
         saved_markdown_path, saved_docx_path = await _save_script_md_and_docx(
@@ -3872,6 +3971,8 @@ async def process_existing_script(
             "enhanced_script": final_output,  # SSE handler expects "enhanced_script" key
             "script": final_output,  # Also include "script" for compatibility
             "script_title": script_title,
+            "script_id": proc_script_id,
+            "script_version": proc_script_version,
             "thumbnail_results": thumbnail_results,
             "thumbnail_hook_text": thumbnail_hook_text,
             "thumbnail_hook_text_options": thumbnail_hook_text_options,
@@ -4526,6 +4627,8 @@ def progress_stream(session_id):
                                 "message": update_data.get("message", "✅ Script creation complete!"),
                                 "script": streamer.result.get("enhanced_script", ""),
                                 "script_title": streamer.result.get("script_title", "Untitled Script"),
+                                "script_id": streamer.result.get("script_id"),
+                                "script_version": streamer.result.get("script_version"),
                                 "demo_packages": streamer.result.get("demo_packages"),
                                 "word_count": streamer.result.get("word_count", 0),
                                 "reading_time": streamer.result.get("reading_time", "N/A"),

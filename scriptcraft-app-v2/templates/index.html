@@ -4450,6 +4450,8 @@ Time management content here...`;
                             window.currentEDLFilename = edlFilename;
                             window.currentCurlCommands = curlCommands;
                             window.currentScriptTitle = scriptTitle;
+                            if (message.script_id) window.currentScriptId = message.script_id;
+                            if (message.script_version) window.currentScriptVersion = message.script_version;
                             window.currentBrollImages = brollImages || [];
                             window.currentGrokVideos = grokVideos || [];
                             window.currentThumbnails = thumbnails || [];
@@ -4917,6 +4919,8 @@ Time management content here...`;
                         window.currentEDLFilename = edlFilename;
                         window.currentCurlCommands = curlCommands;
                         window.currentScriptTitle = scriptTitle;
+                        if (message.script_id) window.currentScriptId = message.script_id;
+                        if (message.script_version) window.currentScriptVersion = message.script_version;
                         window.currentBrollImages = brollImages || [];
                         window.currentGrokVideos = grokVideos || [];
                         window.currentThumbnails = thumbnails || [];
@@ -6320,6 +6324,16 @@ Thank you for watching!`;
         }
         // ---- end Script Input toggle ----
 
+        // Parse the in-script Script-ID (permanent) + Script-Version lines into
+        // window globals so a reloaded script re-links to its stored artifacts.
+        function _syncScriptIdsFromText(text) {
+            if (typeof text !== 'string') return;
+            const sid = text.match(/^[ \t]*\**[ \t]*Script-ID[ \t]*\**[ \t]*:[ \t]*\**[ \t]*([A-Za-z0-9\-]+)/im);
+            const ver = text.match(/^[ \t]*\**[ \t]*Script-Version[ \t]*\**[ \t]*:[ \t]*\**[ \t]*([A-Za-z0-9\-]+)/im);
+            if (sid) window.currentScriptId = sid[1];
+            if (ver) window.currentScriptVersion = ver[1];
+        }
+
         async function loadFile(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -6342,6 +6356,7 @@ Thank you for watching!`;
                     text = await file.text();
                 }
                 document.getElementById('scriptInput').value = text;
+                _syncScriptIdsFromText(text);
                 // Remember the loaded filename so the backend can use it as
                 // the stem for derived files (e.g. {stem}_shortened.md/.docx).
                 window.currentScriptFilename = file.name || '';
@@ -7956,6 +7971,7 @@ Thank you for watching!`;
                     // so the user can see it (matches the normal processing flow).
                     try {
                         window.currentScript = data.script || '';
+                        _syncScriptIdsFromText(window.currentScript);
                         window.currentScriptTitle = data.script_title || scriptTitle;
                         const resultDiv = document.getElementById('result');
                         if (resultDiv && typeof createTabbedInterface === 'function') {
