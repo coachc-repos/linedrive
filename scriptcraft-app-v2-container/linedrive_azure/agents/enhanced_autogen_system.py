@@ -51,6 +51,46 @@ from .script_topic_assistant_agent_client import ScriptTopicAssistantAgentClient
 from .hook_and_summary_agent_client import HookAndSummaryAgentClient
 
 
+# Known acronyms preserved as-is when de-shouting (everything else that is
+# ALL-CAPS gets title-cased). Matched case-insensitively per letter run.
+_DESHOUT_KEEP = {
+    "AI", "API", "APIS", "ML", "LLM", "LLMS", "GPT", "UI", "UX", "SEO", "CSS",
+    "HTML", "SQL", "AWS", "GCP", "CPU", "GPU", "SDK", "CLI", "URL", "URI",
+    "HTTP", "HTTPS", "JSON", "XML", "IOT", "AR", "VR", "NLP", "RAG", "ROI",
+    "KPI", "CRM", "ERP", "SAAS", "PAAS", "IAAS", "IT", "PC", "OS", "DB", "ID",
+    "FAQ", "PDF", "CSV", "RAM", "SSD", "USB", "2D", "3D", "4K", "HD", "USA",
+    "UK", "EU", "CEO", "CTO", "CFO", "B2B", "B2C", "QA", "ETL", "VPN", "DNS",
+}
+
+
+def _deshout_text(text: str) -> str:
+    """Tone down ALL-CAPS 'shouting' so Azure's content filter doesn't reject
+    the topic plan / chapter titles as aggressive.
+
+    A whitespace token that is entirely upper-case (no lowercase letter) has
+    each of its letter runs title-cased, except runs that are a known acronym
+    (kept as-is). Tokens that already contain a lowercase letter are untouched.
+    Examples:
+        "BUILDING AI APPS WITH PYTHON" -> "Building AI Apps With Python"
+        "THE FUTURE OF WORK"           -> "The Future Of Work"
+        "AI-POWERED WORKFLOWS"         -> "AI-Powered Workflows"
+    """
+    if not text:
+        return text
+
+    def _fix_run(r: "re.Match") -> str:
+        run = r.group(0)
+        return run if run.upper() in _DESHOUT_KEEP else run.capitalize()
+
+    def _fix_token(m: "re.Match") -> str:
+        w = m.group(0)
+        if any(c.islower() for c in w):
+            return w  # already mixed/normal case -> not shouting
+        return re.sub(r"[A-Za-z]+", _fix_run, w)
+
+    return re.sub(r"\S+", _fix_token, text)
+
+
 class LineDriveAgentModelClient(ChatCompletionClient):
     """Custom AutoGen model client for LineDrive agents"""
 
@@ -979,6 +1019,12 @@ secondary. Ensure every chapter serves the goals outlined in the description.
             step_end = get_timestamp()
             if topic_result["success"]:
                 topic_enhancement = topic_result["response"]
+                # De-shout ALL-CAPS chapter titles / planning text. Azure's
+                # content filter flags shouting as aggressive and rejects the
+                # downstream chapter-writer calls, so normalize here — this
+                # fixes both the extracted chapter titles AND the full planning
+                # text passed to the writer agent.
+                topic_enhancement = _deshout_text(topic_enhancement)
                 print(
                     f"✅ Topic enhanced ({len(topic_enhancement)} chars) [{step_end}]"
                 )
