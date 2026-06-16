@@ -2112,7 +2112,9 @@ Time management content here...`;
                 body: JSON.stringify({
                     selected_rows: selectedRows,
                     api_key: grokApiKey,
-                    script_title: window.currentScriptTitle || ''
+                    script_title: window.currentScriptTitle || '',
+                    // Persist + accumulate videos under the permanent Script-ID.
+                    script_id: window.currentScriptId || ''
                 })
             })
             .then(r => r.json())
@@ -2149,7 +2151,14 @@ Time management content here...`;
                         const cancelled = !!payload.cancelled;
                         const finalList = Array.isArray(payload.videos) && payload.videos.length >= liveVideos.length
                             ? payload.videos : liveVideos.slice();
-                        try { rerenderCurrentResultWithGrokVideos(finalList); } catch (_) {}
+                        // Replace with the full ACCUMULATED set persisted in
+                        // Azure for this Script-ID (so re-running Grok adds to
+                        // the previously generated videos instead of replacing
+                        // them). Falls back to this run's list if unavailable.
+                        _restoreGrokVideos(window.currentScriptId, finalList).then(list => {
+                            window.currentGrokVideos = list;
+                            try { rerenderCurrentResultWithGrokVideos(list); } catch (_) {}
+                        });
                         addProgressMessage(
                             cancelled
                                 ? `🛑 Grok generation stopped — kept ${payload.generated_count}/${payload.total_requested} videos`
@@ -4387,6 +4396,8 @@ Time management content here...`;
                             window.currentEDLFilename = edlFilename;
                             window.currentCurlCommands = curlCommands;
                             window.currentScriptTitle = scriptTitle;
+                            if (message.script_id) window.currentScriptId = message.script_id;
+                            if (message.script_version) window.currentScriptVersion = message.script_version;
                             window.currentBrollImages = brollImages || [];
                             window.currentGrokVideos = grokVideos || [];
                             window.currentThumbnails = thumbnails || [];
@@ -4854,6 +4865,8 @@ Time management content here...`;
                         window.currentEDLFilename = edlFilename;
                         window.currentCurlCommands = curlCommands;
                         window.currentScriptTitle = scriptTitle;
+                        if (message.script_id) window.currentScriptId = message.script_id;
+                        if (message.script_version) window.currentScriptVersion = message.script_version;
                         window.currentBrollImages = brollImages || [];
                         window.currentGrokVideos = grokVideos || [];
                         window.currentThumbnails = thumbnails || [];
@@ -6257,6 +6270,31 @@ Thank you for watching!`;
         }
         // ---- end Script Input toggle ----
 
+        // Parse the in-script Script-ID (permanent) + Script-Version lines into
+        // window globals so a reloaded script re-links to its stored artifacts.
+        function _syncScriptIdsFromText(text) {
+            if (typeof text !== 'string') return;
+            const sid = text.match(/^[ \t]*\**[ \t]*Script-ID[ \t]*\**[ \t]*:[ \t]*\**[ \t]*([A-Za-z0-9\-]+)/im);
+            const ver = text.match(/^[ \t]*\**[ \t]*Script-Version[ \t]*\**[ \t]*:[ \t]*\**[ \t]*([A-Za-z0-9\-]+)/im);
+            if (sid) window.currentScriptId = sid[1];
+            if (ver) window.currentScriptVersion = ver[1];
+        }
+
+        // Fetch the full set of Grok videos persisted in Azure for a Script-ID
+        // (videos accumulate across every processing version of the script).
+        // Returns fallbackList on any failure / when persistence is disabled.
+        async function _restoreGrokVideos(scriptId, fallbackList) {
+            if (!scriptId) return fallbackList || [];
+            try {
+                const r = await fetch('/api/script-artifacts/videos?script_id=' + encodeURIComponent(scriptId));
+                const d = await r.json();
+                if (d && d.success && Array.isArray(d.videos) && d.videos.length) {
+                    return d.videos;
+                }
+            } catch (_) { /* ignore — keep this run's videos */ }
+            return fallbackList || [];
+        }
+
         async function loadFile(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -6279,6 +6317,7 @@ Thank you for watching!`;
                     text = await file.text();
                 }
                 document.getElementById('scriptInput').value = text;
+                _syncScriptIdsFromText(text);
                 // Remember the loaded filename so the backend can use it as
                 // the stem for derived files (e.g. {stem}_shortened.md/.docx).
                 window.currentScriptFilename = file.name || '';
@@ -7893,6 +7932,7 @@ Thank you for watching!`;
                     // so the user can see it (matches the normal processing flow).
                     try {
                         window.currentScript = data.script || '';
+                        _syncScriptIdsFromText(window.currentScript);
                         window.currentScriptTitle = data.script_title || scriptTitle;
                         const resultDiv = document.getElementById('result');
                         if (resultDiv && typeof createTabbedInterface === 'function') {
