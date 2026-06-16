@@ -6407,33 +6407,36 @@ GROK_REWRITE_MODEL = (
 )
 
 # Deterministic fallback styling, used when the LLM rewrite is unavailable — it
-# still steers a raw description away from literal live-action footage.
+# still steers a raw description toward animation while staying on-scene.
 GROK_VISUAL_STYLE_DIRECTIVE = (
-    " Render this as a unique, theme-specific animation — motion graphics, an "
-    "animated schematic diagram, data visualization, isometric illustration, or "
-    "abstract conceptual artwork — not literal live-action footage. Bold, "
-    "cinematic, and original."
+    " Render this exact scene as polished 2D/3D animation, motion graphics, or "
+    "illustration (not literal live-action stock footage), staying faithful to "
+    "what is described above."
 )
 
 GROK_REWRITE_SYSTEM = (
-    "You turn a single b-roll scene description into ONE prompt for an AI video "
+    "You convert a b-roll scene description into ONE prompt for an AI video "
     "generator (grok-imagine-video) that makes a ~6 second SILENT clip.\n"
-    "Your job: produce a UNIQUE, visually striking GENERATED visual that cannot "
-    "be bought as stock footage and that is SPECIFIC to the video's topic.\n"
+    "GOAL: depict EXACTLY WHAT THE DESCRIPTION SAYS — the same subject, "
+    "objects, setting, and action — but rendered as polished ANIMATION / motion "
+    "graphics / an illustrated or diagrammatic scene instead of literal "
+    "live-action stock footage. The viewer must immediately recognize the thing "
+    "the description is about.\n"
     "Rules:\n"
-    "- Favor animation, motion graphics, animated/schematic diagrams, data "
-    "visualizations, isometric or hand-drawn illustration, infographic motion, "
-    "glowing node networks, particle systems, and abstract conceptual artwork.\n"
-    "- ESPECIALLY for generic, easily-stocked scenes (someone typing on a "
-    "laptop, using a chatbot, sitting in an office, shaking hands, a city "
-    "skyline), DO NOT depict them literally. Replace them with an imaginative "
-    "conceptual visualization of the underlying IDEA, using concrete imagery, "
-    "objects, and metaphors drawn from the specific topic.\n"
-    "- Weave in concrete, topic-specific elements so the clip is clearly about "
-    "THIS subject, not a generic explainer.\n"
-    "- Describe the key animated elements, camera movement, color palette, and "
-    "art style. No on-screen text or captions.\n"
-    "- Output ONLY the final prompt: 1-3 sentences, under ~70 words, no quotes, "
+    "- FIDELITY FIRST: keep the description's concrete nouns, subject, setting, "
+    "and action. You are changing the STYLE (to animation/illustration), NOT "
+    "the CONTENT. Never swap the scene for an unrelated abstract metaphor.\n"
+    "- Choose the style that best SHOWS this specific scene: 2D/3D animation, "
+    "motion graphics, animated schematic diagram, data visualization, isometric "
+    "or hand-drawn illustration, infographic motion.\n"
+    "- For generic, easily-stocked scenes (typing on a laptop, using a chatbot, "
+    "an office, a handshake), keep that SAME scene but render it as a stylized "
+    "animated/illustrated version — still clearly that scene, just generated "
+    "art rather than stock footage.\n"
+    "- Add a little topic-specific detail from the theme so it clearly belongs "
+    "to THIS subject. Describe the key elements, motion, and art style. No "
+    "on-screen text or captions.\n"
+    "- Output ONLY the final prompt: 1-2 sentences, under ~55 words, no quotes, "
     "no preamble, no lists."
 )
 
@@ -6469,7 +6472,7 @@ def _grok_build_video_prompt(
             parts.append(f"Scene context: {scene_context.strip()}")
         user_msg = "\n".join(parts)
 
-        chat = client.chat.create(model=GROK_REWRITE_MODEL, temperature=0.85)
+        chat = client.chat.create(model=GROK_REWRITE_MODEL, temperature=0.6)
         chat.append(_xai_system(GROK_REWRITE_SYSTEM))
         chat.append(_xai_user(user_msg))
         resp = chat.sample()
