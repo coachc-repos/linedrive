@@ -882,7 +882,7 @@ class EnhancedAutoGenSystem:
 
         # Create properly formatted markdown document
         # Show only the final revised script (no duplicates)
-        formatted_result = f"""# Direct Video - {script_topic}
+        formatted_result = f"""Title: {script_topic}
 **Script Type:** Video
 **Duration:** {script_length}
 **Generated:** {timestamp}
@@ -1346,8 +1346,8 @@ specific points to cover, and overall approach. Honor their intent.
 
             # Combine all chapters into full script
             combined_script = f"""
-# Direct Video - {script_topic}
-**Script Type:** Video  
+Title: {script_topic}
+**Script Type:** Video
 **Duration:** {script_length}  
 **Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 

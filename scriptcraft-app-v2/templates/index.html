@@ -6365,7 +6365,7 @@ Thank you for watching!`;
             let m = text.match(/^[ \t]*\**[ \t]*Title[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*\**[ \t]*$/im);
             if (m && m[1].trim()) return m[1].trim();
             m = text.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/m);
-            if (m && m[1].trim()) return m[1].trim();
+            if (m && m[1].trim()) return m[1].trim().replace(/^Direct\s+Video\s*-\s*/i, '').trim();
             for (const raw of text.split('\n').slice(0, 20)) {
                 const ln = raw.trim();
                 if (!ln) continue;
