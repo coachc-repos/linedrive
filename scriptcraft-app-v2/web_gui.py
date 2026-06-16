@@ -2465,6 +2465,16 @@ async def process_script_creation(session_id, topic, audience, tone,
                 "docx_path": saved_docx_path,
             }
 
+            # Persist every artifact of this version so the script restores its
+            # tabs when reopened later (Grok videos persist separately by id).
+            try:
+                _persist_version_artifacts(
+                    _new_script_id, _new_script_version, streamer.result,
+                    resolved_script_title)
+            except Exception as _e:
+                logger.warning(
+                    f"⚠️ version artifact persist (create) failed: {_e}")
+
             # Debug: Log what's in the result
             print(
                 f"🔍 DEBUG: Result object curl_commands = {curl_commands is not None} ({len(curl_commands) if curl_commands else 0} chars)")
@@ -3987,6 +3997,13 @@ async def process_existing_script(
             "markdown_path": saved_markdown_path,
             "docx_path": saved_docx_path,
         }
+        # Persist every artifact of this version so the script restores its tabs
+        # when reopened later (Grok videos are persisted separately by Script-ID).
+        try:
+            _persist_version_artifacts(
+                proc_script_id, proc_script_version, streamer.result, script_title)
+        except Exception as _e:
+            logger.warning(f"⚠️ version artifact persist (process) failed: {_e}")
         logger.info("✅ Script processing completed successfully")
         # Send done=True AFTER result is set so the SSE handler always finds a valid result.
         streamer.send_update("✅ Script processing complete!", 100)
@@ -6465,11 +6482,15 @@ def _grok_build_video_prompt(
         from xai_sdk.chat import system as _xai_system, user as _xai_user
 
         parts = []
-        if (theme or "").strip():
-            parts.append(f"Video topic / theme: {theme.strip()}")
-        parts.append(f"Scene to visualize: {base}")
+        parts.append(
+            "SCENE TO DEPICT (most important — your prompt MUST show exactly "
+            f"this, keeping its specific subject and objects): {base}")
         if (scene_context or "").strip():
-            parts.append(f"Scene context: {scene_context.strip()}")
+            parts.append(f"Why this scene appears in the video: {scene_context.strip()}")
+        if (theme or "").strip():
+            parts.append(
+                f"Overall video topic (for flavor/detail only, do NOT replace "
+                f"the scene with it): {theme.strip()}")
         user_msg = "\n".join(parts)
 
         chat = client.chat.create(model=GROK_REWRITE_MODEL, temperature=0.6)
@@ -10160,6 +10181,145 @@ def api_script_artifacts_videos():
         return jsonify({"success": False, "error": "script_id required"}), 400
     vids = _list_grok_videos_for_script(script_id)
     return jsonify({"success": True, "videos": vids, "count": len(vids)})
+
+
+# --- Phase C: persist + restore ALL artifacts of a Script-Version -----------
+def _find_media_file(filename: str) -> "Optional[Path]":
+    """Locate a generated thumbnail/b-roll image on disk by filename (mirrors
+    the /thumbnails and /broll-images serving routes)."""
+    if not filename:
+        return None
+    for root in (_get_output_parent_dir(),
+                 Path.home() / "Dev" / "Thumbnails",
+                 Path.home() / "Dev" / "brollimages"):
+        try:
+            if root.exists():
+                matches = list(root.rglob(filename))
+                if matches:
+                    return matches[0]
+        except Exception:
+            continue
+    return None
+
+
+def _persist_version_artifacts(script_id: str, version_id: str, result: dict,
+                               script_title: str = "") -> None:
+    """Upload every artifact produced by a create/process run to Azure under
+    <script_id>/versions/<version_id>/ so the script reopened later restores
+    its tabs. Text artifacts go in artifacts.json; thumbnails + b-roll images
+    are uploaded as files (durable SAS urls served on restore). Grok videos are
+    persisted separately by Script-ID. Never raises into the caller.
+    """
+    if not _artifacts_enabled() or not script_id or not version_id or not result:
+        return
+    try:
+        sid = _safe_blob_id(script_id)
+        vid = _safe_blob_id(version_id)
+        prefix = f"{sid}/versions/{vid}"
+        title = script_title or result.get("script_title", "")
+
+        # Thumbnails (collect entries, upload each image file).
+        thumb_entries = []
+        try:
+            tlist = _collect_all_thumbnail_entries(
+                title, result.get("thumbnail_results"))
+        except Exception:
+            tlist = result.get("thumbnails") or []
+        for t in (tlist or []):
+            fn = (t.get("filename") or "").split("/")[-1]
+            if not fn:
+                continue
+            fp = _find_media_file(fn)
+            blob = f"{prefix}/thumbnails/{fn}"
+            if fp and _artifacts_upload_file(blob, fp, "image/png"):
+                thumb_entries.append({
+                    "filename": fn, "blob_name": blob,
+                    "emotion": t.get("emotion", ""), "text": t.get("text", ""),
+                })
+
+        # B-roll images.
+        broll_entries = []
+        for b in (result.get("broll_images") or []):
+            fn = ((b.get("filename") or b.get("filepath") or "")
+                  .split("/")[-1])
+            if not fn:
+                continue
+            fp = _find_media_file(fn)
+            blob = f"{prefix}/broll/{fn}"
+            if fp and _artifacts_upload_file(blob, fp, "image/png"):
+                broll_entries.append({
+                    "filename": fn, "blob_name": blob,
+                    "search_term": b.get("search_term", ""),
+                    "timecode": b.get("timecode", ""),
+                })
+
+        manifest = {
+            "script_id": sid, "version_id": vid, "script_title": title,
+            "broll_table": result.get("broll_table"),
+            "broll_rows": result.get("broll_rows"),
+            "youtube_details": result.get("youtube_details"),
+            "demo_packages": result.get("demo_packages"),
+            "flow_original_script": result.get("flow_original_script"),
+            "flow_improved_script": result.get("flow_improved_script"),
+            "flow_analysis_report": result.get("flow_analysis_report"),
+            "chapter_comparisons": result.get("chapter_comparisons"),
+            "edl_content": result.get("edl_content"),
+            "edl_filename": result.get("edl_filename"),
+            "curl_commands": result.get("curl_commands"),
+            "hooks": result.get("hooks"),
+            "hook_labels": result.get("hook_labels"),
+            "thumbnails": thumb_entries,
+            "broll_images": broll_entries,
+        }
+        _artifacts_upload_bytes(
+            f"{prefix}/artifacts.json",
+            json.dumps(manifest).encode("utf-8"), "application/json")
+        logger.info(
+            f"📦 Persisted version artifacts {sid}/{vid}: "
+            f"{len(thumb_entries)} thumbnails, {len(broll_entries)} b-roll images")
+    except Exception as e:
+        logger.warning(f"⚠️ persist version artifacts failed: {e}")
+
+
+def _read_version_artifacts(script_id: str, version_id: str) -> "Optional[dict]":
+    """Read a version's artifacts.json and attach fresh SAS urls to media."""
+    if not _artifacts_enabled() or not script_id or not version_id:
+        return None
+    sid = _safe_blob_id(script_id)
+    vid = _safe_blob_id(version_id)
+    try:
+        cc = _artifacts_container()
+        raw = cc.download_blob(f"{sid}/versions/{vid}/artifacts.json").readall()
+        manifest = json.loads(raw)
+    except Exception:
+        return None
+    for t in (manifest.get("thumbnails") or []):
+        if t.get("blob_name"):
+            try:
+                t["url"] = _artifacts_sas_url(t["blob_name"])
+            except Exception:
+                pass
+    for b in (manifest.get("broll_images") or []):
+        if b.get("blob_name"):
+            try:
+                b["url"] = _artifacts_sas_url(b["blob_name"])
+            except Exception:
+                pass
+    return manifest
+
+
+@app.route("/api/script-artifacts/version", methods=["GET"])
+def api_script_artifacts_version():
+    """Restore all stored artifacts for a specific Script-Version."""
+    script_id = (request.args.get("script_id") or "").strip()
+    version_id = (request.args.get("version_id") or "").strip()
+    if not script_id or not version_id:
+        return jsonify({"success": False,
+                        "error": "script_id and version_id required"}), 400
+    data = _read_version_artifacts(script_id, version_id)
+    if data is None:
+        return jsonify({"success": True, "found": False})
+    return jsonify({"success": True, "found": True, "artifacts": data})
 
 
 def _list_finished_videos_from_blob():

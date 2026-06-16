@@ -2224,6 +2224,14 @@ Time management content here...`;
         let thumbnailData = [];
         
         // Function to render thumbnail gallery
+        // Image src for a media entry: prefer a restored blob URL (Azure SAS),
+        // else the local-disk serving route by filename.
+        function _mediaSrc(entry, routePrefix) {
+            if (entry && entry.url) return entry.url;
+            const fn = ((entry && entry.filename) || '').split('/').pop();
+            return routePrefix + fn;
+        }
+
         function renderThumbnailGallery(thumbnails) {
             if (!thumbnails || thumbnails.length === 0) {
                 return '';
@@ -2237,7 +2245,7 @@ Time management content here...`;
                     <h3>🖼️ Generated Thumbnails (${thumbnails.length} variations)</h3>
                     <div class="thumbnail-viewer">
                         <div class="thumbnail-main">
-                            <img id="mainThumbnail" src="/thumbnails/${thumbnails[0].filename}" alt="${thumbnails[0].emotion}">
+                            <img id="mainThumbnail" src="${_mediaSrc(thumbnails[0], '/thumbnails/')}" alt="${thumbnails[0].emotion}">
                             <div class="thumbnail-info">
                                 <strong>Emotion:</strong> <span id="thumbnailEmotion">${thumbnails[0].emotion}</span><br>
                                 <strong>Text:</strong> <span id="thumbnailText">${thumbnails[0].text}</span>
@@ -2253,7 +2261,7 @@ Time management content here...`;
                         <div class="thumbnail-thumbnails">
                             ${thumbnails.map((thumb, index) => `
                                 <div class="thumbnail-thumb ${index === 0 ? 'active' : ''}" onclick="showThumbnail(${index})" data-index="${index}">
-                                    <img src="/thumbnails/${thumb.filename}" alt="${thumb.emotion}">
+                                    <img src="${_mediaSrc(thumb, '/thumbnails/')}" alt="${thumb.emotion}">
                                 </div>
                             `).join('')}
                         </div>
@@ -2270,7 +2278,7 @@ Time management content here...`;
             const thumb = thumbnailData[index];
             
             // Update main image
-            document.getElementById('mainThumbnail').src = `/thumbnails/${thumb.filename}`;
+            document.getElementById('mainThumbnail').src = _mediaSrc(thumb, '/thumbnails/');
             document.getElementById('thumbnailEmotion').textContent = thumb.emotion;
             document.getElementById('thumbnailText').textContent = thumb.text;
             document.getElementById('thumbnailCounter').textContent = `${index + 1} of ${thumbnailData.length}`;
@@ -2322,7 +2330,7 @@ Time management content here...`;
                     </h3>
                     <div class="thumbnail-viewer">
                         <div class="thumbnail-main">
-                            <img id="mainBRoll" src="/broll-images/${filename}" alt="${firstImage.search_term}">
+                            <img id="mainBRoll" src="${_mediaSrc(firstImage, '/broll-images/')}" alt="${firstImage.search_term}">
                             <div class="thumbnail-info">
                                 <strong>Search Term:</strong> <span id="brollSearchTerm">${firstImage.search_term}</span><br>
                                 <strong>Description:</strong> <span id="brollDescription">${firstImage.description}</span>
@@ -2337,9 +2345,8 @@ Time management content here...`;
                         </div>
                         <div class="thumbnail-thumbnails">
                             ${brollImages.map((img, index) => {
-                                const fname = img.filename.split('/').pop();
                                 return `<div class="thumbnail-thumb ${index === 0 ? 'active' : ''}" onclick="showBRoll(${index})" data-index="${index}">
-                                    <img src="/broll-images/${fname}" alt="${img.search_term}">
+                                    <img src="${_mediaSrc(img, '/broll-images/')}" alt="${img.search_term}">
                                 </div>`;
                             }).join('')}
                         </div>
@@ -2353,9 +2360,8 @@ Time management content here...`;
             
             currentBrollIndex = index;
             const img = brollData[index];
-            const filename = img.filename.split('/').pop();
-            
-            document.getElementById('mainBRoll').src = `/broll-images/${filename}`;
+
+            document.getElementById('mainBRoll').src = _mediaSrc(img, '/broll-images/');
             document.getElementById('brollSearchTerm').textContent = img.search_term;
             document.getElementById('brollDescription').textContent = img.description;
             document.getElementById('brollCounter').textContent = `${index + 1} of ${brollData.length}`;
@@ -6322,44 +6328,84 @@ Thank you for watching!`;
         // Render a loaded/reopened script into the main result view (tabs +
         // title), restoring any Grok videos persisted under its Script-ID so a
         // script reopened from a saved Word doc shows its accumulated videos.
+        // Fetch all artifacts stored for a Script-Version (b-roll table/images,
+        // thumbnails, flow, demo, YouTube, etc.). Returns null if none stored.
+        async function _restoreVersionArtifacts(scriptId, versionId) {
+            if (!scriptId || !versionId) return null;
+            try {
+                const r = await fetch('/api/script-artifacts/version?script_id='
+                    + encodeURIComponent(scriptId) + '&version_id='
+                    + encodeURIComponent(versionId));
+                const d = await r.json();
+                if (d && d.success && d.found) return d.artifacts;
+            } catch (_) { /* ignore */ }
+            return null;
+        }
+
         async function displayLoadedScriptResult(scriptText) {
             if (!scriptText || !scriptText.trim()) return;
             window.currentScript = scriptText;
             const title = _parseScriptTitleFromText(scriptText);
             if (title) window.currentScriptTitle = title;
 
-            // Restore persisted Grok videos for this Script-ID (empty if the
-            // doc has no Script-ID or nothing was persisted for it).
+            // Restore Grok videos (by permanent Script-ID) and all other
+            // artifacts (by Script-Version) persisted in Azure.
             const vids = await _restoreGrokVideos(window.currentScriptId, []);
             window.currentGrokVideos = vids;
+            const ver = await _restoreVersionArtifacts(
+                window.currentScriptId, window.currentScriptVersion);
+
+            const _thumbs = (ver && ver.thumbnails) || [];
+            const _broll = (ver && ver.broll_images) || [];
+            window.currentThumbnails = _thumbs;
+            window.currentBrollImages = _broll;
+            window._currentYoutubeDetails = (ver && ver.youtube_details) || null;
 
             const headerTitle = (window.currentScriptTitle || 'Loaded Script')
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             window.currentResultPayload = {
                 resultHeaderHtml: `<h3>📂 Loaded Script</h3><p><strong>Title:</strong> <span id="displayedScriptTitle">${headerTitle}</span></p>`,
                 mainScript: scriptText,
-                demoPackages: null, thumbnails: [], chapterComparisons: null,
-                flowOriginal: null, flowImproved: null, flowAnalysis: null,
-                edlContent: null, edlFilename: null, curlCommands: null,
-                brollImages: [], grokVideos: vids, brollTable: null, youtubeDetails: null
+                demoPackages: (ver && ver.demo_packages) || null,
+                thumbnails: _thumbs,
+                chapterComparisons: (ver && ver.chapter_comparisons) || null,
+                flowOriginal: (ver && ver.flow_original_script) || null,
+                flowImproved: (ver && ver.flow_improved_script) || null,
+                flowAnalysis: (ver && ver.flow_analysis_report) || null,
+                edlContent: (ver && ver.edl_content) || null,
+                edlFilename: (ver && ver.edl_filename) || null,
+                curlCommands: (ver && ver.curl_commands) || null,
+                brollImages: _broll,
+                grokVideos: vids,
+                brollTable: (ver && ver.broll_table) || null,
+                youtubeDetails: (ver && ver.youtube_details) || null
             };
+            const p = window.currentResultPayload;
             const tabbedHTML = createTabbedInterface(
-                scriptText, null, [], null, null, null, null,
-                null, null, null, [], vids, null, null);
+                scriptText, p.demoPackages, p.thumbnails, p.chapterComparisons,
+                p.flowOriginal, p.flowImproved, p.flowAnalysis, p.edlContent,
+                p.edlFilename, p.curlCommands, p.brollImages, vids,
+                p.brollTable, p.youtubeDetails);
             const resultDiv = document.getElementById('result');
             if (!resultDiv) return;
-            resultDiv.innerHTML = window.currentResultPayload.resultHeaderHtml + tabbedHTML;
+            resultDiv.innerHTML = p.resultHeaderHtml + tabbedHTML;
             resultDiv.className = 'result';
             resultDiv.style.display = 'block';
             ['saveBtn', 'wordBtn', 'markdownBtn', 'heygenBtn'].forEach(id => {
                 const b = document.getElementById(id); if (b) b.style.display = 'inline-block';
             });
             setTimeout(() => {
-                try { renderMarkdownContent(scriptText, null, null, null); } catch (_) {}
+                try { renderMarkdownContent(scriptText, null, p.flowOriginal, p.flowImproved); } catch (_) {}
                 if (vids && vids.length) { try { switchTab('grokVideos'); } catch (_) {} }
+                else if (_thumbs.length) { try { switchTab('thumbnails'); } catch (_) {} }
             }, 120);
-            if (vids && vids.length && typeof addProgressMessage === 'function') {
-                addProgressMessage(`📂 Restored ${vids.length} previously generated Grok video(s) for this script.`, 'success');
+            const _restored = [];
+            if (vids && vids.length) _restored.push(`${vids.length} Grok video(s)`);
+            if (_thumbs.length) _restored.push(`${_thumbs.length} thumbnail(s)`);
+            if (_broll.length) _restored.push(`${_broll.length} b-roll image(s)`);
+            if (ver && (ver.broll_table || ver.youtube_details)) _restored.push('b-roll table / YouTube details');
+            if (_restored.length && typeof addProgressMessage === 'function') {
+                addProgressMessage('📂 Restored for this script: ' + _restored.join(', ') + '.', 'success');
             }
         }
 
