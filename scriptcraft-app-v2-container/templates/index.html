@@ -6299,16 +6299,22 @@ Thank you for watching!`;
         // the first markdown heading, then the first non-empty content line.
         function _parseScriptTitleFromText(text) {
             if (typeof text !== 'string') return '';
+            // Strip a leading "Title:" / "Direct Video -" so a heading-styled
+            // title line (e.g. "# Title: Foo") yields just "Foo".
+            const _clean = (s) => (s || '').trim()
+                .replace(/^Direct\s+Video\s*-\s*/i, '')
+                .replace(/^\**\s*Title\s*\**\s*:\s*\**\s*/i, '')
+                .trim();
             let m = text.match(/^[ \t]*\**[ \t]*Title[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*\**[ \t]*$/im);
-            if (m && m[1].trim()) return m[1].trim();
+            if (m && m[1].trim()) return _clean(m[1]);
             m = text.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/m);
-            if (m && m[1].trim()) return m[1].trim().replace(/^Direct\s+Video\s*-\s*/i, '').trim();
+            if (m && m[1].trim()) return _clean(m[1]);
             for (const raw of text.split('\n').slice(0, 20)) {
                 const ln = raw.trim();
                 if (!ln) continue;
                 if (/^(Script-ID|Script-Version)\s*:/i.test(ln)) continue;
                 if (/^[#*\-\[]/.test(ln)) continue;
-                if (ln.length <= 150) return ln;
+                if (ln.length <= 150) return _clean(ln);
             }
             return '';
         }
@@ -9942,13 +9948,14 @@ Thank you for watching!`;
           _curBanner.style.display = 'none';
         }
       }
-      // Show the script's Title: line at the top of the dialog.
+      // Show the script's title at the top of the dialog. Robust parse:
+      // Title: line -> first heading (Direct Video prefix stripped) -> first
+      // real line, then fall back to the last known title.
       const _titleEl = document.getElementById('spsScriptTitle');
       if (_titleEl) {
         const _srcText = (_ta && _ta.value) || window.currentScript || '';
-        const _tm = _srcText.match(
-          /^[ \t]*\**[ \t]*Title[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.+?)[ \t]*\**[ \t]*$/im);
-        const _parsedTitle = (_tm ? _tm[1] : '').trim()
+        const _parsedTitle = ((typeof _parseScriptTitleFromText === 'function')
+          ? _parseScriptTitleFromText(_srcText) : '')
           || (window.currentScriptTitle || '').trim();
         if (_parsedTitle) {
           const _safe = _parsedTitle
