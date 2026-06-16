@@ -6525,7 +6525,7 @@ def _grok_emit(session_id: str, payload: dict) -> None:
             pass
 
 
-def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, script_title: str = "") -> None:
+def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, script_title: str = "", script_id: str = "") -> None:
     """Background worker: generate Grok videos one-by-one, streaming progress and honoring cancel."""
     cancel_evt = grok_video_cancel_events.setdefault(
         session_id, _threading.Event())
@@ -6641,6 +6641,13 @@ def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, sc
                 "url": response.url,
                 "filename": str(local_path),
             }
+            # Persist to Azure under the permanent Script-ID so the video is
+            # restored next time this script is loaded (survives refresh). The
+            # durable blob SAS URL replaces the short-lived xAI url for playback.
+            blob_url = _persist_grok_video(script_id, local_path, video_entry)
+            if blob_url:
+                video_entry["url"] = blob_url
+                video_entry["persisted"] = True
             videos.append(video_entry)
 
             _grok_emit(session_id, {
@@ -6698,6 +6705,9 @@ def grok_generate_selected_videos():
         api_key = (data.get("api_key") or "").strip(
         ) or os.getenv("XAI_API_KEY", "").strip()
         script_title = (data.get("script_title") or "").strip()
+        # Grok videos are tied to the permanent Script-ID so they accumulate
+        # across every processing version of the script.
+        script_id = (data.get("script_id") or "").strip()
         session_id = (data.get("session_id")
                       or "").strip() or str(uuid.uuid4())
 
@@ -6713,7 +6723,7 @@ def grok_generate_selected_videos():
 
         thread = _threading.Thread(
             target=_grok_generate_worker,
-            args=(session_id, selected_rows, api_key, script_title),
+            args=(session_id, selected_rows, api_key, script_title, script_id),
             daemon=True,
         )
         thread.start()
@@ -10000,6 +10010,153 @@ def _blob_sas_url(blob_name: str) -> str:
         f"https://{FINISHED_VIDEOS_BLOB_ACCOUNT}.blob.core.windows.net/"
         f"{FINISHED_VIDEOS_BLOB_CONTAINER}/{encoded}?{sas}"
     )
+
+
+# --- Script artifact persistence (Feature 2) --------------------------------
+# Generated artifacts are stored in Azure Blob so a script reloaded in any
+# session (or after a refresh) restores them into the main-page tabs:
+#   <script_id>/videos/<file>.mp4(+.json)   Grok videos, by permanent Script-ID
+#   <script_id>/versions/<version_id>/...    everything else, by Script-Version
+# Uses the same account + cached user-delegation key as the video gallery.
+SCRIPT_ARTIFACTS_BLOB_CONTAINER = os.environ.get(
+    "SCRIPT_ARTIFACTS_BLOB_CONTAINER", "script-artifacts"
+).strip()
+_artifacts_container_ready = {"done": False}
+
+
+def _artifacts_enabled() -> bool:
+    return bool(FINISHED_VIDEOS_BLOB_ACCOUNT and SCRIPT_ARTIFACTS_BLOB_CONTAINER)
+
+
+def _safe_blob_id(s: str) -> str:
+    return re.sub(r'[^A-Za-z0-9._\-]', '_', (s or '').strip()) or 'unknown'
+
+
+def _artifacts_container():
+    svc = _finished_videos_blob_service()
+    cc = svc.get_container_client(SCRIPT_ARTIFACTS_BLOB_CONTAINER)
+    if not _artifacts_container_ready["done"]:
+        try:
+            cc.create_container()
+        except Exception:
+            pass  # already exists, or no create permission (fine to read/write)
+        _artifacts_container_ready["done"] = True
+    return cc
+
+
+def _artifacts_sas_url(blob_name: str) -> str:
+    from datetime import datetime, timedelta, timezone
+    from urllib.parse import quote as _q
+    from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+    udk = _get_user_delegation_key()
+    expiry = datetime.now(timezone.utc) + \
+        timedelta(minutes=FINISHED_VIDEOS_SAS_MINUTES)
+    sas = generate_blob_sas(
+        account_name=FINISHED_VIDEOS_BLOB_ACCOUNT,
+        container_name=SCRIPT_ARTIFACTS_BLOB_CONTAINER,
+        blob_name=blob_name,
+        user_delegation_key=udk,
+        permission=BlobSasPermissions(read=True),
+        expiry=expiry,
+    )
+    encoded = "/".join(_q(seg) for seg in blob_name.split("/"))
+    return (
+        f"https://{FINISHED_VIDEOS_BLOB_ACCOUNT}.blob.core.windows.net/"
+        f"{SCRIPT_ARTIFACTS_BLOB_CONTAINER}/{encoded}?{sas}"
+    )
+
+
+def _artifacts_upload_bytes(blob_name: str, data, content_type: "Optional[str]" = None) -> bool:
+    try:
+        from azure.storage.blob import ContentSettings
+        cc = _artifacts_container()
+        cs = ContentSettings(
+            content_type=content_type) if content_type else None
+        cc.upload_blob(name=blob_name, data=data,
+                       overwrite=True, content_settings=cs)
+        return True
+    except Exception as e:
+        logger.warning(f"⚠️ artifact upload failed ({blob_name}): {e}")
+        return False
+
+
+def _artifacts_upload_file(blob_name: str, path, content_type: "Optional[str]" = None) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return _artifacts_upload_bytes(blob_name, f, content_type)
+    except Exception as e:
+        logger.warning(f"⚠️ artifact upload (file) failed ({blob_name}): {e}")
+        return False
+
+
+def _persist_grok_video(script_id: str, local_path, entry: dict) -> "Optional[str]":
+    """Upload a generated Grok mp4 + sidecar metadata under
+    <script_id>/videos/. Returns a read SAS URL for the mp4, or None if
+    persistence is disabled/unavailable (generation must never break on this).
+    """
+    if not _artifacts_enabled() or not script_id:
+        return None
+    sid = _safe_blob_id(script_id)
+    fname = os.path.basename(str(local_path))
+    blob = f"{sid}/videos/{fname}"
+    if not _artifacts_upload_file(blob, local_path, "video/mp4"):
+        return None
+    meta = {
+        "filename": fname,
+        "blob_name": blob,
+        "search_term": entry.get("search_term", ""),
+        "timecode": entry.get("timecode", ""),
+        "description": entry.get("description", ""),
+        "generated_prompt": entry.get("generated_prompt", ""),
+        "script_id": sid,
+    }
+    _artifacts_upload_bytes(
+        blob + ".json", json.dumps(meta).encode("utf-8"), "application/json")
+    try:
+        return _artifacts_sas_url(blob)
+    except Exception:
+        return None
+
+
+def _list_grok_videos_for_script(script_id: str) -> list:
+    """All persisted Grok videos for a Script-ID, with fresh SAS playback URLs."""
+    if not _artifacts_enabled() or not script_id:
+        return []
+    sid = _safe_blob_id(script_id)
+    out: list = []
+    try:
+        cc = _artifacts_container()
+        names = [b.name for b in cc.list_blobs(name_starts_with=f"{sid}/videos/")]
+        nameset = set(names)
+        for n in sorted(x for x in names if x.lower().endswith(".mp4")):
+            meta = {}
+            if n + ".json" in nameset:
+                try:
+                    meta = json.loads(cc.download_blob(n + ".json").readall())
+                except Exception:
+                    meta = {}
+            out.append({
+                "filename": os.path.basename(n),
+                "url": _artifacts_sas_url(n),
+                "search_term": meta.get("search_term", ""),
+                "timecode": meta.get("timecode", ""),
+                "description": meta.get("description", ""),
+                "generated_prompt": meta.get("generated_prompt", ""),
+                "persisted": True,
+            })
+    except Exception as e:
+        logger.warning(f"⚠️ listing grok videos failed for {script_id}: {e}")
+    return out
+
+
+@app.route("/api/script-artifacts/videos", methods=["GET"])
+def api_script_artifacts_videos():
+    """Restore previously generated Grok videos for a Script-ID."""
+    script_id = (request.args.get("script_id") or "").strip()
+    if not script_id:
+        return jsonify({"success": False, "error": "script_id required"}), 400
+    vids = _list_grok_videos_for_script(script_id)
+    return jsonify({"success": True, "videos": vids, "count": len(vids)})
 
 
 def _list_finished_videos_from_blob():

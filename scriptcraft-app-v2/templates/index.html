@@ -2139,7 +2139,9 @@ Time management content here...`;
                 body: JSON.stringify({
                     selected_rows: selectedRows,
                     api_key: grokApiKey,
-                    script_title: window.currentScriptTitle || ''
+                    script_title: window.currentScriptTitle || '',
+                    // Persist + accumulate videos under the permanent Script-ID.
+                    script_id: window.currentScriptId || ''
                 })
             })
             .then(r => r.json())
@@ -2176,7 +2178,14 @@ Time management content here...`;
                         const cancelled = !!payload.cancelled;
                         const finalList = Array.isArray(payload.videos) && payload.videos.length >= liveVideos.length
                             ? payload.videos : liveVideos.slice();
-                        try { rerenderCurrentResultWithGrokVideos(finalList); } catch (_) {}
+                        // Replace with the full ACCUMULATED set persisted in
+                        // Azure for this Script-ID (so re-running Grok adds to
+                        // the previously generated videos instead of replacing
+                        // them). Falls back to this run's list if unavailable.
+                        _restoreGrokVideos(window.currentScriptId, finalList).then(list => {
+                            window.currentGrokVideos = list;
+                            try { rerenderCurrentResultWithGrokVideos(list); } catch (_) {}
+                        });
                         addProgressMessage(
                             cancelled
                                 ? `🛑 Grok generation stopped — kept ${payload.generated_count}/${payload.total_requested} videos`
@@ -6332,6 +6341,21 @@ Thank you for watching!`;
             const ver = text.match(/^[ \t]*\**[ \t]*Script-Version[ \t]*\**[ \t]*:[ \t]*\**[ \t]*([A-Za-z0-9\-]+)/im);
             if (sid) window.currentScriptId = sid[1];
             if (ver) window.currentScriptVersion = ver[1];
+        }
+
+        // Fetch the full set of Grok videos persisted in Azure for a Script-ID
+        // (videos accumulate across every processing version of the script).
+        // Returns fallbackList on any failure / when persistence is disabled.
+        async function _restoreGrokVideos(scriptId, fallbackList) {
+            if (!scriptId) return fallbackList || [];
+            try {
+                const r = await fetch('/api/script-artifacts/videos?script_id=' + encodeURIComponent(scriptId));
+                const d = await r.json();
+                if (d && d.success && Array.isArray(d.videos) && d.videos.length) {
+                    return d.videos;
+                }
+            } catch (_) { /* ignore — keep this run's videos */ }
+            return fallbackList || [];
         }
 
         async function loadFile(event) {
