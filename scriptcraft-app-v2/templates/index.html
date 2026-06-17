@@ -6490,6 +6490,9 @@ Thank you for watching!`;
                         throw new Error(data.error || ('Server error ' + resp.status));
                     }
                     text = data.text || '';
+                    // Reliable server-extracted title (used as the dialog's
+                    // fallback if the client-side parse misses this format).
+                    if (data.title) window.currentScriptTitle = data.title;
                 } else {
                     text = await file.text();
                 }

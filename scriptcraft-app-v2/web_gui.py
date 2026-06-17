@@ -5714,7 +5714,12 @@ def api_extract_docx():
                 lines.append("\t".join(cells))
 
         text = "\n".join(lines).strip() + "\n"
-        return jsonify({"success": True, "text": text, "filename": upload.filename, "length": len(text)})
+        # Robust server-side title (Title: line -> Direct Video -> Heading ->
+        # H1 -> first line) so the UI shows a title even if its client-side
+        # parse misses this doc's format.
+        extracted_title = _extract_script_title_for_output(text, "")
+        return jsonify({"success": True, "text": text, "title": extracted_title,
+                        "filename": upload.filename, "length": len(text)})
     except Exception as e:
         logger.error(f"❌ /api/extract-docx failed: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
