@@ -525,21 +525,23 @@ def extract_heygen_host_script(script_content: str) -> str:
                 print(f"[DEBUG] Found Heading: chapter boundary")
             continue
 
-        # Check if this line starts with "Host:" (case insensitive)
-        if re.match(r"^\s*\*?\*?Host:\*?\*?\s*$", stripped, re.IGNORECASE):
-            # "Host:" on its own line - start collecting from next line
+        # Check if this line starts with a "Host" speaker label, in any form:
+        # Host:, **Host:**, **Host**:, **Host**, *Host* (bold markers anywhere,
+        # colon optional).
+        if re.match(r"^\s*\*{0,2}\s*Host\s*\*{0,2}\s*:?\s*\*{0,2}\s*$", stripped, re.IGNORECASE):
+            # "Host" label on its own line - start collecting from next line
             in_host_section = True
             if debug:
                 print(f"[DEBUG] Found Host: marker (standalone)")
             continue
-        elif re.match(r"^\s*\*?\*?Host:\*?\*?", stripped, re.IGNORECASE):
-            # "Host:" with text on same line
+        elif re.match(r"^\s*\*{0,2}\s*Host\s*\*{0,2}\s*:?\s*\*{0,2}", stripped, re.IGNORECASE):
+            # "Host" label with text on same line
             in_host_section = True
             if debug:
                 print(f"[DEBUG] Found Host: marker (with text)")
-            # Extract text after "Host:" marker
+            # Extract text after the "Host" label
             host_text = re.sub(
-                r"^\s*\*?\*?Host:\*?\*?\s*",
+                r"^\s*\*{0,2}\s*Host\s*\*{0,2}\s*:?\s*\*{0,2}\s*",
                 "",
                 stripped,
                 flags=re.IGNORECASE
@@ -760,6 +762,13 @@ def generate_heygen_curl_commands(
                 s, re.IGNORECASE,
             ):
                 continue
+            # Drop a standalone "Host" speaker label line entirely, and strip a
+            # leading Host label from a spoken line — in every form: Host:,
+            # **Host:**, **Host**:, **Host**, *Host* (bold markers anywhere,
+            # colon optional). HeyGen must get only the dialogue, never "Host".
+            if re.match(r'^\*{0,2}\s*Host\s*\*{0,2}\s*:?\s*\*{0,2}\s*$', s, re.IGNORECASE):
+                continue
+            s = re.sub(r'^\*{0,2}\s*Host\s*\*{0,2}\s*:?\s*\*{0,2}\s*', '', s, flags=re.IGNORECASE)
             # Strip a leading "Summary:" label (keep the sentence after it).
             s = re.sub(r'^\s*Summary\s*:\s*', '', s, flags=re.IGNORECASE)
             out_lines.append(s)
@@ -983,7 +992,7 @@ def generate_heygen_curl_commands(
         _peel_re = re.compile(
             r"^\s*(?:"
             r"\*{1,2}[^\n]+\*{1,2}"
-            r"|\*{0,2}\s*Host\s*:?\s*\*{0,2}"
+            r"|\*{0,2}\s*Host\s*\*{0,2}\s*:?\s*\*{0,2}"
             r"|\*{0,2}\s*(?:🎯\s*)?FINAL\s+HOOK\s*:?\s*\*{0,2}"
             r")\s*$",
             re.IGNORECASE,
