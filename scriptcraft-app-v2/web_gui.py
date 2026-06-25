@@ -36,6 +36,18 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(1, str(REPO_ROOT))
     print(f"✅ Added to sys.path: {REPO_ROOT}")
 
+# Load all API keys from the single root .env (GOOGLE_API_KEY, XAI_API_KEY,
+# HEYGEN_API_KEY, HEYGEN_VOICE_ID, X_* ...). Does not override anything already
+# set in the real environment, so per-shell overrides still win.
+try:
+    from dotenv import load_dotenv
+    _env_file = REPO_ROOT / ".env"
+    if _env_file.exists():
+        load_dotenv(_env_file)
+        print(f"🔧 Loaded environment variables from {_env_file}")
+except ImportError:
+    pass  # python-dotenv not installed; rely on the real environment
+
 
 VERSION = "15.34-quotes-progress-mapping"
 
@@ -4205,6 +4217,390 @@ def agent_mode_api():
     return jsonify({"success": True, "mode": current})
 
 
+# ---------------------------------------------------------------------------
+# Idea Generator (Claude Opus 4.8 + web search)
+#
+# Brainstorm video-episode ideas from a free-text request, then expand the
+# chosen idea into a full creative brief in the channel's house format. Uses
+# ANTHROPIC_API_KEY from the root .env (loaded at startup). Web search is
+# enabled so "trending / last month" style requests are grounded in real,
+# current events rather than the model's training cutoff.
+# ---------------------------------------------------------------------------
+
+ANTHROPIC_MODEL = "claude-opus-4-8"
+
+
+def _web_search_tool(max_uses: int = 4) -> dict:
+    """Web search tool capped at `max_uses` calls to bound latency."""
+    return {
+        "type": "web_search_20260209",
+        "name": "web_search",
+        "max_uses": max_uses,
+    }
+
+# The exact house format for a script brief — given to the model so the
+# generated description matches what the script generator expects downstream.
+IDEA_BRIEF_EXAMPLE = (
+    "AI just crossed a line most people missed: it stopped being a chatbot you "
+    "talk to and became an assistant that does things for you. In this episode "
+    "we stand at that turning point and look at what it actually means for your "
+    "everyday life — the assistant that plans the trip, clears the inbox, and "
+    "watches your calendar while you live your day. We'll show you why mid-2026 "
+    "is the single best on-ramp regular people will ever get, and why being here "
+    "now means you're early, not late. You'll leave excited about exactly one "
+    "thing you can switch on this week.\n\n"
+    "TONE: Energizing, optimistic, momentum-building — TED-talk meets morning "
+    "pump-up. Short punchy lines mixed with longer rhythmic ones. The listener "
+    "should feel they're standing at the edge of an opportunity, not a cliff.\n"
+    "CORE MESSAGE: AI just stopped being a chatbot you talk to and became an "
+    "assistant that does things for you. This episode shows where the technology "
+    "actually is in 2026 and why the next 12 months are the best on-ramp regular "
+    "people will ever get — you are early, not late.\n"
+    "LANGUAGE CUES: \"unlock,\" \"your new superpower,\" \"lean in,\" \"this is "
+    "for you,\" \"more time for what matters.\" Grounded but electric. No "
+    "hype-bro clichés.\n"
+    "2026 TOUCHPOINTS: Agentic assistants (Gemini Spark, ChatGPT's agent, "
+    "Perplexity Comet) acting on your behalf; AI moving into Gmail/Docs/Sheets "
+    "and your phone; the shift from 'ask' to 'do.'"
+)
+
+
+def _get_anthropic_client():
+    """Return an Anthropic client, or None if the key/SDK is unavailable."""
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if not api_key:
+        logger.error("ANTHROPIC_API_KEY not set — add it to the root .env")
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        logger.error("anthropic SDK not installed — run: pip install anthropic")
+        return None
+    # Short timeout + minimal retries so a stalled web-search call fails fast
+    # and we can fall back to a no-search generation instead of appearing hung.
+    return anthropic.Anthropic(api_key=api_key, timeout=60.0, max_retries=1)
+
+
+def _anthropic_complete(system: str, user: str, max_tokens: int = 4000,
+                        use_web_search: bool = True, max_searches: int = 4) -> str:
+    """Run one Opus 4.8 turn, draining the server-side web_search loop.
+
+    Returns the concatenated text of the final assistant message. If a request
+    with web search fails (e.g. the tool isn't enabled on the account), it
+    retries once without tools. Raises on hard failures.
+    """
+    client = _get_anthropic_client()
+    if client is None:
+        raise RuntimeError(
+            "Claude is not configured. Set ANTHROPIC_API_KEY in the root .env "
+            "and ensure the anthropic package is installed."
+        )
+    import anthropic
+
+    def _run(with_tools: bool):
+        # The server runs the web_search loop and returns pause_turn if it hits
+        # its iteration cap; re-send to resume. Cap our own resumes as a guard.
+        messages = [{"role": "user", "content": user}]
+        resp = None
+        logger.info(
+            "🤖 Claude %s | web_search=%s | calling…",
+            ANTHROPIC_MODEL, "on" if with_tools else "off",
+        )
+        for attempt in range(1, 7):
+            kwargs = dict(
+                model=ANTHROPIC_MODEL,
+                max_tokens=max_tokens,
+                system=system,
+                messages=messages,
+            )
+            if with_tools:
+                kwargs["tools"] = [_web_search_tool(max_searches)]
+            resp = client.messages.create(**kwargs)
+            # Surface what the model actually did this round-trip.
+            searches = [
+                getattr(b, "input", {}).get("query", "")
+                for b in resp.content
+                if getattr(b, "type", None) == "server_tool_use"
+            ]
+            for q in searches:
+                logger.info("   🔎 web search: %s", q)
+            u = getattr(resp, "usage", None)
+            logger.info(
+                "   ↩︎ round %d | stop=%s | searches=%d | out_tokens=%s",
+                attempt, resp.stop_reason, len(searches),
+                getattr(u, "output_tokens", "?"),
+            )
+            if resp.stop_reason != "pause_turn":
+                break
+            logger.info("   ⏸ pause_turn — resuming the search loop…")
+            messages = messages + [{"role": "assistant", "content": resp.content}]
+        return resp
+
+    try:
+        resp = _run(use_web_search)
+    except Exception as e:
+        # Web search can stall or rate-limit. On ANY failure of the search
+        # path (timeout, rate limit, connection), fall back to a fast
+        # no-search generation so the request still returns useful output.
+        if use_web_search:
+            logger.warning(
+                "Claude web_search path failed (%s: %s); retrying WITHOUT "
+                "web search", type(e).__name__, e,
+            )
+            resp = _run(False)
+        else:
+            raise
+
+    # With web search the response interleaves narration text, server_tool_use,
+    # and web_search_tool_result blocks. Only the final run of text blocks (after
+    # the last tool activity) is the actual answer — keep that, drop the
+    # "Let me search…" preamble by resetting whenever a non-text block appears.
+    parts = []
+    for b in resp.content:
+        if getattr(b, "type", None) == "text":
+            parts.append(b.text)
+        else:
+            parts = []
+    return "".join(parts).strip()
+
+
+def _parse_json_array(text: str) -> list:
+    """Best-effort extraction of a JSON array from model output."""
+    if not text:
+        return []
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t).strip()
+    start, end = t.find("["), t.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        t = t[start:end + 1]
+    try:
+        data = json.loads(t)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+# Conversational lead-ins the model sometimes prepends after web search, even
+# when told not to. Specific enough not to clip a real opening sentence.
+_PREAMBLE_MARKERS = (
+    "here's the creative brief", "here is the creative brief",
+    "here's the brief", "here is the brief",
+    "here's your creative brief", "here is your creative brief",
+    "here's a creative brief", "here is a creative brief",
+    "i have everything i need", "i have what i need",
+    "i'll research", "i will research", "let me research",
+    "i now have", "i have enough",
+)
+
+
+def _strip_preamble(text: str) -> str:
+    """Peel leading meta sentences (e.g. 'Here's the brief.') one at a time.
+
+    Only a single leading sentence is removed per pass, and only if it matches
+    a known lead-in marker — so a real opening sentence that happens to share a
+    line/paragraph with the lead-in is preserved.
+    """
+    if not text:
+        return text
+    t = text.lstrip()
+    for _ in range(4):  # peel a few stacked lead-ins
+        # A leading sentence: up to the first . ! ? on the same line.
+        m = re.match(r"^([^.!?\n]*[.!?]+)(\s+)(.*)$", t, re.DOTALL)
+        if not m:
+            break
+        sentence = m.group(1).strip().lower()
+        if any(k in sentence for k in _PREAMBLE_MARKERS):
+            t = m.group(3).lstrip()
+            continue
+        break
+    return t
+
+
+def _extract_brief(text: str) -> str:
+    """Pull the brief out of its ===BRIEF=== / ===END=== sentinels.
+
+    Falls back to stripping conversational preamble if the model omitted the
+    markers (or only one of them).
+    """
+    if not text:
+        return text
+    m = re.search(r"===BRIEF===\s*(.*?)\s*===END===", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # Only the opening marker present — take everything after it.
+    m = re.search(r"===BRIEF===\s*(.*)$", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return _strip_preamble(text)
+
+
+# Persist generated idea batches so they survive restarts and can be reloaded
+# next time the Idea Generator panel is opened. Stored alongside the app's
+# other settings in ~/.scriptcraft/.
+_IDEAS_HISTORY_PATH = Path.home() / ".scriptcraft" / "idea_generator.json"
+_IDEAS_HISTORY_MAX = 25
+
+
+def _load_idea_history() -> list:
+    try:
+        if _IDEAS_HISTORY_PATH.exists():
+            with open(_IDEAS_HISTORY_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+    except Exception as e:
+        logger.warning(f"⚠️ Could not load idea history: {e}")
+    return []
+
+
+def _save_idea_batch(user_request: str, ideas: list) -> dict:
+    """Prepend a new {id, request, ideas, created_at} batch; cap the history."""
+    batch = {
+        "id": str(uuid.uuid4()),
+        "request": user_request,
+        "ideas": ideas,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    history = [batch] + _load_idea_history()
+    history = history[:_IDEAS_HISTORY_MAX]
+    try:
+        _IDEAS_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_IDEAS_HISTORY_PATH, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        logger.error(f"❌ Could not save idea history: {e}")
+    return batch
+
+
+@app.route("/api/ideas/generate", methods=["POST"])
+def api_ideas_generate():
+    """Brainstorm 10 distinct video-episode ideas from a free-text request."""
+    data = request.get_json(silent=True) or {}
+    user_request = (data.get("request") or "").strip()
+    if not user_request:
+        return jsonify({
+            "success": False,
+            "error": "Enter a request (e.g. 'find hot topics last month in AI').",
+        }), 400
+
+    system = (
+        "You are a creative producer for a YouTube channel that makes punchy, "
+        "optimistic explainer videos about AI and technology for a general "
+        "audience in 2026. You brainstorm distinct, compelling episode ideas. "
+        "When the request implies recency ('last month', 'trending', 'this "
+        "week', 'latest'), use web search to ground the ideas in real, current "
+        "events, products, and announcements. Every idea must be genuinely "
+        "different in angle — no near-duplicates."
+    )
+    user = (
+        f"Request: {user_request}\n\n"
+        "Generate exactly 10 video episode ideas. Respond with ONLY a JSON "
+        "array (no prose, no markdown fences) of 10 objects, each with:\n"
+        '  "title": a short, catchy episode title (max ~70 chars)\n'
+        '  "angle": one sentence describing the hook / unique angle\n'
+        "Return only the JSON array."
+    )
+    logger.info("💡 Idea generation requested: %r", user_request)
+    try:
+        text = _anthropic_complete(system, user, max_tokens=4000,
+                                   use_web_search=True, max_searches=4)
+        ideas = _parse_json_array(text)
+    except Exception as e:
+        logger.error(f"❌ Idea generation failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    # Keep only well-formed entries.
+    clean = [
+        {"title": str(i.get("title", "")).strip(),
+         "angle": str(i.get("angle", "")).strip()}
+        for i in ideas
+        if isinstance(i, dict) and str(i.get("title", "")).strip()
+    ]
+    if not clean:
+        logger.warning("⚠️ Idea generation returned no parseable ideas")
+        return jsonify({
+            "success": False,
+            "error": "Claude did not return parseable ideas. Please try again.",
+        }), 502
+    batch = _save_idea_batch(user_request, clean[:10])
+    logger.info("✅ Idea generation produced %d ideas (saved batch %s)",
+                len(clean[:10]), batch["id"][:8])
+    return jsonify({"success": True, "ideas": clean[:10],
+                    "batch_id": batch["id"]})
+
+
+@app.route("/api/ideas/history", methods=["GET"])
+def api_ideas_history():
+    """Return saved idea batches, newest first."""
+    return jsonify({"success": True, "batches": _load_idea_history()})
+
+
+@app.route("/api/ideas/history/clear", methods=["POST"])
+def api_ideas_history_clear():
+    """Delete all saved idea batches."""
+    try:
+        if _IDEAS_HISTORY_PATH.exists():
+            _IDEAS_HISTORY_PATH.unlink()
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({"success": True})
+
+
+@app.route("/api/ideas/describe", methods=["POST"])
+def api_ideas_describe():
+    """Expand a chosen idea into a full creative brief in the house format."""
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip()
+    angle = (data.get("angle") or "").strip()
+    user_request = (data.get("request") or "").strip()
+    if not title:
+        return jsonify({"success": False, "error": "Missing idea title."}), 400
+
+    system = (
+        "You are a creative director writing a production brief for an "
+        "energizing, optimistic YouTube explainer video about AI/technology "
+        "aimed at a general 2026 audience. Match the example's exact structure "
+        "and voice precisely."
+    )
+    user = (
+        f"Original request: {user_request}\n"
+        f"Chosen episode title: {title}\n"
+        f"Angle: {angle}\n\n"
+        "Write a detailed creative brief for this episode.\n\n"
+        "Wrap your output EXACTLY like this — a line containing only "
+        "===BRIEF===, then the brief, then a line containing only ===END===. "
+        "Output NOTHING before ===BRIEF=== or after ===END=== (no "
+        "acknowledgement, no narration, no commentary about your process).\n\n"
+        "Between the markers, use EXACTLY this structure, with no markdown "
+        "headers other than the capitalized labels shown:\n"
+        "1. An opening paragraph (4–6 sentences) describing the episode in an "
+        "energizing, optimistic, momentum-building voice.\n"
+        "2. A blank line, then these four labeled blocks, each starting with the "
+        "label in caps followed by a colon, in this order: TONE, CORE MESSAGE, "
+        "LANGUAGE CUES, 2026 TOUCHPOINTS.\n\n"
+        "Follow this example format closely (do not copy its content):\n\n"
+        + IDEA_BRIEF_EXAMPLE
+    )
+    logger.info("✍️ Brief requested for: %r", title)
+    try:
+        text = _anthropic_complete(system, user, max_tokens=2000,
+                                   use_web_search=False)
+        text = _extract_brief(text)
+    except Exception as e:
+        logger.error(f"❌ Idea brief generation failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    if not text:
+        logger.warning("⚠️ Brief generation returned empty text")
+        return jsonify({
+            "success": False,
+            "error": "Claude returned an empty brief. Please try again.",
+        }), 502
+    logger.info("✅ Brief generated (%d chars)", len(text))
+    return jsonify({"success": True, "title": title, "description": text})
+
+
 @app.route("/test")
 def test_page():
     """Serve the test page for debugging SSE streaming"""
@@ -6410,12 +6806,14 @@ def _grok_prompt_no_audio(prompt: str) -> str:
 # ---------------------------------------------------------------------------
 # Grok "unique visual" prompt rewriting
 # ---------------------------------------------------------------------------
-# Stock b-roll descriptions (e.g. "person typing on a laptop") make poor Grok
-# prompts: they ask for generic live-action footage that's cheaper and better
-# sourced from real stock libraries. Grok's value is GENERATED visuals you can't
-# get elsewhere — animated diagrams, motion graphics, conceptual artwork — that
-# are specific to the script's theme. We rewrite each selected scene into exactly
-# that before sending it to grok-imagine-video.
+# Raw b-roll descriptions are often flat and generic. Grok's value is bespoke,
+# theme-specific footage you can't easily stock-source — but it must look
+# PROFESSIONAL, not cartoonish. We steer every scene toward either (a)
+# photorealistic, cinematic LIVE-ACTION with real people, or (b) clean, modern
+# business MOTION GRAPHICS (3D charts, animated diagrams, holographic UI) for
+# data/abstract concepts — always with real motion/action. We explicitly avoid
+# cartoon / anime / illustrated / hand-drawn styles, which read as amateurish
+# here. The scene is rewritten into exactly that before grok-imagine-video.
 
 # Ops kill-switch: set GROK_VISUAL_REWRITE=0 to send raw descriptions instead.
 GROK_VISUAL_REWRITE_ENABLED = (
@@ -6429,38 +6827,127 @@ GROK_REWRITE_MODEL = (
 )
 
 # Deterministic fallback styling, used when the LLM rewrite is unavailable — it
-# still steers a raw description toward animation while staying on-scene.
+# steers a raw description toward photoreal live-action / clean business motion
+# graphics (never cartoons) while staying on-scene.
 GROK_VISUAL_STYLE_DIRECTIVE = (
-    " Render this exact scene as polished 2D/3D animation, motion graphics, or "
-    "illustration (not literal live-action stock footage), staying faithful to "
-    "what is described above."
+    " Render this as photorealistic, cinematic live-action video with real "
+    "human actors, natural lighting, and dynamic camera movement and motion "
+    "(not a static shot). For data or abstract business concepts, use clean, "
+    "modern, professional 3D motion graphics — animated charts, diagrams, or "
+    "holographic UI. Absolutely NO cartoon, anime, comic, illustrated, "
+    "hand-drawn, or claymation styles. Stay faithful to what is described above."
 )
 
 GROK_REWRITE_SYSTEM = (
     "You convert a b-roll scene description into ONE prompt for an AI video "
     "generator (grok-imagine-video) that makes a ~6 second SILENT clip.\n"
     "GOAL: depict EXACTLY WHAT THE DESCRIPTION SAYS — the same subject, "
-    "objects, setting, and action — but rendered as polished ANIMATION / motion "
-    "graphics / an illustrated or diagrammatic scene instead of literal "
-    "live-action stock footage. The viewer must immediately recognize the thing "
+    "objects, setting, and action — as PHOTOREALISTIC, CINEMATIC, LIVE-ACTION "
+    "video with dynamic motion. The viewer must immediately recognize the thing "
     "the description is about.\n"
+    "STYLE (strict):\n"
+    "- When people are involved, show REAL human actors — photorealistic skin, "
+    "natural lighting, real-world settings. Never cartoon or illustrated "
+    "characters.\n"
+    "- For data, systems, or abstract business concepts, use clean, modern, "
+    "professional motion graphics: 3D charts, animated diagrams, holographic "
+    "UI, sleek infographics — a corporate/editorial look, NOT cartoonish.\n"
+    "- ALWAYS include real motion and action — camera movement, gestures, "
+    "moving elements — so the clip feels alive. This dynamic motion is what we "
+    "mean by 'more animation'.\n"
+    "- ABSOLUTELY FORBIDDEN styles: cartoon, anime, comic, hand-drawn, "
+    "children's illustration, claymation, flat 2D character animation, "
+    "stylized Pixar/CGI-character looks.\n"
     "Rules:\n"
     "- FIDELITY FIRST: keep the description's concrete nouns, subject, setting, "
-    "and action. You are changing the STYLE (to animation/illustration), NOT "
-    "the CONTENT. Never swap the scene for an unrelated abstract metaphor.\n"
-    "- Choose the style that best SHOWS this specific scene: 2D/3D animation, "
-    "motion graphics, animated schematic diagram, data visualization, isometric "
-    "or hand-drawn illustration, infographic motion.\n"
-    "- For generic, easily-stocked scenes (typing on a laptop, using a chatbot, "
-    "an office, a handshake), keep that SAME scene but render it as a stylized "
-    "animated/illustrated version — still clearly that scene, just generated "
-    "art rather than stock footage.\n"
+    "and action. You set the visual STYLE (photoreal live-action, or clean "
+    "business motion graphics), NOT the CONTENT. Never swap the scene for an "
+    "unrelated abstract metaphor.\n"
     "- Add a little topic-specific detail from the theme so it clearly belongs "
-    "to THIS subject. Describe the key elements, motion, and art style. No "
-    "on-screen text or captions.\n"
+    "to THIS subject. Describe the key elements, the MOTION, the lighting, and "
+    "a photorealistic / cinematic art direction. No on-screen text or "
+    "captions.\n"
     "- Output ONLY the final prompt: 1-2 sentences, under ~55 words, no quotes, "
     "no preamble, no lists."
 )
+
+# Preferred path: Claude (Opus 4.8) acts as a prompt engineer, turning the
+# b-roll description into an optimal grok-imagine-video prompt. Same anti-cartoon
+# style rules as the xAI rewrite. Requires ANTHROPIC_API_KEY; falls back to xAI
+# (then the deterministic directive) when unavailable.
+GROK_PROMPT_ENGINEER_SYSTEM = (
+    "You are an expert prompt engineer for grok-imagine-video, a text-to-video "
+    "model that produces a ~6 second SILENT clip. Given a b-roll scene "
+    "description (plus optional context and overall topic), write ONE optimal "
+    "generation prompt that yields a polished, professional clip.\n"
+    "STYLE (strict):\n"
+    "- When people are involved, show REAL human actors — photorealistic skin, "
+    "natural lighting, real-world settings. Never cartoon or illustrated "
+    "characters.\n"
+    "- For data, systems, or abstract business concepts, use clean, modern, "
+    "professional motion graphics: 3D charts, animated diagrams, holographic "
+    "UI, sleek infographics — a corporate/editorial look, NOT cartoonish.\n"
+    "- ALWAYS specify real motion and action — camera movement, gestures, "
+    "moving elements — so the clip feels alive.\n"
+    "- ABSOLUTELY FORBIDDEN: cartoon, anime, comic, hand-drawn, children's "
+    "illustration, claymation, flat 2D character animation, stylized "
+    "Pixar/CGI-character looks.\n"
+    "FIDELITY: keep the description's concrete subject, setting, and action — "
+    "set only the visual style, never swap the scene for an unrelated metaphor. "
+    "Describe the subject, setting, action, MOTION, camera move, lighting, and "
+    "a photorealistic / cinematic art direction.\n"
+    "Output ONLY the final prompt: 1-2 sentences, under ~60 words. No quotes, "
+    "no preamble, no lists, no on-screen text or captions."
+)
+
+
+def _grok_prompt_via_claude(
+    description: str,
+    scene_context: str = "",
+    theme: str = "",
+) -> Optional[str]:
+    """Ask Claude (Opus 4.8) to craft an optimal grok-imagine-video prompt from
+    the b-roll description. Returns the prompt, or None if ANTHROPIC_API_KEY /
+    the SDK is missing or the call fails (caller then falls back to xAI)."""
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if not api_key:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    try:
+        parts = [
+            "B-ROLL SCENE DESCRIPTION (your prompt MUST depict exactly this, "
+            f"keeping its specific subject and objects): {description}"
+        ]
+        if (scene_context or "").strip():
+            parts.append(
+                f"Why this scene appears in the video: {scene_context.strip()}")
+        if (theme or "").strip():
+            parts.append(
+                "Overall video topic (for flavor/detail only, do NOT replace "
+                f"the scene with it): {theme.strip()}")
+        user_msg = "\n".join(parts)
+
+        client = anthropic.Anthropic(
+            api_key=api_key, timeout=60.0, max_retries=1)
+        resp = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=400,
+            system=GROK_PROMPT_ENGINEER_SYSTEM,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        out = "".join(
+            b.text for b in resp.content
+            if getattr(b, "type", None) == "text"
+        ).strip().strip('"').strip()
+        if out and len(out) <= 600:
+            logger.info(f"🎨 Grok prompt (Claude): {out[:140]}")
+            return out
+    except Exception as e:
+        logger.warning(f"⚠️ Claude Grok-prompt rewrite failed: {e}")
+    return None
 
 
 def _grok_build_video_prompt(
@@ -6480,7 +6967,16 @@ def _grok_build_video_prompt(
         return base
     styled_fallback = base.rstrip(".") + "." + GROK_VISUAL_STYLE_DIRECTIVE
 
-    if not GROK_VISUAL_REWRITE_ENABLED or client is None:
+    if not GROK_VISUAL_REWRITE_ENABLED:
+        return styled_fallback
+
+    # 1) Preferred: Claude (Opus 4.8) writes the optimal grok-imagine prompt.
+    claude_out = _grok_prompt_via_claude(base, scene_context, theme)
+    if claude_out:
+        return claude_out
+
+    # 2) Fallback: xAI grok-3-mini rewrite (needs the xAI client).
+    if client is None:
         return styled_fallback
 
     try:

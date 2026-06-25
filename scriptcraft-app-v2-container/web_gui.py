@@ -6316,12 +6316,14 @@ def _grok_prompt_no_audio(prompt: str) -> str:
 # ---------------------------------------------------------------------------
 # Grok "unique visual" prompt rewriting
 # ---------------------------------------------------------------------------
-# Stock b-roll descriptions (e.g. "person typing on a laptop") make poor Grok
-# prompts: they ask for generic live-action footage that's cheaper and better
-# sourced from real stock libraries. Grok's value is GENERATED visuals you can't
-# get elsewhere — animated diagrams, motion graphics, conceptual artwork — that
-# are specific to the script's theme. We rewrite each selected scene into exactly
-# that before sending it to grok-imagine-video.
+# Raw b-roll descriptions are often flat and generic. Grok's value is bespoke,
+# theme-specific footage you can't easily stock-source — but it must look
+# PROFESSIONAL, not cartoonish. We steer every scene toward either (a)
+# photorealistic, cinematic LIVE-ACTION with real people, or (b) clean, modern
+# business MOTION GRAPHICS (3D charts, animated diagrams, holographic UI) for
+# data/abstract concepts — always with real motion/action. We explicitly avoid
+# cartoon / anime / illustrated / hand-drawn styles, which read as amateurish
+# here. The scene is rewritten into exactly that before grok-imagine-video.
 
 # Ops kill-switch: set GROK_VISUAL_REWRITE=0 to send raw descriptions instead.
 GROK_VISUAL_REWRITE_ENABLED = (
@@ -6335,38 +6337,127 @@ GROK_REWRITE_MODEL = (
 )
 
 # Deterministic fallback styling, used when the LLM rewrite is unavailable — it
-# still steers a raw description toward animation while staying on-scene.
+# steers a raw description toward photoreal live-action / clean business motion
+# graphics (never cartoons) while staying on-scene.
 GROK_VISUAL_STYLE_DIRECTIVE = (
-    " Render this exact scene as polished 2D/3D animation, motion graphics, or "
-    "illustration (not literal live-action stock footage), staying faithful to "
-    "what is described above."
+    " Render this as photorealistic, cinematic live-action video with real "
+    "human actors, natural lighting, and dynamic camera movement and motion "
+    "(not a static shot). For data or abstract business concepts, use clean, "
+    "modern, professional 3D motion graphics — animated charts, diagrams, or "
+    "holographic UI. Absolutely NO cartoon, anime, comic, illustrated, "
+    "hand-drawn, or claymation styles. Stay faithful to what is described above."
 )
 
 GROK_REWRITE_SYSTEM = (
     "You convert a b-roll scene description into ONE prompt for an AI video "
     "generator (grok-imagine-video) that makes a ~6 second SILENT clip.\n"
     "GOAL: depict EXACTLY WHAT THE DESCRIPTION SAYS — the same subject, "
-    "objects, setting, and action — but rendered as polished ANIMATION / motion "
-    "graphics / an illustrated or diagrammatic scene instead of literal "
-    "live-action stock footage. The viewer must immediately recognize the thing "
+    "objects, setting, and action — as PHOTOREALISTIC, CINEMATIC, LIVE-ACTION "
+    "video with dynamic motion. The viewer must immediately recognize the thing "
     "the description is about.\n"
+    "STYLE (strict):\n"
+    "- When people are involved, show REAL human actors — photorealistic skin, "
+    "natural lighting, real-world settings. Never cartoon or illustrated "
+    "characters.\n"
+    "- For data, systems, or abstract business concepts, use clean, modern, "
+    "professional motion graphics: 3D charts, animated diagrams, holographic "
+    "UI, sleek infographics — a corporate/editorial look, NOT cartoonish.\n"
+    "- ALWAYS include real motion and action — camera movement, gestures, "
+    "moving elements — so the clip feels alive. This dynamic motion is what we "
+    "mean by 'more animation'.\n"
+    "- ABSOLUTELY FORBIDDEN styles: cartoon, anime, comic, hand-drawn, "
+    "children's illustration, claymation, flat 2D character animation, "
+    "stylized Pixar/CGI-character looks.\n"
     "Rules:\n"
     "- FIDELITY FIRST: keep the description's concrete nouns, subject, setting, "
-    "and action. You are changing the STYLE (to animation/illustration), NOT "
-    "the CONTENT. Never swap the scene for an unrelated abstract metaphor.\n"
-    "- Choose the style that best SHOWS this specific scene: 2D/3D animation, "
-    "motion graphics, animated schematic diagram, data visualization, isometric "
-    "or hand-drawn illustration, infographic motion.\n"
-    "- For generic, easily-stocked scenes (typing on a laptop, using a chatbot, "
-    "an office, a handshake), keep that SAME scene but render it as a stylized "
-    "animated/illustrated version — still clearly that scene, just generated "
-    "art rather than stock footage.\n"
+    "and action. You set the visual STYLE (photoreal live-action, or clean "
+    "business motion graphics), NOT the CONTENT. Never swap the scene for an "
+    "unrelated abstract metaphor.\n"
     "- Add a little topic-specific detail from the theme so it clearly belongs "
-    "to THIS subject. Describe the key elements, motion, and art style. No "
-    "on-screen text or captions.\n"
+    "to THIS subject. Describe the key elements, the MOTION, the lighting, and "
+    "a photorealistic / cinematic art direction. No on-screen text or "
+    "captions.\n"
     "- Output ONLY the final prompt: 1-2 sentences, under ~55 words, no quotes, "
     "no preamble, no lists."
 )
+
+# Preferred path: Claude (Opus 4.8) acts as a prompt engineer, turning the
+# b-roll description into an optimal grok-imagine-video prompt. Same anti-cartoon
+# style rules as the xAI rewrite. Requires ANTHROPIC_API_KEY; falls back to xAI
+# (then the deterministic directive) when unavailable.
+GROK_PROMPT_ENGINEER_SYSTEM = (
+    "You are an expert prompt engineer for grok-imagine-video, a text-to-video "
+    "model that produces a ~6 second SILENT clip. Given a b-roll scene "
+    "description (plus optional context and overall topic), write ONE optimal "
+    "generation prompt that yields a polished, professional clip.\n"
+    "STYLE (strict):\n"
+    "- When people are involved, show REAL human actors — photorealistic skin, "
+    "natural lighting, real-world settings. Never cartoon or illustrated "
+    "characters.\n"
+    "- For data, systems, or abstract business concepts, use clean, modern, "
+    "professional motion graphics: 3D charts, animated diagrams, holographic "
+    "UI, sleek infographics — a corporate/editorial look, NOT cartoonish.\n"
+    "- ALWAYS specify real motion and action — camera movement, gestures, "
+    "moving elements — so the clip feels alive.\n"
+    "- ABSOLUTELY FORBIDDEN: cartoon, anime, comic, hand-drawn, children's "
+    "illustration, claymation, flat 2D character animation, stylized "
+    "Pixar/CGI-character looks.\n"
+    "FIDELITY: keep the description's concrete subject, setting, and action — "
+    "set only the visual style, never swap the scene for an unrelated metaphor. "
+    "Describe the subject, setting, action, MOTION, camera move, lighting, and "
+    "a photorealistic / cinematic art direction.\n"
+    "Output ONLY the final prompt: 1-2 sentences, under ~60 words. No quotes, "
+    "no preamble, no lists, no on-screen text or captions."
+)
+
+
+def _grok_prompt_via_claude(
+    description: str,
+    scene_context: str = "",
+    theme: str = "",
+) -> Optional[str]:
+    """Ask Claude (Opus 4.8) to craft an optimal grok-imagine-video prompt from
+    the b-roll description. Returns the prompt, or None if ANTHROPIC_API_KEY /
+    the SDK is missing or the call fails (caller then falls back to xAI)."""
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if not api_key:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    try:
+        parts = [
+            "B-ROLL SCENE DESCRIPTION (your prompt MUST depict exactly this, "
+            f"keeping its specific subject and objects): {description}"
+        ]
+        if (scene_context or "").strip():
+            parts.append(
+                f"Why this scene appears in the video: {scene_context.strip()}")
+        if (theme or "").strip():
+            parts.append(
+                "Overall video topic (for flavor/detail only, do NOT replace "
+                f"the scene with it): {theme.strip()}")
+        user_msg = "\n".join(parts)
+
+        client = anthropic.Anthropic(
+            api_key=api_key, timeout=60.0, max_retries=1)
+        resp = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=400,
+            system=GROK_PROMPT_ENGINEER_SYSTEM,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        out = "".join(
+            b.text for b in resp.content
+            if getattr(b, "type", None) == "text"
+        ).strip().strip('"').strip()
+        if out and len(out) <= 600:
+            logger.info(f"🎨 Grok prompt (Claude): {out[:140]}")
+            return out
+    except Exception as e:
+        logger.warning(f"⚠️ Claude Grok-prompt rewrite failed: {e}")
+    return None
 
 
 def _grok_build_video_prompt(
@@ -6386,7 +6477,16 @@ def _grok_build_video_prompt(
         return base
     styled_fallback = base.rstrip(".") + "." + GROK_VISUAL_STYLE_DIRECTIVE
 
-    if not GROK_VISUAL_REWRITE_ENABLED or client is None:
+    if not GROK_VISUAL_REWRITE_ENABLED:
+        return styled_fallback
+
+    # 1) Preferred: Claude (Opus 4.8) writes the optimal grok-imagine prompt.
+    claude_out = _grok_prompt_via_claude(base, scene_context, theme)
+    if claude_out:
+        return claude_out
+
+    # 2) Fallback: xAI grok-3-mini rewrite (needs the xAI client).
+    if client is None:
         return styled_fallback
 
     try:

@@ -22,6 +22,11 @@ openai>=1.40
 # rewrites scene descriptions into theme-specific visual prompts (grok-3-mini).
 xai-sdk>=1.11
 
+# Anthropic Claude — preferred prompt engineer for grok-imagine-video prompts
+# (Opus 4.8). Requires ANTHROPIC_API_KEY in the container env; if absent, the
+# Grok prompt step falls back to the xAI grok-3-mini rewrite above.
+anthropic>=0.69
+
 # AutoGen (used by enhanced multi-agent system)
 autogen-agentchat>=0.4.0
 autogen-core>=0.4.0
