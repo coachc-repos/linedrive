@@ -90,6 +90,27 @@ if [ -z "$AI_PROJECT_API_KEY" ] || [ -z "$GOOGLE_API_KEY" ]; then
 fi
 echo "✅ API keys resolved"
 
+# --- ANTHROPIC_API_KEY: required for the Idea Generator (Claude Opus 4.8) --
+# Prefer this dir's .env, then the repo-root .env, then the key already set on
+# the running container app. Pass it through so /api/ideas/* works in the cloud
+# (unlike the Grok prompts, the Idea Generator has no non-Claude fallback).
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+if [ -z "$ANTHROPIC_API_KEY" ] && [ -f ".env" ]; then
+    ANTHROPIC_API_KEY=$(grep '^ANTHROPIC_API_KEY=' .env | cut -d= -f2-)
+fi
+if [ -z "$ANTHROPIC_API_KEY" ] && [ -f "../.env" ]; then
+    ANTHROPIC_API_KEY=$(grep '^ANTHROPIC_API_KEY=' ../.env | cut -d= -f2-)
+fi
+if [ -z "$ANTHROPIC_API_KEY" ] && az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+    ANTHROPIC_API_KEY=$(az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+        --query "properties.template.containers[0].env[?name=='ANTHROPIC_API_KEY'].value | [0]" -o tsv)
+fi
+if [ -z "$ANTHROPIC_API_KEY" ]; then
+    echo "⚠️  ANTHROPIC_API_KEY not found (.env or app) — Idea Generator will be disabled in the cloud."
+else
+    echo "✅ ANTHROPIC_API_KEY resolved (Idea Generator enabled)"
+fi
+
 # --- Optional extra keys (passed through if present) ---------------------
 GROK_API_KEY="${GROK_API_KEY:-}"
 HEYGEN_API_KEY="${HEYGEN_API_KEY:-}"
@@ -98,6 +119,7 @@ FINISHED_VIDEOS_BLOB_ACCOUNT="${FINISHED_VIDEOS_BLOB_ACCOUNT:-linedrivestorage}"
 FINISHED_VIDEOS_BLOB_CONTAINER="${FINISHED_VIDEOS_BLOB_CONTAINER:-finished-videos}"
 
 ENV_VARS_ARGS=("PYTHONPATH=/app" "AI_PROJECT_API_KEY=$AI_PROJECT_API_KEY" "GOOGLE_API_KEY=$GOOGLE_API_KEY")
+[ -n "$ANTHROPIC_API_KEY" ] && ENV_VARS_ARGS+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
 [ -n "$GROK_API_KEY" ] && ENV_VARS_ARGS+=("GROK_API_KEY=$GROK_API_KEY")
 [ -n "$HEYGEN_API_KEY" ] && ENV_VARS_ARGS+=("HEYGEN_API_KEY=$HEYGEN_API_KEY")
 [ -n "$AI_PROJECT_ENDPOINT" ] && ENV_VARS_ARGS+=("AI_PROJECT_ENDPOINT=$AI_PROJECT_ENDPOINT")

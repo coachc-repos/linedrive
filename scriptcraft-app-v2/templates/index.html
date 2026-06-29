@@ -1426,6 +1426,11 @@
                         if (typeof refreshOutputDirPreview === 'function') refreshOutputDirPreview();
                     }
                     if (descEl) descEl.value = data.description || '';
+                    // Remember which idea produced this brief so the Create Script
+                    // dialog can regenerate it on demand without re-selecting.
+                    _ideaGenState.lastBriefIdea = { title: idea.title, angle: idea.angle, request: _ideaGenState.request };
+                    const regenRow = document.getElementById('ideaBriefRegenRow');
+                    if (regenRow) regenRow.style.display = 'flex';
                     statusEl.innerHTML = '✅ Sent to Create Script — review the title &amp; brief, then generate.';
                     if (typeof openCreateScriptModal === 'function') openCreateScriptModal();
                 } catch (e) {
@@ -1434,19 +1439,43 @@
                     _stopBtnTimer(useBtn, timer);
                 }
             }
+
+            // Re-run the brief for the most recently used idea, from inside the
+            // Create Script dialog — replaces the Description with a fresh brief.
+            // Click repeatedly until you get one you like.
+            async function regenerateBriefInModal() {
+                const idea = _ideaGenState.lastBriefIdea;
+                const btn = document.getElementById('ideaBriefRegenBtn');
+                const statusEl = document.getElementById('ideaBriefRegenStatus');
+                const descEl = document.getElementById('createDescription');
+                if (!idea) { if (statusEl) statusEl.textContent = 'Select an idea first.'; return; }
+                const timer = _startBtnTimer(btn, 'Regenerating brief');
+                if (statusEl) statusEl.textContent = '✍️ Writing a fresh brief with Claude (~15-30s)…';
+                try {
+                    const r = await fetch('/api/ideas/describe', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: idea.title, angle: idea.angle, request: idea.request })
+                    });
+                    const data = await r.json();
+                    if (!data.success) { if (statusEl) statusEl.textContent = '❌ ' + (data.error || 'Failed to write brief'); return; }
+                    if (descEl) descEl.value = data.description || '';
+                    if (statusEl) statusEl.textContent = '✅ New brief generated — review & generate, or regenerate again.';
+                } catch (e) {
+                    if (statusEl) statusEl.textContent = '❌ ' + e;
+                } finally {
+                    _stopBtnTimer(btn, timer);
+                }
+            }
         </script>
 
         <!-- ============================================================
-             Mobile-only Workflow Documentation
+             Workflow Documentation (flow diagram)
              Visual reference of the Script Creation and Script Processing
-             pipelines. Documentation only — not interactive. Hidden on
-             screens > 768px so the desktop UI is unchanged.
+             pipelines. Documentation only — not interactive. Shown on the
+             main screen at all widths (steps scroll horizontally if narrow).
              ============================================================ -->
         <style>
-            @media (min-width: 769px) {
-                #mobileWorkflowDocs { display: none !important; }
-            }
-            @media (max-width: 768px) {
                 #mobileWorkflowDocs {
                     display: block;
                     margin: 10px 0 14px 0;
@@ -1540,9 +1569,8 @@
                     color: #94a3b8;
                     font-size: 0.7em;
                 }
-            }
         </style>
-        <div id="mobileWorkflowDocs" aria-label="Workflow documentation (mobile)">
+        <div id="mobileWorkflowDocs" aria-label="Workflow documentation">
             <div class="mwd-pipeline">
                 <h4>🚀 Script Creation Pipeline <span class="mwd-badge">visual reference</span></h4>
                 <p class="mwd-sub">Stages run end-to-end when you tap <strong>Create Script</strong> on desktop.</p>
@@ -2044,6 +2072,10 @@
                         <div class="form-group">
                             <label for="createDescription">📝 Script Description (Optional):</label>
                             <textarea id="createDescription" placeholder="Additional details, context, or specific requirements for the script..."></textarea>
+                            <div id="ideaBriefRegenRow" style="display:none; align-items:center; gap:10px; margin-top:6px;">
+                                <button type="button" id="ideaBriefRegenBtn" onclick="regenerateBriefInModal()" title="Ask Claude to write a fresh brief from the selected idea, replacing the description above" style="padding:7px 12px; background:#6366f1; color:#fff; border:none; border-radius:6px; font-size:0.85em; font-weight:600; cursor:pointer; white-space:nowrap;">🔄 Regenerate brief from idea</button>
+                                <span id="ideaBriefRegenStatus" style="color:#94a3b8; font-size:0.82em;"></span>
+                            </div>
                         </div>
                     </div>
 

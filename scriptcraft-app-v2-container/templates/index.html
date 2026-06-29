@@ -1100,10 +1100,14 @@
                     <span class="toolbar-icon">🧪</span>
                     <span class="toolbar-text">Test Generate</span>
                 </button>
+                <button class="toolbar-btn" onclick="toggleIdeaGenPanel()" title="Brainstorm episode ideas with Claude Opus 4.8, then turn one into a script">
+                    <span class="toolbar-icon">💡</span>
+                    <span class="toolbar-text">Idea Generator</span>
+                </button>
             </div>
-            
+
             <div class="toolbar-divider"></div>
-            
+
             <div class="toolbar-section">
                 <span class="toolbar-label">Export</span>
                 <button class="toolbar-btn" onclick="exportToWord()" id="wordBtn" style="display:none;" title="Export to Word">
@@ -1178,16 +1182,273 @@
         </div>
 
         <!-- ============================================================
-             Mobile-only Workflow Documentation
+             💡 Idea Generator (Claude Opus 4.8 + web search)
+             Brainstorm episode ideas from a free-text request, pick one, and
+             send a full creative brief into the Create Script dialog.
+             ============================================================ -->
+        <div id="ideaGenPanel" style="margin:0 0 18px 0; background:#0f172a; border:1px solid #334155; border-radius:10px; overflow:hidden;">
+            <div onclick="toggleIdeaGenPanel()" style="display:flex; align-items:center; gap:10px; padding:14px 18px; cursor:pointer; user-select:none; background:linear-gradient(90deg,#1e1b4b,#0f172a);">
+                <span style="font-size:1.2em;">💡</span>
+                <span style="font-weight:700; color:#e2e8f0; font-size:1.02em;">Idea Generator</span>
+                <span style="color:#94a3b8; font-size:0.82em;">— brainstorm episode ideas with Claude Opus 4.8, then turn one into a script</span>
+                <span id="ideaGenChevron" style="margin-left:auto; color:#94a3b8; font-size:1.1em;">▸</span>
+            </div>
+            <div id="ideaGenBody" style="display:none; padding:16px 18px 20px;">
+                <div id="ideaGenRecentRow" style="display:none; align-items:center; gap:8px; margin-bottom:12px;">
+                    <label style="color:#94a3b8; font-size:0.85em; white-space:nowrap;">↺ Recent:</label>
+                    <select id="ideaGenRecent" onchange="loadIdeaBatch(this.value)" style="flex:1; padding:7px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.85em;"></select>
+                    <button onclick="clearIdeaHistory()" title="Delete all saved idea sets" style="padding:6px 10px; background:#374151; color:#cbd5e1; border:none; border-radius:6px; font-size:0.8em; cursor:pointer; white-space:nowrap;">Clear</button>
+                </div>
+                <div style="display:flex; gap:10px; align-items:flex-start;">
+                    <textarea id="ideaGenRequest" rows="2" placeholder="e.g. find hot topics last month in AI" style="flex:1; padding:10px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.95em; resize:vertical; box-sizing:border-box;"></textarea>
+                    <button id="ideaGenBtn" onclick="generateIdeas()" style="white-space:nowrap; padding:10px 16px; background:#6366f1; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer;">Generate 10 Ideas</button>
+                </div>
+                <div id="ideaGenStatus" style="margin-top:10px; color:#94a3b8; font-size:0.88em; min-height:18px;"></div>
+                <div id="ideaGenList" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;"></div>
+                <div id="ideaGenUseRow" style="display:none; margin-top:14px; align-items:center; gap:12px; flex-wrap:wrap;">
+                    <span style="color:#cbd5e1; font-size:0.9em;">Selected: <strong id="ideaGenUseLabel" style="color:#e2e8f0;"></strong></span>
+                    <button id="ideaGenUseBtn" onclick="useSelectedIdea()" style="padding:9px 16px; background:#16a34a; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer;">✍️ Write brief &amp; send to Create Script</button>
+                </div>
+            </div>
+        </div>
+        <style>
+            #ideaGenList .idea-card { display:flex; gap:12px; align-items:flex-start; padding:10px 12px; background:#1e293b; border:1px solid #334155; border-radius:8px; cursor:pointer; transition:border-color .12s, background .12s; }
+            #ideaGenList .idea-card:hover { border-color:#6366f1; background:#243049; }
+            #ideaGenList .idea-card.selected { border-color:#16a34a; background:rgba(20,83,45,0.25); box-shadow:inset 0 0 0 1px #16a34a; }
+            #ideaGenList .idea-num { flex:0 0 auto; width:24px; height:24px; border-radius:50%; background:#6366f1; color:#fff; display:flex; align-items:center; justify-content:center; font-size:0.82em; font-weight:700; }
+            #ideaGenList .idea-title { color:#e2e8f0; font-weight:600; font-size:0.95em; }
+            #ideaGenList .idea-angle { color:#94a3b8; font-size:0.85em; margin-top:2px; }
+        </style>
+        <script>
+            let _ideaGenState = { ideas: [], selectedIndex: -1, request: '', batches: [], historyLoaded: false };
+
+            // Load saved idea sets and populate the "Recent" dropdown. On first
+            // open, also restore the most recent set so it's there next time.
+            async function loadIdeaHistory(restoreLatest) {
+                try {
+                    const r = await fetch('/api/ideas/history');
+                    const data = await r.json();
+                    _ideaGenState.batches = (data && data.batches) || [];
+                } catch (e) {
+                    _ideaGenState.batches = [];
+                }
+                const row = document.getElementById('ideaGenRecentRow');
+                const sel = document.getElementById('ideaGenRecent');
+                if (!_ideaGenState.batches.length) { row.style.display = 'none'; return; }
+                row.style.display = 'flex';
+                sel.innerHTML = '<option value="">— ' + _ideaGenState.batches.length + ' saved set(s) —</option>';
+                _ideaGenState.batches.forEach(b => {
+                    const when = (b.created_at || '').replace('T', ' ').slice(0, 16);
+                    const label = (b.request || '(no request)').slice(0, 60) + '  ·  ' + when;
+                    const opt = document.createElement('option');
+                    opt.value = b.id;
+                    opt.textContent = label;
+                    sel.appendChild(opt);
+                });
+                if (restoreLatest && !_ideaGenState.ideas.length) {
+                    const latest = _ideaGenState.batches[0];
+                    loadIdeaBatch(latest.id);
+                    sel.value = latest.id;
+                }
+            }
+
+            function loadIdeaBatch(id) {
+                if (!id) return;
+                const b = _ideaGenState.batches.find(x => x.id === id);
+                if (!b) return;
+                _ideaGenState.ideas = b.ideas || [];
+                _ideaGenState.request = b.request || '';
+                _ideaGenState.selectedIndex = -1;
+                document.getElementById('ideaGenRequest').value = b.request || '';
+                renderIdeas();
+                document.getElementById('ideaGenUseRow').style.display = 'none';
+                const when = (b.created_at || '').replace('T', ' ').slice(0, 16);
+                document.getElementById('ideaGenStatus').textContent =
+                    '↺ Loaded ' + _ideaGenState.ideas.length + ' saved ideas from ' + when + ' — click one to select.';
+            }
+
+            async function clearIdeaHistory() {
+                if (!confirm('Delete all saved idea sets?')) return;
+                try { await fetch('/api/ideas/history/clear', { method: 'POST' }); } catch (e) {}
+                _ideaGenState.batches = [];
+                document.getElementById('ideaGenRecentRow').style.display = 'none';
+            }
+
+            // Show a live "⏳ <label> (Ns)" counter on a button while a request
+            // is in flight, so it's obvious Claude is working (calls take 15-40s).
+            function _startBtnTimer(btn, label) {
+                const t0 = Date.now();
+                btn.disabled = true;
+                btn.dataset.label = btn.innerHTML;
+                const tick = () => {
+                    const s = Math.round((Date.now() - t0) / 1000);
+                    btn.innerHTML = '⏳ ' + label + '… (' + s + 's)';
+                };
+                tick();
+                return setInterval(tick, 1000);
+            }
+            function _stopBtnTimer(btn, timer) {
+                clearInterval(timer);
+                btn.disabled = false;
+                if (btn.dataset.label) { btn.innerHTML = btn.dataset.label; delete btn.dataset.label; }
+            }
+
+            function toggleIdeaGenPanel(forceOpen) {
+                const body = document.getElementById('ideaGenBody');
+                const chev = document.getElementById('ideaGenChevron');
+                if (!body) return;
+                const open = forceOpen === true ? true : (body.style.display === 'none');
+                body.style.display = open ? 'block' : 'none';
+                if (chev) chev.textContent = open ? '▾' : '▸';
+                if (open) {
+                    if (!_ideaGenState.historyLoaded) {
+                        _ideaGenState.historyLoaded = true;
+                        // Populate the "Recent" dropdown for on-demand retrieval,
+                        // but start with a clean list (don't force the old set in).
+                        loadIdeaHistory(false);
+                    }
+                    const inp = document.getElementById('ideaGenRequest');
+                    if (inp) inp.focus();
+                    document.getElementById('ideaGenPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }
+
+            async function generateIdeas() {
+                const inp = document.getElementById('ideaGenRequest');
+                const req = (inp.value || '').trim();
+                const statusEl = document.getElementById('ideaGenStatus');
+                const listEl = document.getElementById('ideaGenList');
+                const btn = document.getElementById('ideaGenBtn');
+                if (!req) { statusEl.textContent = 'Enter a request first.'; inp.focus(); return; }
+                _ideaGenState.request = req;
+                const timer = _startBtnTimer(btn, 'Generating');
+                statusEl.innerHTML = '🔎 Searching &amp; brainstorming with Claude Opus 4.8 (web search, ~15-30s)…';
+                listEl.innerHTML = '';
+                document.getElementById('ideaGenUseRow').style.display = 'none';
+                try {
+                    const r = await fetch('/api/ideas/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ request: req })
+                    });
+                    const data = await r.json();
+                    if (!data.success) { statusEl.textContent = '❌ ' + (data.error || 'Failed to generate ideas'); return; }
+                    _ideaGenState.ideas = data.ideas || [];
+                    _ideaGenState.selectedIndex = -1;
+                    renderIdeas();
+                    statusEl.textContent = `✨ ${_ideaGenState.ideas.length} ideas — click one to select it.`;
+                    // The batch was saved server-side; refresh the Recent list
+                    // and point it at the new set.
+                    await loadIdeaHistory(false);
+                    if (data.batch_id) {
+                        const sel = document.getElementById('ideaGenRecent');
+                        if (sel) sel.value = data.batch_id;
+                    }
+                } catch (e) {
+                    statusEl.textContent = '❌ ' + e;
+                } finally {
+                    _stopBtnTimer(btn, timer);
+                }
+            }
+
+            function renderIdeas() {
+                const listEl = document.getElementById('ideaGenList');
+                listEl.innerHTML = '';
+                _ideaGenState.ideas.forEach((idea, i) => {
+                    const card = document.createElement('div');
+                    card.className = 'idea-card';
+                    card.onclick = () => selectIdea(i);
+                    card.innerHTML = '<div class="idea-num">' + (i + 1) + '</div>' +
+                        '<div class="idea-body"><div class="idea-title"></div><div class="idea-angle"></div></div>';
+                    card.querySelector('.idea-title').textContent = idea.title || '(untitled)';
+                    card.querySelector('.idea-angle').textContent = idea.angle || '';
+                    listEl.appendChild(card);
+                });
+            }
+
+            function selectIdea(i) {
+                _ideaGenState.selectedIndex = i;
+                document.querySelectorAll('#ideaGenList .idea-card').forEach((c, idx) => {
+                    c.classList.toggle('selected', idx === i);
+                });
+                const useRow = document.getElementById('ideaGenUseRow');
+                useRow.style.display = 'flex';
+                document.getElementById('ideaGenUseLabel').textContent = _ideaGenState.ideas[i].title || '';
+            }
+
+            async function useSelectedIdea() {
+                const i = _ideaGenState.selectedIndex;
+                if (i < 0) return;
+                const idea = _ideaGenState.ideas[i];
+                const statusEl = document.getElementById('ideaGenStatus');
+                const useBtn = document.getElementById('ideaGenUseBtn');
+                const timer = _startBtnTimer(useBtn, 'Writing brief');
+                statusEl.innerHTML = '✍️ Writing the detailed brief with Claude (web search, ~15-30s)…';
+                try {
+                    const r = await fetch('/api/ideas/describe', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: idea.title, angle: idea.angle, request: _ideaGenState.request })
+                    });
+                    const data = await r.json();
+                    if (!data.success) { statusEl.textContent = '❌ ' + (data.error || 'Failed to write brief'); return; }
+                    const topicEl = document.getElementById('createTopic');
+                    const descEl = document.getElementById('createDescription');
+                    if (topicEl) {
+                        topicEl.value = idea.title || '';
+                        if (typeof refreshOutputDirPreview === 'function') refreshOutputDirPreview();
+                    }
+                    if (descEl) descEl.value = data.description || '';
+                    // Remember which idea produced this brief so the Create Script
+                    // dialog can regenerate it on demand without re-selecting.
+                    _ideaGenState.lastBriefIdea = { title: idea.title, angle: idea.angle, request: _ideaGenState.request };
+                    const regenRow = document.getElementById('ideaBriefRegenRow');
+                    if (regenRow) regenRow.style.display = 'flex';
+                    statusEl.innerHTML = '✅ Sent to Create Script — review the title &amp; brief, then generate.';
+                    if (typeof openCreateScriptModal === 'function') openCreateScriptModal();
+                } catch (e) {
+                    statusEl.textContent = '❌ ' + e;
+                } finally {
+                    _stopBtnTimer(useBtn, timer);
+                }
+            }
+
+            // Re-run the brief for the most recently used idea, from inside the
+            // Create Script dialog — replaces the Description with a fresh brief.
+            // Click repeatedly until you get one you like.
+            async function regenerateBriefInModal() {
+                const idea = _ideaGenState.lastBriefIdea;
+                const btn = document.getElementById('ideaBriefRegenBtn');
+                const statusEl = document.getElementById('ideaBriefRegenStatus');
+                const descEl = document.getElementById('createDescription');
+                if (!idea) { if (statusEl) statusEl.textContent = 'Select an idea first.'; return; }
+                const timer = _startBtnTimer(btn, 'Regenerating brief');
+                if (statusEl) statusEl.textContent = '✍️ Writing a fresh brief with Claude (~15-30s)…';
+                try {
+                    const r = await fetch('/api/ideas/describe', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: idea.title, angle: idea.angle, request: idea.request })
+                    });
+                    const data = await r.json();
+                    if (!data.success) { if (statusEl) statusEl.textContent = '❌ ' + (data.error || 'Failed to write brief'); return; }
+                    if (descEl) descEl.value = data.description || '';
+                    if (statusEl) statusEl.textContent = '✅ New brief generated — review & generate, or regenerate again.';
+                } catch (e) {
+                    if (statusEl) statusEl.textContent = '❌ ' + e;
+                } finally {
+                    _stopBtnTimer(btn, timer);
+                }
+            }
+        </script>
+
+        <!-- ============================================================
+             Workflow Documentation (flow diagram)
              Visual reference of the Script Creation and Script Processing
-             pipelines. Documentation only — not interactive. Hidden on
-             screens > 768px so the desktop UI is unchanged.
+             pipelines. Documentation only — not interactive. Shown on the
+             main screen at all widths (steps scroll horizontally if narrow).
              ============================================================ -->
         <style>
-            @media (min-width: 769px) {
-                #mobileWorkflowDocs { display: none !important; }
-            }
-            @media (max-width: 768px) {
                 #mobileWorkflowDocs {
                     display: block;
                     margin: 10px 0 14px 0;
@@ -1281,9 +1542,8 @@
                     color: #94a3b8;
                     font-size: 0.7em;
                 }
-            }
         </style>
-        <div id="mobileWorkflowDocs" aria-label="Workflow documentation (mobile)">
+        <div id="mobileWorkflowDocs" aria-label="Workflow documentation">
             <div class="mwd-pipeline">
                 <h4>🚀 Script Creation Pipeline <span class="mwd-badge">visual reference</span></h4>
                 <p class="mwd-sub">Stages run end-to-end when you tap <strong>Create Script</strong> on desktop.</p>
@@ -1785,6 +2045,10 @@
                         <div class="form-group">
                             <label for="createDescription">📝 Script Description (Optional):</label>
                             <textarea id="createDescription" placeholder="Additional details, context, or specific requirements for the script..."></textarea>
+                            <div id="ideaBriefRegenRow" style="display:none; align-items:center; gap:10px; margin-top:6px;">
+                                <button type="button" id="ideaBriefRegenBtn" onclick="regenerateBriefInModal()" title="Ask Claude to write a fresh brief from the selected idea, replacing the description above" style="padding:7px 12px; background:#6366f1; color:#fff; border:none; border-radius:6px; font-size:0.85em; font-weight:600; cursor:pointer; white-space:nowrap;">🔄 Regenerate brief from idea</button>
+                                <span id="ideaBriefRegenStatus" style="color:#94a3b8; font-size:0.82em;"></span>
+                            </div>
                         </div>
                     </div>
 

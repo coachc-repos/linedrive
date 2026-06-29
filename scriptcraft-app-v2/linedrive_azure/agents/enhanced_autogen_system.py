@@ -91,6 +91,66 @@ def _deshout_text(text: str) -> str:
     return re.sub(r"\S+", _fix_token, text)
 
 
+# ---------------------------------------------------------------------------
+# Claude (Anthropic) fallback for chapter writing.
+#
+# The primary Script Writer runs on an Azure AI Foundry deployment
+# (gpt-5.4-mini) which can return HTTP 429 "rate_limit_exceeded" under load —
+# failing a chapter and aborting the whole script even though the Topic
+# Assistant already produced good chapters. When a chapter write fails for ANY
+# reason, we transparently re-write that one chapter with Claude Opus 4.8 using
+# the exact same request (which carries the full format spec), so the user
+# still gets a complete, correctly-formatted script.
+#
+# Returns the chapter text, or None if Claude is unavailable or also fails.
+# Requires ANTHROPIC_API_KEY in the environment.
+# ---------------------------------------------------------------------------
+_CLAUDE_FALLBACK_MODEL = "claude-opus-4-8"
+
+
+def _claude_chapter_fallback(script_request: str) -> Optional[str]:
+    """Write a single chapter with Claude when the primary writer fails."""
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if not api_key:
+        print("   ⚠️ Claude chapter fallback unavailable: ANTHROPIC_API_KEY not set")
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        print("   ⚠️ Claude chapter fallback unavailable: anthropic SDK not installed")
+        return None
+    system = (
+        "You are a professional video Script Writer. You write a SINGLE chapter "
+        "of a longer, continuous video script. Follow the requested FORMAT and "
+        "FORMATTING RULES in the user's message EXACTLY — including the heading, "
+        "the single '**Host:**' label, and any Visual Cue / Summary sections. "
+        "Output ONLY the chapter content in that format: no preamble, no "
+        "explanation, no commentary about your process, and no markdown code "
+        "fences around the whole thing."
+    )
+    try:
+        client = anthropic.Anthropic(api_key=api_key, timeout=300.0, max_retries=2)
+        resp = client.messages.create(
+            model=_CLAUDE_FALLBACK_MODEL,
+            max_tokens=8000,
+            system=system,
+            messages=[{"role": "user", "content": script_request}],
+        )
+        parts = [
+            b.text for b in resp.content
+            if getattr(b, "type", None) == "text"
+        ]
+        text = "".join(parts).strip()
+        # Peel a markdown fence if the model wrapped the whole chapter in one.
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+            text = re.sub(r"\s*```$", "", text).strip()
+        return text or None
+    except Exception as e:
+        print(f"   ❌ Claude chapter fallback failed: {e}")
+        return None
+
+
 class LineDriveAgentModelClient(ChatCompletionClient):
     """Custom AutoGen model client for LineDrive agents"""
 
@@ -1234,6 +1294,37 @@ REMINDER: The USER'S DESCRIPTION is your guide for level of detail,
 specific points to cover, and overall approach. Honor their intent.
 """
 
+                def _fallback_or_fail(primary_error: str) -> Dict[str, Any]:
+                    """Re-write this chapter with Claude; only fail if that also fails.
+
+                    Lets a complete script come back even when the Azure writer
+                    is rate-limited (429) or refuses — the user's main ask.
+                    """
+                    print(
+                        f"   ⚠️ [parallel] Chapter {i}/{len(chapters)} primary writer "
+                        f"failed ({primary_error}). Trying Claude Opus 4.8 fallback…"
+                    )
+                    _ct = _claude_chapter_fallback(script_request)
+                    if _ct and len(_ct) >= 400:
+                        print(
+                            f"   ✅ [parallel] Chapter {i}/{len(chapters)} written by "
+                            f"Claude fallback ({len(_ct)} chars)"
+                        )
+                        return {
+                            "index": i, "chapter_topic": chapter_topic,
+                            "success": True, "response": _ct,
+                            "elapsed": time.time() - _start, "via": "claude_fallback",
+                        }
+                    print(
+                        f"   ❌ [parallel] Chapter {i}/{len(chapters)} Claude fallback "
+                        f"unavailable or too short — failing."
+                    )
+                    return {
+                        "index": i, "chapter_topic": chapter_topic,
+                        "success": False, "error": primary_error,
+                        "elapsed": time.time() - _start,
+                    }
+
                 try:
                     script_result = self.script_writer_client.send_message(
                         thread_id=script_thread_id,
@@ -1242,11 +1333,7 @@ specific points to cover, and overall approach. Honor their intent.
                         timeout=300,
                     )
                 except Exception as _e:
-                    return {
-                        "index": i, "chapter_topic": chapter_topic,
-                        "success": False, "error": f"send_message raised: {_e}",
-                        "elapsed": time.time() - _start,
-                    }
+                    return _fallback_or_fail(f"send_message raised: {_e}")
 
                 _elapsed = time.time() - _start
                 if script_result.get("success"):
@@ -1274,17 +1361,10 @@ specific points to cover, and overall approach. Honor their intent.
                                 f"   ⚠️ [parallel] Chapter {i}/{len(chapters)} hit content-filter refusal "
                                 f"({_orig_len}→{_new_len} chars). Marking as failed."
                             )
-                            return {
-                                "index": i, "chapter_topic": chapter_topic,
-                                "success": False,
-                                "error": (
-                                    "Chapter writer hit Azure content-filter refusal "
-                                    "('I'm sorry, but I cannot assist with that request.'). "
-                                    "Re-run script creation; if it keeps happening, soften "
-                                    "the chapter topic or audience prompt."
-                                ),
-                                "elapsed": _elapsed,
-                            }
+                            return _fallback_or_fail(
+                                "Chapter writer hit Azure content-filter refusal "
+                                "('I'm sorry, but I cannot assist with that request.')."
+                            )
                         # Otherwise just trim the trailing apology and keep the chapter.
                         print(
                             f"   ✂️ [parallel] Chapter {i}/{len(chapters)}: trimmed trailing "
@@ -1299,12 +1379,7 @@ specific points to cover, and overall approach. Honor their intent.
                         "index": i, "chapter_topic": chapter_topic,
                         "success": True, "response": _resp, "elapsed": _elapsed,
                     }
-                return {
-                    "index": i, "chapter_topic": chapter_topic,
-                    "success": False,
-                    "error": script_result.get("error", "unknown"),
-                    "elapsed": _elapsed,
-                }
+                return _fallback_or_fail(script_result.get("error", "unknown"))
 
             # Run all chapter writes in parallel. Cap concurrency to avoid
             # hammering the agent endpoint; for typical 3-8 chapter videos
