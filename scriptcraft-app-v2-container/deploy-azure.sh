@@ -111,6 +111,32 @@ else
     echo "✅ ANTHROPIC_API_KEY resolved (Idea Generator enabled)"
 fi
 
+# --- X (@AIwithRoz) posting keys: needed for /api/x/* to post in the cloud. --
+# Resolve each from this dir's .env, then the repo-root .env, then the running
+# app. Passed through below so "Post to X" / "Promote on X" work cloud-side.
+_resolve_key() {
+    # $1 = var name; prints the resolved value (may be empty)
+    local name="$1" val=""
+    val="$(printenv "$name" 2>/dev/null || true)"
+    if [ -z "$val" ] && [ -f ".env" ]; then val=$(grep "^$name=" .env | cut -d= -f2-); fi
+    if [ -z "$val" ] && [ -f "../.env" ]; then val=$(grep "^$name=" ../.env | cut -d= -f2-); fi
+    if [ -z "$val" ] && az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+        val=$(az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --query "properties.template.containers[0].env[?name=='$name'].value | [0]" -o tsv)
+    fi
+    printf '%s' "$val"
+}
+X_API_KEY=$(_resolve_key X_API_KEY)
+X_API_SECRET=$(_resolve_key X_API_SECRET)
+X_ACCESS_TOKEN=$(_resolve_key X_ACCESS_TOKEN)
+X_ACCESS_SECRET=$(_resolve_key X_ACCESS_SECRET)
+X_BEARER_TOKEN=$(_resolve_key X_BEARER_TOKEN)
+if [ -n "$X_API_KEY" ] && [ -n "$X_API_SECRET" ] && [ -n "$X_ACCESS_TOKEN" ] && [ -n "$X_ACCESS_SECRET" ]; then
+    echo "✅ X (@AIwithRoz) keys resolved (Post to X enabled)"
+else
+    echo "⚠️  X (@AIwithRoz) keys incomplete — Post to X will be disabled in the cloud until X_* keys are set."
+fi
+
 # --- Optional extra keys (passed through if present) ---------------------
 GROK_API_KEY="${GROK_API_KEY:-}"
 HEYGEN_API_KEY="${HEYGEN_API_KEY:-}"
@@ -120,6 +146,11 @@ FINISHED_VIDEOS_BLOB_CONTAINER="${FINISHED_VIDEOS_BLOB_CONTAINER:-finished-video
 
 ENV_VARS_ARGS=("PYTHONPATH=/app" "AI_PROJECT_API_KEY=$AI_PROJECT_API_KEY" "GOOGLE_API_KEY=$GOOGLE_API_KEY")
 [ -n "$ANTHROPIC_API_KEY" ] && ENV_VARS_ARGS+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+[ -n "$X_API_KEY" ] && ENV_VARS_ARGS+=("X_API_KEY=$X_API_KEY")
+[ -n "$X_API_SECRET" ] && ENV_VARS_ARGS+=("X_API_SECRET=$X_API_SECRET")
+[ -n "$X_ACCESS_TOKEN" ] && ENV_VARS_ARGS+=("X_ACCESS_TOKEN=$X_ACCESS_TOKEN")
+[ -n "$X_ACCESS_SECRET" ] && ENV_VARS_ARGS+=("X_ACCESS_SECRET=$X_ACCESS_SECRET")
+[ -n "$X_BEARER_TOKEN" ] && ENV_VARS_ARGS+=("X_BEARER_TOKEN=$X_BEARER_TOKEN")
 [ -n "$GROK_API_KEY" ] && ENV_VARS_ARGS+=("GROK_API_KEY=$GROK_API_KEY")
 [ -n "$HEYGEN_API_KEY" ] && ENV_VARS_ARGS+=("HEYGEN_API_KEY=$HEYGEN_API_KEY")
 [ -n "$AI_PROJECT_ENDPOINT" ] && ENV_VARS_ARGS+=("AI_PROJECT_ENDPOINT=$AI_PROJECT_ENDPOINT")

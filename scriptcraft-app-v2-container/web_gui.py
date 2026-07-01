@@ -4564,6 +4564,157 @@ def api_ideas_describe():
     return jsonify({"success": True, "title": title, "description": text})
 
 
+# ---------------------------------------------------------------------------
+# X (Twitter) posting — promote published YouTube episodes + standalone posts.
+#
+# Posts from the @AIwithRoz account using OAuth 1.0a user tokens (X_API_KEY,
+# X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET in the root .env). The post
+# text is drafted by Claude Opus 4.8 (reuses _anthropic_complete). Requires the
+# `tweepy` package. All calls degrade gracefully when keys are absent so the
+# rest of the app is unaffected.
+# ---------------------------------------------------------------------------
+X_ACCOUNT_HANDLE = "AIwithRoz"
+
+
+def _x_credentials():
+    """Return the @AIwithRoz OAuth1 credentials from env, or None if incomplete."""
+    creds = {
+        "api_key": (os.getenv("X_API_KEY") or "").strip(),
+        "api_secret": (os.getenv("X_API_SECRET") or "").strip(),
+        "access_token": (os.getenv("X_ACCESS_TOKEN") or "").strip(),
+        "access_secret": (os.getenv("X_ACCESS_SECRET") or "").strip(),
+    }
+    if all(creds.values()):
+        creds["bearer_token"] = (os.getenv("X_BEARER_TOKEN") or "").strip() or None
+        return creds
+    return None
+
+
+def _x_client():
+    """Build a tweepy v2 client for @AIwithRoz, or raise a clear error."""
+    creds = _x_credentials()
+    if not creds:
+        raise RuntimeError(
+            "X (@AIwithRoz) credentials are not configured. Add X_API_KEY, "
+            "X_API_SECRET, X_ACCESS_TOKEN, and X_ACCESS_SECRET to the root .env "
+            "(the app must have Read AND Write permission)."
+        )
+    try:
+        import tweepy
+    except ImportError:
+        raise RuntimeError(
+            "The 'tweepy' package is not installed. Run: pip install tweepy"
+        )
+    return tweepy.Client(
+        bearer_token=creds.get("bearer_token"),
+        consumer_key=creds["api_key"],
+        consumer_secret=creds["api_secret"],
+        access_token=creds["access_token"],
+        access_token_secret=creds["access_secret"],
+        wait_on_rate_limit=True,
+    )
+
+
+def _generate_x_post(mode: str, title: str = "", youtube_url: str = "",
+                     topic: str = "") -> str:
+    """Draft a promo/standalone X post with Claude. mode: 'episode' | 'random'.
+
+    The YouTube link (if any) is appended AFTER the model writes the copy, so
+    the model never wastes characters on the URL and can't mangle it. X wraps
+    every link to ~23 chars, so we reserve ~24 from the 280 budget.
+    """
+    link = (youtube_url or "").strip()
+    budget = 280 - (24 if link else 0)
+    if mode == "episode":
+        ctx = f'New YouTube video title: "{title}".'
+        if topic:
+            ctx += f"\nExtra context: {topic}"
+        instruction = (
+            "Write an upbeat, engaging X (Twitter) post promoting this brand-new "
+            "YouTube video for the @AIwithRoz channel (AI/tech explainers for a "
+            "general audience). Hook the reader, tease the value, and add 1-3 "
+            "relevant hashtags. Do NOT include the video link — it is appended "
+            f"automatically. Keep it under {budget} characters."
+        )
+    else:
+        ctx = f"Topic / what to post about: {topic or title}"
+        instruction = (
+            "Write an engaging standalone X (Twitter) post for the @AIwithRoz "
+            "channel (AI/tech explainers for a general audience) about the topic "
+            "below. Make it punchy and shareable with 1-3 relevant hashtags. "
+            f"Keep it under {budget} characters."
+            + (" You may reference the linked video; the link is appended "
+               "automatically." if link else "")
+        )
+    system = (
+        "You are the social media manager for the @AIwithRoz YouTube channel. "
+        "You write short, high-energy X posts. Output ONLY the post text — no "
+        "surrounding quotes, no preamble, no explanation, no markdown."
+    )
+    user = f"{instruction}\n\n{ctx}"
+    text = _anthropic_complete(system, user, max_tokens=400,
+                               use_web_search=False).strip()
+    # Strip wrapping quotes the model sometimes adds.
+    if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    if len(text) > budget:
+        text = text[:budget].rstrip()
+    if link:
+        text = f"{text}\n{link}"
+    return text
+
+
+@app.route("/api/x/status", methods=["GET"])
+def api_x_status():
+    """Report whether @AIwithRoz X posting is configured (keys present)."""
+    return jsonify({
+        "success": True,
+        "configured": _x_credentials() is not None,
+        "account": X_ACCOUNT_HANDLE,
+    })
+
+
+@app.route("/api/x/generate", methods=["POST"])
+def api_x_generate():
+    """Draft an X post with Claude for an episode promo or a standalone post."""
+    data = request.get_json(silent=True) or {}
+    mode = (data.get("mode") or "random").strip()
+    title = (data.get("title") or "").strip()
+    youtube_url = (data.get("youtube_url") or "").strip()
+    topic = (data.get("topic") or "").strip()
+    if mode != "episode" and not topic and not title:
+        return jsonify({
+            "success": False,
+            "error": "Enter what you'd like to post about.",
+        }), 400
+    try:
+        text = _generate_x_post(mode, title=title, youtube_url=youtube_url,
+                                topic=topic)
+    except Exception as e:
+        logger.error(f"❌ X post generation failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({"success": True, "text": text})
+
+
+@app.route("/api/x/post", methods=["POST"])
+def api_x_post():
+    """Post the given text to X as @AIwithRoz."""
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"success": False, "error": "Post text is empty."}), 400
+    try:
+        client = _x_client()
+        resp = client.create_tweet(text=text)
+        tweet_id = resp.data["id"]
+        url = f"https://x.com/{X_ACCOUNT_HANDLE}/status/{tweet_id}"
+        logger.info(f"✅ Posted to X (@{X_ACCOUNT_HANDLE}): {url}")
+        return jsonify({"success": True, "tweet_id": tweet_id, "url": url})
+    except Exception as e:
+        logger.error(f"❌ X post failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/test")
 def test_page():
     """Serve the test page for debugging SSE streaming"""

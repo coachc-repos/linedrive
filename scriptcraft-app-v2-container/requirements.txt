@@ -30,3 +30,6 @@ anthropic>=0.69
 # AutoGen (used by enhanced multi-agent system)
 autogen-agentchat>=0.4.0
 autogen-core>=0.4.0
+
+# X (Twitter) posting for @AIwithRoz promos/standalone posts
+tweepy>=4.14.0
