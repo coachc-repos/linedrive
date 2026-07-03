@@ -1176,7 +1176,7 @@
                     <span class="toolbar-text">Publish to YouTube</span>
                 </button>
                 <button class="toolbar-btn" onclick="openXPostModal('random')" title="Draft an X post with Claude and post it from @AIwithRoz (promote a video or post about anything)">
-                    <span class="toolbar-icon">🐦</span>
+                    <span class="toolbar-icon" style="display:inline-flex; align-items:center;"><img src="{{ url_for('static', filename='x_icon.jpeg') }}" alt="X" style="height:28px; width:auto; vertical-align:middle; display:inline-block; border-radius:5px;"></span>
                     <span class="toolbar-text">Post to X</span>
                 </button>
                 <button class="toolbar-btn" onclick="openVideoGalleryModal()" title="Browse finished videos from iCloud/Desktop/Podcast/Videos/Final">
@@ -1481,7 +1481,7 @@
         <div id="xPostModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:10080; align-items:center; justify-content:center;">
             <div style="background:#0f172a; border:1px solid #334155; border-radius:12px; width:min(560px,92vw); max-height:90vh; overflow:auto; padding:20px;">
                 <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
-                    <span style="font-size:1.3em;">🐦</span>
+                    <img src="{{ url_for('static', filename='x_icon.jpeg') }}" alt="X" style="height:22px; width:auto; border-radius:4px; display:inline-block; vertical-align:middle;">
                     <span style="font-weight:700; color:#e2e8f0; font-size:1.08em;">Post to X — <span style="color:#60a5fa;">@AIwithRoz</span></span>
                     <button onclick="closeXPostModal()" style="margin-left:auto; background:transparent; color:#94a3b8; border:none; font-size:1.4em; cursor:pointer;">×</button>
                 </div>
@@ -1505,7 +1505,7 @@
 
                 <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
                     <button onclick="closeXPostModal()" style="padding:9px 16px; background:#374151; color:#cbd5e1; border:none; border-radius:6px; cursor:pointer;">Cancel</button>
-                    <button id="xPostSendBtn" onclick="postToX()" style="padding:9px 18px; background:#16a34a; color:#fff; border:none; border-radius:6px; font-weight:700; cursor:pointer;">🐦 Post to X</button>
+                    <button id="xPostSendBtn" onclick="postToX()" style="display:inline-flex; align-items:center; gap:6px; padding:9px 18px; background:#16a34a; color:#fff; border:none; border-radius:6px; font-weight:700; cursor:pointer;"><img src="{{ url_for('static', filename='x_icon.jpeg') }}" alt="" style="height:16px; width:auto; border-radius:3px;">Post to X</button>
                 </div>
             </div>
         </div>
@@ -1552,6 +1552,13 @@
 
             function closeXPostModal() {
                 document.getElementById('xPostModal').style.display = 'none';
+            }
+
+            // Called by the "Promote on X" button in the YouTube publish result.
+            // Reads the last-published video stashed at publish time.
+            function promotePublishedVideoOnX() {
+                const v = window._lastPublishedVideo || {};
+                openXPostModal('episode', { title: v.title || '', youtube_url: v.youtube_url || '' });
             }
 
             // X counts every link as ~23 chars; approximate by collapsing URLs.
@@ -12076,6 +12083,9 @@ Thank you for watching!`;
               if (plErrs.length > 0) {
                 extras += 'Playlist errors: <strong style="color:#fca5a5;">' + plErrs.length + '</strong><br>';
               }
+              // Stash the published video so the Promote-on-X button can read it
+              // without embedding quoted values in an inline onclick attribute.
+              window._lastPublishedVideo = { title: s.title || '', youtube_url: s.video_url || '' };
               result.innerHTML =
                 '✅ <strong>Published!</strong><br>' +
                 'Video: <a href="' + s.video_url + '" target="_blank" style="color:#fff; text-decoration:underline;">' + s.video_url + '</a><br>' +
@@ -12083,9 +12093,9 @@ Thank you for watching!`;
                 extras +
                 'Privacy: <strong>' + (s.privacy_status || 'private') + '</strong> — review the upload before making it public.' +
                 '<div style="margin-top:12px;">' +
-                '<button onclick="openXPostModal(\'episode\', { title: ' + JSON.stringify(s.title || '') + ', youtube_url: ' + JSON.stringify(s.video_url || '') + ' })" ' +
-                'style="padding:8px 16px; background:#1d4ed8; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer;" ' +
-                'title="Draft an X post with Claude and share this new video from @AIwithRoz">🐦 Promote on X</button>' +
+                '<button onclick="promotePublishedVideoOnX()" ' +
+                'style="display:inline-flex; align-items:center; gap:6px; padding:8px 16px; background:#1d4ed8; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer;" ' +
+                'title="Draft an X post with Claude and share this new video from @AIwithRoz"><img src="/static/x_icon.jpeg" alt="" style="height:15px; width:auto; border-radius:3px; vertical-align:middle;">Promote on X</button>' +
                 '</div>';
 
               // Post-publish reminders dialog (Studio-only settings).
