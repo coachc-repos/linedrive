@@ -1152,6 +1152,10 @@
                     <span class="toolbar-icon" style="display:inline-flex; align-items:center;"><img src="{{ url_for('static', filename='x_icon.jpeg') }}" alt="X" style="height:28px; width:auto; vertical-align:middle; display:inline-block; border-radius:5px;"></span>
                     <span class="toolbar-text">Post to X</span>
                 </button>
+                <button class="toolbar-btn" onclick="openLinkedInModal('random')" title="Draft a LinkedIn post with Claude and post it from @AIwithRoz (promote a video or post about anything)">
+                    <span class="toolbar-icon" style="display:inline-flex; align-items:center;"><span style="background:#0a66c2; color:#fff; border-radius:5px; padding:2px 6px; font-weight:800; font-size:0.95em; line-height:1.2; letter-spacing:-0.5px;">in</span></span>
+                    <span class="toolbar-text">Post to LinkedIn</span>
+                </button>
                 <button class="toolbar-btn" onclick="openVideoGalleryModal()" title="Browse finished videos from iCloud/Desktop/Podcast/Videos/Final">
                     <span class="toolbar-icon">🎬</span>
                     <span class="toolbar-text">Video Gallery</span>
@@ -1204,7 +1208,7 @@
                     <button onclick="clearIdeaHistory()" title="Delete all saved idea sets" style="padding:6px 10px; background:#374151; color:#cbd5e1; border:none; border-radius:6px; font-size:0.8em; cursor:pointer; white-space:nowrap;">Clear</button>
                 </div>
                 <div style="display:flex; gap:10px; align-items:flex-start;">
-                    <textarea id="ideaGenRequest" rows="2" placeholder="e.g. find hot topics last month in AI" style="flex:1; padding:10px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.95em; resize:vertical; box-sizing:border-box;"></textarea>
+                    <textarea id="ideaGenRequest" rows="2" placeholder="Optional — leave blank to use the current top 10 AI videos on YouTube, or steer it (e.g. 'focus on AI agents')" style="flex:1; padding:10px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.95em; resize:vertical; box-sizing:border-box;"></textarea>
                     <button id="ideaGenBtn" onclick="generateIdeas()" style="white-space:nowrap; padding:10px 16px; background:#6366f1; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer;">Generate 10 Ideas</button>
                 </div>
                 <div id="ideaGenStatus" style="margin-top:10px; color:#94a3b8; font-size:0.88em; min-height:18px;"></div>
@@ -1323,10 +1327,9 @@
                 const statusEl = document.getElementById('ideaGenStatus');
                 const listEl = document.getElementById('ideaGenList');
                 const btn = document.getElementById('ideaGenBtn');
-                if (!req) { statusEl.textContent = 'Enter a request first.'; inp.focus(); return; }
                 _ideaGenState.request = req;
                 const timer = _startBtnTimer(btn, 'Generating');
-                statusEl.innerHTML = '🔎 Searching &amp; brainstorming with Claude Opus 4.8 (web search, ~15-30s)…';
+                statusEl.innerHTML = '🔎 Pulling the top AI videos on YouTube &amp; brainstorming with Claude Opus 4.8 (~15-30s)…';
                 listEl.innerHTML = '';
                 document.getElementById('ideaGenUseRow').style.display = 'none';
                 try {
@@ -1340,7 +1343,8 @@
                     _ideaGenState.ideas = data.ideas || [];
                     _ideaGenState.selectedIndex = -1;
                     renderIdeas();
-                    statusEl.textContent = `✨ ${_ideaGenState.ideas.length} ideas — click one to select it.`;
+                    const _ty = (data.top_youtube || []).length;
+                    statusEl.textContent = `✨ ${_ideaGenState.ideas.length} ideas${_ty ? ' (grounded in the top ' + _ty + ' AI videos on YouTube)' : ''} — click one to select it.`;
                     // The batch was saved server-side; refresh the Recent list
                     // and point it at the new set.
                     await loadIdeaHistory(false);
@@ -1581,6 +1585,139 @@
                     statusEl.innerHTML = '✅ Posted! <a href="' + data.url + '" target="_blank" style="color:#60a5fa; text-decoration:underline;">View on X</a>';
                 } catch (e) { statusEl.textContent = '❌ ' + e; }
                 finally { _stopBtnTimer(btn, timer); }
+            }
+        </script>
+
+        <!-- ============================================================
+             in  Post to LinkedIn (@AIwithRoz)
+             Draft with Claude, review/edit, then post. Used for YouTube
+             episode promos (link auto-appended) and standalone posts.
+             ============================================================ -->
+        <div id="liPostModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:10080; align-items:center; justify-content:center;">
+            <div style="background:#0f172a; border:1px solid #334155; border-radius:12px; width:min(600px,92vw); max-height:90vh; overflow:auto; padding:20px;">
+                <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+                    <span style="background:#0a66c2; color:#fff; border-radius:5px; padding:2px 7px; font-weight:800; font-size:0.95em; letter-spacing:-0.5px;">in</span>
+                    <span style="font-weight:700; color:#e2e8f0; font-size:1.08em;">Post to LinkedIn — <span style="color:#60a5fa;">@AIwithRoz</span></span>
+                    <button onclick="closeLinkedInModal()" style="margin-left:auto; background:transparent; color:#94a3b8; border:none; font-size:1.4em; cursor:pointer;">×</button>
+                </div>
+                <div id="liPostSubtitle" style="color:#94a3b8; font-size:0.85em; margin-bottom:12px;"></div>
+
+                <div id="liPostTopicRow" style="display:none; margin-bottom:12px;">
+                    <label style="color:#cbd5e1; font-size:0.88em; display:block; margin-bottom:4px;">What should this post be about?</label>
+                    <textarea id="liPostTopic" rows="2" placeholder="e.g. our video on AI meeting notes; a lesson about AI-proofing your career" style="width:100%; box-sizing:border-box; padding:10px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.95em; resize:vertical;"></textarea>
+                </div>
+
+                <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
+                    <button id="liPostGenBtn" onclick="regenerateLinkedInPost()" style="padding:9px 14px; background:#6366f1; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer;">✨ Generate with Claude</button>
+                    <span id="liPostConfigWarn" style="display:none; color:#fca5a5; font-size:0.82em; align-self:center;"></span>
+                </div>
+
+                <textarea id="liPostText" rows="8" maxlength="2900" oninput="updateLiCharCount()" placeholder="Your LinkedIn post… (let Claude draft it, then edit freely)" style="width:100%; box-sizing:border-box; padding:12px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.98em; resize:vertical;"></textarea>
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px;">
+                    <span id="liCharCount" style="color:#94a3b8; font-size:0.82em;">0 chars</span>
+                    <span id="liPostStatus" style="color:#94a3b8; font-size:0.85em;"></span>
+                </div>
+
+                <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
+                    <button onclick="closeLinkedInModal()" style="padding:9px 16px; background:#374151; color:#cbd5e1; border:none; border-radius:6px; cursor:pointer;">Cancel</button>
+                    <button id="liPostSendBtn" onclick="postToLinkedIn()" style="display:inline-flex; align-items:center; gap:6px; padding:9px 18px; background:#0a66c2; color:#fff; border:none; border-radius:6px; font-weight:700; cursor:pointer;"><span style="background:#fff; color:#0a66c2; border-radius:3px; padding:0 4px; font-weight:800; font-size:0.85em;">in</span> Post to LinkedIn</button>
+                </div>
+            </div>
+        </div>
+        <script>
+            let _liPostCtx = { mode: 'random', title: '', youtube_url: '' };
+
+            // Open the LinkedIn compose modal. mode 'episode' prefills from a
+            // just-published video {title, youtube_url} and auto-drafts; mode
+            // 'random' shows a free-text topic box for standalone posts.
+            async function openLinkedInModal(mode, ctx) {
+                ctx = ctx || {};
+                _liPostCtx = { mode: mode || 'random', title: ctx.title || '', youtube_url: ctx.youtube_url || '' };
+                document.getElementById('liPostModal').style.display = 'flex';
+                const sub = document.getElementById('liPostSubtitle');
+                const textEl = document.getElementById('liPostText');
+                document.getElementById('liPostStatus').textContent = '';
+                textEl.value = '';
+                updateLiCharCount();
+                if (_liPostCtx.mode === 'episode') {
+                    document.getElementById('liPostTopicRow').style.display = 'none';
+                    sub.innerHTML = 'Promoting: <strong style="color:#e2e8f0;">' + (_liPostCtx.title || 'your new video') + '</strong><br>The YouTube link is appended automatically (LinkedIn shows a preview card).';
+                } else {
+                    document.getElementById('liPostTopicRow').style.display = 'block';
+                    document.getElementById('liPostTopic').value = '';
+                    sub.textContent = 'Draft a standalone post, or describe another video to talk about.';
+                }
+                try {
+                    const r = await fetch('/api/linkedin/status').then(x => x.json());
+                    const warn = document.getElementById('liPostConfigWarn');
+                    const send = document.getElementById('liPostSendBtn');
+                    if (r && r.configured) {
+                        warn.style.display = 'none';
+                        send.disabled = false; send.style.opacity = 1;
+                    } else {
+                        warn.textContent = '⚠️ LinkedIn token not set (add LINKEDIN_ACCESS_TOKEN to .env). You can draft, but not post yet.';
+                        warn.style.display = 'inline';
+                        send.disabled = true; send.style.opacity = 0.5;
+                    }
+                } catch (e) { /* ignore status errors */ }
+                if (_liPostCtx.mode === 'episode') regenerateLinkedInPost();
+            }
+
+            function closeLinkedInModal() {
+                document.getElementById('liPostModal').style.display = 'none';
+            }
+
+            function updateLiCharCount() {
+                const t = document.getElementById('liPostText').value || '';
+                const el = document.getElementById('liCharCount');
+                el.textContent = t.length + ' chars';
+                el.style.color = t.length > 3000 ? '#fca5a5' : '#94a3b8';
+            }
+
+            async function regenerateLinkedInPost() {
+                const btn = document.getElementById('liPostGenBtn');
+                const statusEl = document.getElementById('liPostStatus');
+                const textEl = document.getElementById('liPostText');
+                const topic = (document.getElementById('liPostTopic').value || '').trim();
+                if (_liPostCtx.mode !== 'episode' && !topic) { statusEl.textContent = 'Enter what to post about first.'; return; }
+                const timer = _startBtnTimer(btn, 'Drafting');
+                statusEl.innerHTML = '✍️ Claude is drafting the LinkedIn post (~10-20s)…';
+                try {
+                    const r = await fetch('/api/linkedin/generate', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ mode: _liPostCtx.mode, title: _liPostCtx.title, youtube_url: _liPostCtx.youtube_url, topic })
+                    });
+                    const data = await r.json();
+                    if (!data.success) { statusEl.textContent = '❌ ' + (data.error || 'Failed to draft'); return; }
+                    textEl.value = data.text || '';
+                    updateLiCharCount();
+                    statusEl.textContent = '✅ Draft ready — edit if you like, then Post.';
+                } catch (e) { statusEl.textContent = '❌ ' + e; }
+                finally { _stopBtnTimer(btn, timer); }
+            }
+
+            async function postToLinkedIn() {
+                const btn = document.getElementById('liPostSendBtn');
+                const statusEl = document.getElementById('liPostStatus');
+                const text = (document.getElementById('liPostText').value || '').trim();
+                if (!text) { statusEl.textContent = 'Nothing to post.'; return; }
+                const timer = _startBtnTimer(btn, 'Posting');
+                try {
+                    const r = await fetch('/api/linkedin/post', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text })
+                    });
+                    const data = await r.json();
+                    if (!data.success) { statusEl.textContent = '❌ ' + (data.error || 'Failed to post'); return; }
+                    statusEl.innerHTML = '✅ Posted! <a href="' + data.url + '" target="_blank" style="color:#60a5fa; text-decoration:underline;">View on LinkedIn</a>';
+                } catch (e) { statusEl.textContent = '❌ ' + e; }
+                finally { _stopBtnTimer(btn, timer); }
+            }
+
+            // Called by the "Promote on LinkedIn" button in the publish result.
+            function promotePublishedVideoOnLinkedIn() {
+                const v = window._lastPublishedVideo || {};
+                openLinkedInModal('episode', { title: v.title || '', youtube_url: v.youtube_url || '' });
             }
         </script>
 
@@ -12012,10 +12149,13 @@ Thank you for watching!`;
                 'Studio: <a href="https://studio.youtube.com/video/' + s.video_id + '/edit" target="_blank" style="color:#fff; text-decoration:underline;">Edit in YouTube Studio</a><br>' +
                 extras +
                 'Privacy: <strong>' + (s.privacy_status || 'private') + '</strong> — review the upload before making it public.' +
-                '<div style="margin-top:12px;">' +
+                '<div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">' +
                 '<button onclick="promotePublishedVideoOnX()" ' +
                 'style="display:inline-flex; align-items:center; gap:6px; padding:8px 16px; background:#1d4ed8; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer;" ' +
                 'title="Draft an X post with Claude and share this new video from @AIwithRoz"><img src="/static/x_icon.jpeg" alt="" style="height:15px; width:auto; border-radius:3px; vertical-align:middle;">Promote on X</button>' +
+                '<button onclick="promotePublishedVideoOnLinkedIn()" ' +
+                'style="display:inline-flex; align-items:center; gap:6px; padding:8px 16px; background:#0a66c2; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer;" ' +
+                'title="Draft a LinkedIn post with Claude and share this new video from @AIwithRoz"><span style="background:#fff; color:#0a66c2; border-radius:3px; padding:0 4px; font-weight:800; font-size:0.85em;">in</span>Promote on LinkedIn</button>' +
                 '</div>';
 
               // Post-publish reminders dialog (Studio-only settings).

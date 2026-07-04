@@ -137,6 +137,16 @@ else
     echo "⚠️  X (@AIwithRoz) keys incomplete — Post to X will be disabled in the cloud until X_* keys are set."
 fi
 
+# --- LinkedIn (@AIwithRoz) posting keys: needed for /api/linkedin/* cloud-side.
+LINKEDIN_ACCESS_TOKEN=$(_resolve_key LINKEDIN_ACCESS_TOKEN)
+LINKEDIN_AUTHOR_URN=$(_resolve_key LINKEDIN_AUTHOR_URN)
+LINKEDIN_API_VERSION=$(_resolve_key LINKEDIN_API_VERSION)
+if [ -n "$LINKEDIN_ACCESS_TOKEN" ]; then
+    echo "✅ LinkedIn (@AIwithRoz) token resolved (Post to LinkedIn enabled)"
+else
+    echo "⚠️  LinkedIn token not set — Post to LinkedIn will be disabled in the cloud until LINKEDIN_ACCESS_TOKEN is set."
+fi
+
 # --- Optional extra keys (passed through if present) ---------------------
 GROK_API_KEY="${GROK_API_KEY:-}"
 HEYGEN_API_KEY="${HEYGEN_API_KEY:-}"
@@ -151,6 +161,9 @@ ENV_VARS_ARGS=("PYTHONPATH=/app" "AI_PROJECT_API_KEY=$AI_PROJECT_API_KEY" "GOOGL
 [ -n "$X_ACCESS_TOKEN" ] && ENV_VARS_ARGS+=("X_ACCESS_TOKEN=$X_ACCESS_TOKEN")
 [ -n "$X_ACCESS_SECRET" ] && ENV_VARS_ARGS+=("X_ACCESS_SECRET=$X_ACCESS_SECRET")
 [ -n "$X_BEARER_TOKEN" ] && ENV_VARS_ARGS+=("X_BEARER_TOKEN=$X_BEARER_TOKEN")
+[ -n "$LINKEDIN_ACCESS_TOKEN" ] && ENV_VARS_ARGS+=("LINKEDIN_ACCESS_TOKEN=$LINKEDIN_ACCESS_TOKEN")
+[ -n "$LINKEDIN_AUTHOR_URN" ] && ENV_VARS_ARGS+=("LINKEDIN_AUTHOR_URN=$LINKEDIN_AUTHOR_URN")
+[ -n "$LINKEDIN_API_VERSION" ] && ENV_VARS_ARGS+=("LINKEDIN_API_VERSION=$LINKEDIN_API_VERSION")
 [ -n "$GROK_API_KEY" ] && ENV_VARS_ARGS+=("GROK_API_KEY=$GROK_API_KEY")
 [ -n "$HEYGEN_API_KEY" ] && ENV_VARS_ARGS+=("HEYGEN_API_KEY=$HEYGEN_API_KEY")
 [ -n "$AI_PROJECT_ENDPOINT" ] && ENV_VARS_ARGS+=("AI_PROJECT_ENDPOINT=$AI_PROJECT_ENDPOINT")

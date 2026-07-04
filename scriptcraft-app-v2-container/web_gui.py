@@ -4436,35 +4436,143 @@ def _save_idea_batch(user_request: str, ideas: list) -> dict:
     return batch
 
 
+def _fetch_top_youtube_ai_titles(limit: int = 10) -> list:
+    """Return the current top AI videos on YouTube as [{title, channel}].
+
+    "Top" = most-viewed AI videos uploaded in roughly the last 45 days, so the
+    signal reflects what's resonating right NOW. Tries the YouTube Data API v3
+    with GOOGLE_API_KEY first (no OAuth, works headless/cloud); falls back to
+    the channel's cached OAuth service if a token already exists. Returns [] on
+    any failure so idea generation still works without it.
+    """
+    from datetime import timezone, timedelta
+    published_after = (
+        datetime.now(timezone.utc) - timedelta(days=45)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    params = {
+        "part": "snippet",
+        "q": "artificial intelligence",
+        "type": "video",
+        "order": "viewCount",
+        "maxResults": limit,
+        "relevanceLanguage": "en",
+        "regionCode": "US",
+        "videoCategoryId": "28",    # Science & Technology (filters craft/music/etc.)
+        "videoDuration": "medium",  # 4-20 min — excludes Shorts spam
+        "publishedAfter": published_after,
+    }
+
+    def _titles_from_items(items):
+        out = []
+        for it in items or []:
+            sn = it.get("snippet", {}) or {}
+            title = (sn.get("title") or "").strip()
+            if title:
+                out.append({"title": title,
+                            "channel": (sn.get("channelTitle") or "").strip()})
+        return out[:limit]
+
+    # 1) API-key path (simplest; no OAuth; works in the cloud container).
+    api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
+    if api_key:
+        try:
+            import requests as _rq
+            r = _rq.get("https://www.googleapis.com/youtube/v3/search",
+                        params={**params, "key": api_key}, timeout=12)
+            if r.status_code == 200:
+                out = _titles_from_items((r.json() or {}).get("items"))
+                if out:
+                    return out
+            else:
+                logger.info("YouTube Data API (key) %s: %s",
+                            r.status_code, r.text[:180])
+        except Exception as e:
+            logger.info("YouTube Data API (key) failed: %s", e)
+
+    # 2) OAuth service path — only if a token is already cached (never trigger
+    #    an interactive auth flow just to fetch titles).
+    try:
+        import youtube_publisher as yp
+        tok = getattr(yp, "TOKEN_PATH", None)
+        if tok is not None and Path(tok).exists():
+            service = yp._build_service()
+            resp = service.search().list(**params).execute()
+            out = _titles_from_items(resp.get("items"))
+            if out:
+                return out
+    except Exception as e:
+        logger.info("YouTube Data API (oauth) failed: %s", e)
+
+    return []
+
+
 @app.route("/api/ideas/generate", methods=["POST"])
 def api_ideas_generate():
-    """Brainstorm 10 distinct video-episode ideas from a free-text request."""
+    """Brainstorm 10 distinct video-episode ideas, grounded by default in the
+    current top AI videos on YouTube (request box optional)."""
     data = request.get_json(silent=True) or {}
     user_request = (data.get("request") or "").strip()
+
+    # By default, ground the brainstorm in the CURRENT top AI videos on YouTube
+    # (pulled live at generation time). The request box is now optional.
+    top_videos = _fetch_top_youtube_ai_titles(10)
+    if top_videos:
+        _listing = "\n".join(
+            f"  {i}. {v['title']}" + (f"  — {v['channel']}" if v.get('channel') else "")
+            for i, v in enumerate(top_videos, 1)
+        )
+        trend_block = (
+            "CURRENT TOP AI VIDEOS ON YOUTUBE (most-viewed recent uploads, "
+            "pulled just now):\n" + _listing + "\n\n"
+            "Treat these as a live signal of what's resonating right now. "
+            "Propose fresh, distinct episode ideas that ride these trends or "
+            "fill the gaps between them — do NOT simply restate these titles.\n\n"
+        )
+    else:
+        trend_block = (
+            "Use web search to find the CURRENT top/trending AI videos on "
+            "YouTube right now and ground your ideas in what's resonating.\n\n"
+        )
     if not user_request:
-        return jsonify({
-            "success": False,
-            "error": "Enter a request (e.g. 'find hot topics last month in AI').",
-        }), 400
+        user_request = ("Trending AI episode ideas based on the current top AI "
+                        "videos on YouTube")
 
     system = (
-        "You are a creative producer for a YouTube channel that makes punchy, "
-        "optimistic explainer videos about AI and technology for a general "
-        "audience in 2026. You brainstorm distinct, compelling episode ideas. "
-        "When the request implies recency ('last month', 'trending', 'this "
-        "week', 'latest'), use web search to ground the ideas in real, current "
-        "events, products, and announcements. Every idea must be genuinely "
-        "different in angle — no near-duplicates."
+        "You are the creative producer for @AIwithRoz, a YouTube channel of "
+        "punchy, optimistic explainer videos about using AI to improve everyday "
+        "life and careers (2026, general audience). The brand is broad — 'AI for "
+        "everyday life' — but the strongest emotional lane is helping regular "
+        "people AI-proof and accelerate their careers (avoid layoffs, better "
+        "interviews/resumes, earn more, save time); weight ideas toward that "
+        "lane while keeping range.\n\n"
+        "Bias every idea toward one of these PROVEN breakout formats:\n"
+        "  • 'I Let AI ___ for a Week' (experiment/challenge — built-in suspense)\n"
+        "  • 'AI Teardown' (rebuild a viewer's resume/email/budget/plan, before→after)\n"
+        "  • 'What This Means for YOU' (react to a fresh AI drop, everyday-life lens)\n"
+        "  • 'The 5-Minute AI Fix' (one annoying problem solved fast)\n"
+        "  • 'Can AI Actually Do This?' (skeptic tests a bold claim)\n"
+        "  • 'AI Did My Job for a Day' (immersive, per role/vertical)\n\n"
+        "TITLE CRAFT (this is what drives clicks): open a curiosity gap or real "
+        "stakes, be specific, use a number when natural, keep the word 'AI' "
+        "visible, aim for ~50–60 characters, and front-load the benefit. Every "
+        "idea must have a strong cold-open hook and be genuinely different from "
+        "the others — no near-duplicates. Use web search to ground ideas in "
+        "real, current 2026 events, products, and announcements."
     )
     user = (
+        trend_block +
         f"Request: {user_request}\n\n"
-        "Generate exactly 10 video episode ideas. Respond with ONLY a JSON "
-        "array (no prose, no markdown fences) of 10 objects, each with:\n"
-        '  "title": a short, catchy episode title (max ~70 chars)\n'
-        '  "angle": one sentence describing the hook / unique angle\n'
+        "Generate exactly 10 video episode ideas. Map each to one of the "
+        "breakout formats above, make the set genuinely diverse across formats "
+        "and topics, and where it fits, ride the momentum of the current top AI "
+        "videos listed. Respond with ONLY a JSON array (no prose, no markdown "
+        "fences) of 10 objects, each with:\n"
+        '  "title": a scroll-stopping, click-worthy title (~50–60 chars, keep "AI" visible)\n'
+        '  "angle": one sentence naming the format + the cold-open hook / why it earns the click\n'
         "Return only the JSON array."
     )
-    logger.info("💡 Idea generation requested: %r", user_request)
+    logger.info("💡 Idea generation requested: %r (top_youtube=%d)",
+                user_request, len(top_videos))
     try:
         text = _anthropic_complete(system, user, max_tokens=4000,
                                    use_web_search=True, max_searches=4)
@@ -4490,7 +4598,7 @@ def api_ideas_generate():
     logger.info("✅ Idea generation produced %d ideas (saved batch %s)",
                 len(clean[:10]), batch["id"][:8])
     return jsonify({"success": True, "ideas": clean[:10],
-                    "batch_id": batch["id"]})
+                    "batch_id": batch["id"], "top_youtube": top_videos})
 
 
 @app.route("/api/ideas/history", methods=["GET"])
@@ -4712,6 +4820,200 @@ def api_x_post():
         return jsonify({"success": True, "tweet_id": tweet_id, "url": url})
     except Exception as e:
         logger.error(f"❌ X post failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn posting — promote published YouTube episodes + standalone posts.
+#
+# Posts from the @AIwithRoz LinkedIn profile using an OAuth 2.0 member access
+# token (LINKEDIN_ACCESS_TOKEN) with the w_member_social scope. The author URN
+# is read from LINKEDIN_AUTHOR_URN, or auto-resolved from the token via
+# /v2/userinfo. Post text is drafted by Claude Opus 4.8 (reuses
+# _anthropic_complete). No extra SDK — posts via the LinkedIn REST API with
+# `requests`. Degrades gracefully when the token is absent.
+# ---------------------------------------------------------------------------
+LINKEDIN_ACCOUNT_HANDLE = "AIwithRoz"
+_LINKEDIN_AUTHOR_CACHE = {}
+
+
+def _linkedin_token():
+    return (os.getenv("LINKEDIN_ACCESS_TOKEN") or "").strip()
+
+
+def _linkedin_api_version():
+    return (os.getenv("LINKEDIN_API_VERSION") or "").strip() or "202506"
+
+
+def _linkedin_resolve_author(token: str):
+    """Return the author URN for the token: env override, cache, or /v2/userinfo."""
+    env_urn = (os.getenv("LINKEDIN_AUTHOR_URN") or "").strip()
+    if env_urn:
+        return env_urn
+    if token in _LINKEDIN_AUTHOR_CACHE:
+        return _LINKEDIN_AUTHOR_CACHE[token]
+    try:
+        import requests as _rq
+        r = _rq.get(
+            "https://api.linkedin.com/v2/userinfo",
+            headers={"Authorization": f"Bearer {token}"}, timeout=15,
+        )
+        if r.status_code == 200:
+            sub = (r.json() or {}).get("sub")
+            if sub:
+                urn = f"urn:li:person:{sub}"
+                _LINKEDIN_AUTHOR_CACHE[token] = urn
+                return urn
+        logger.info("LinkedIn userinfo %s: %s", r.status_code, r.text[:180])
+    except Exception as e:
+        logger.info("LinkedIn author resolve failed: %s", e)
+    return None
+
+
+def _linkedin_configured() -> bool:
+    return bool(_linkedin_token())
+
+
+def _generate_linkedin_post(mode: str, title: str = "", youtube_url: str = "",
+                            topic: str = "") -> str:
+    """Draft a LinkedIn post with Claude. mode: 'episode' | 'random'.
+
+    LinkedIn favors a strong first line, short skimmable paragraphs, and a
+    couple of hashtags. The YouTube link is appended after generation (LinkedIn
+    renders a preview card from it). No hard char cap like X, but we keep it
+    tight (~1300 chars) so it doesn't get truncated behind "…see more".
+    """
+    link = (youtube_url or "").strip()
+    if mode == "episode":
+        ctx = f'New YouTube video title: "{title}".'
+        if topic:
+            ctx += f"\nExtra context: {topic}"
+        instruction = (
+            "Write an engaging LinkedIn post promoting this brand-new YouTube "
+            "video from the @AIwithRoz channel (practical AI for everyday life "
+            "and careers). Open with a scroll-stopping first line, use short "
+            "skimmable paragraphs with line breaks, share the value/takeaway, "
+            "end with a clear call to watch, and add 3-5 relevant hashtags. "
+            "Do NOT paste the video link — it is appended automatically."
+        )
+    else:
+        ctx = f"Topic / what to post about: {topic or title}"
+        instruction = (
+            "Write an engaging standalone LinkedIn post for the @AIwithRoz "
+            "channel (practical AI for everyday life and careers) about the "
+            "topic below. Strong first line, short skimmable paragraphs, a "
+            "takeaway, and 3-5 relevant hashtags."
+            + (" You may reference the linked video; the link is appended "
+               "automatically." if link else "")
+        )
+    system = (
+        "You are the social media manager for the @AIwithRoz brand on LinkedIn. "
+        "You write professional-but-human, value-first posts that earn saves and "
+        "shares. Output ONLY the post text — no surrounding quotes, no preamble, "
+        "no markdown headings."
+    )
+    user = f"{instruction}\n\n{ctx}\n\nKeep it under ~1300 characters."
+    text = _anthropic_complete(system, user, max_tokens=700,
+                               use_web_search=False).strip()
+    if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    if link:
+        text = f"{text}\n\n{link}"
+    return text
+
+
+@app.route("/api/linkedin/status", methods=["GET"])
+def api_linkedin_status():
+    """Report whether @AIwithRoz LinkedIn posting is configured (token present)."""
+    return jsonify({
+        "success": True,
+        "configured": _linkedin_configured(),
+        "account": LINKEDIN_ACCOUNT_HANDLE,
+    })
+
+
+@app.route("/api/linkedin/generate", methods=["POST"])
+def api_linkedin_generate():
+    """Draft a LinkedIn post with Claude for an episode promo or standalone post."""
+    data = request.get_json(silent=True) or {}
+    mode = (data.get("mode") or "random").strip()
+    title = (data.get("title") or "").strip()
+    youtube_url = (data.get("youtube_url") or "").strip()
+    topic = (data.get("topic") or "").strip()
+    if mode != "episode" and not topic and not title:
+        return jsonify({
+            "success": False,
+            "error": "Enter what you'd like to post about.",
+        }), 400
+    try:
+        text = _generate_linkedin_post(mode, title=title,
+                                       youtube_url=youtube_url, topic=topic)
+    except Exception as e:
+        logger.error(f"❌ LinkedIn post generation failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({"success": True, "text": text})
+
+
+@app.route("/api/linkedin/post", methods=["POST"])
+def api_linkedin_post():
+    """Post the given text to LinkedIn as @AIwithRoz."""
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"success": False, "error": "Post text is empty."}), 400
+
+    token = _linkedin_token()
+    if not token:
+        return jsonify({
+            "success": False,
+            "error": ("LinkedIn is not configured. Set LINKEDIN_ACCESS_TOKEN "
+                      "in the root .env (scope: w_member_social)."),
+        }), 500
+    author = _linkedin_resolve_author(token)
+    if not author:
+        return jsonify({
+            "success": False,
+            "error": ("Could not determine the LinkedIn author. Set "
+                      "LINKEDIN_AUTHOR_URN in .env, or ensure the token has the "
+                      "'openid profile' scopes so it can be auto-resolved."),
+        }), 500
+
+    try:
+        import requests as _rq
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Restli-Protocol-Version": "2.0.0",
+            "LinkedIn-Version": _linkedin_api_version(),
+        }
+        body = {
+            "author": author,
+            "commentary": text,
+            "visibility": "PUBLIC",
+            "distribution": {
+                "feedDistribution": "MAIN_FEED",
+                "targetEntities": [],
+                "thirdPartyDistributionChannels": [],
+            },
+            "lifecycleState": "PUBLISHED",
+            "isReshareDisabledByAuthor": False,
+        }
+        r = _rq.post("https://api.linkedin.com/rest/posts",
+                     headers=headers, json=body, timeout=30)
+        if r.status_code in (200, 201):
+            post_id = (r.headers.get("x-restli-id")
+                       or r.headers.get("x-linkedin-id") or "")
+            url = (f"https://www.linkedin.com/feed/update/{post_id}"
+                   if post_id else "https://www.linkedin.com/feed/")
+            logger.info(f"✅ Posted to LinkedIn (@{LINKEDIN_ACCOUNT_HANDLE}): {url}")
+            return jsonify({"success": True, "post_id": post_id, "url": url})
+        logger.error(f"❌ LinkedIn API {r.status_code}: {r.text[:300]}")
+        return jsonify({
+            "success": False,
+            "error": f"LinkedIn API {r.status_code}: {r.text[:200]}",
+        }), 502
+    except Exception as e:
+        logger.error(f"❌ LinkedIn post failed: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
