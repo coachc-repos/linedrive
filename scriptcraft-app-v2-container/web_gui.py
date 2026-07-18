@@ -272,30 +272,61 @@ def _save_broll_table_as_docx(broll_table_md: str, out_path: Path) -> bool:
         return False
 
 
+def _script_excerpt_for_row(script: str, row: dict, idx: int, total: int,
+                            wpm: int = 150, window_words: int = 80) -> str:
+    """Return the ~160-word slice of the script the given b-roll row illustrates,
+    so the Grok prompt engineer can ground the visual in the ACTUAL moment (not a
+    generic stock version). Locates the moment by the row's timecode → word index
+    (at `wpm`), falling back to the row's chronological position. Best-effort;
+    returns "" when there's no script."""
+    if not script or not script.strip():
+        return ""
+    words = script.split()
+    n = len(words)
+    if n == 0:
+        return ""
+    center = None
+    tc = (row.get("timecode") or "").strip()
+    m = re.match(r'(\d+):(\d+):(\d+)', tc)
+    if m:
+        secs = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+        center = int((secs / 60.0) * wpm)
+    if not center or center <= 0:
+        center = int(((idx + 0.5) / max(1, total)) * n)
+    center = max(0, min(center, n - 1))
+    lo = max(0, center - window_words)
+    hi = min(n, center + window_words)
+    return " ".join(words[lo:hi]).strip()
+
+
 def _grok_prompts_for_broll_rows(parsed_data, theme: str = "", max_workers: int = 8,
-                                 builder=None) -> dict:
+                                 builder=None, script: str = "") -> dict:
     """Generate a grok-imagine-friendly video prompt for every parsed b-roll row
     via Claude (Opus 4.8), so the saved B-roll table carries a ready-to-use,
     copy-paste prompt for regenerating any scene whose Grok clip didn't turn out.
 
     ``builder`` picks the style: default ``_grok_build_video_prompt`` (cinematic /
     photoreal-or-motion-graphics), or pass ``_grok_build_chalk_prompt`` for
-    the chalk column. Returns ``{row_index: prompt}``. Best-effort —
+    the chalk column. ``script`` (the full script text) grounds each prompt in the
+    exact scene it illustrates. Returns ``{row_index: prompt}``. Best-effort —
     a failing row yields an empty string rather than breaking the batch.
     """
     prompts: dict = {}
     if not parsed_data:
         return prompts
     _builder = builder or _grok_build_video_prompt
+    total = len(parsed_data)
 
     def _one(item):
         idx, row = item
         desc = (row.get("description") or "").strip()
         if not desc:
             return idx, ""
+        excerpt = _script_excerpt_for_row(script, row, idx, total)
         try:
             return idx, (_builder(
-                desc, row.get("scene_context", ""), theme) or "")
+                desc, row.get("scene_context", ""), theme,
+                script_excerpt=excerpt) or "")
         except Exception as e:
             logger.warning(f"⚠️ Grok table prompt failed (row {idx}): {e}")
             return idx, ""
@@ -398,12 +429,15 @@ def _persist_broll_table_artifacts(
     parsed_data,
     broll_dir: Path,
     theme: str = "",
+    script: str = "",
 ) -> None:
     """Persist the B-roll table into ``broll_dir`` as broll_table.md (raw) plus
     broll_table.docx enriched with a Claude-generated 'Grok Imagine Prompt'
     column. This is the same folder Grok videos are saved to, so the Word table
     sits next to the clips and its prompts can be copied to regenerate any weak
-    scene. Best-effort — logs and swallows errors so generation never breaks.
+    scene. ``script`` (the full script text) grounds each Grok prompt in the exact
+    scene it illustrates. Best-effort — logs and swallows errors so generation
+    never breaks.
     """
     # 1) Generate the Grok Imagine prompts and attach one to each row (in place)
     #    FIRST, independent of any disk write. This runs even when local-fs
@@ -413,9 +447,11 @@ def _persist_broll_table_artifacts(
     chalk_prompts: dict = {}
     if parsed_data:
         try:
-            grok_prompts = _grok_prompts_for_broll_rows(parsed_data, theme)
+            grok_prompts = _grok_prompts_for_broll_rows(
+                parsed_data, theme, script=script)
             chalk_prompts = _grok_prompts_for_broll_rows(
-                parsed_data, theme, builder=_grok_build_chalk_prompt)
+                parsed_data, theme, builder=_grok_build_chalk_prompt,
+                script=script)
             for i, row in enumerate(parsed_data):
                 if not isinstance(row, dict):
                     continue
@@ -2032,7 +2068,8 @@ async def process_script_creation(session_id, topic, audience, tone,
                             pass
                         _persist_broll_table_artifacts(
                             broll_table, parsed_data,
-                            run_output_dir / "broll", theme=topic)
+                            run_output_dir / "broll", theme=topic,
+                            script=final_script_content)
 
                         # Append B-roll table to script
                         broll_section = f"\n\n{'=' * 80}\n"
@@ -3526,7 +3563,8 @@ async def process_existing_script(
                         # copying the scene's prompt.
                         _persist_broll_table_artifacts(
                             broll_table, broll_rows,
-                            run_output_dir / "broll", theme=script_title)
+                            run_output_dir / "broll", theme=script_title,
+                            script=cleaned_script)
 
                         completed_steps += 1
                         progress = 15 + (completed_steps * progress_per_step)
@@ -7769,6 +7807,16 @@ GROK_PROMPT_ENGINEER_SYSTEM = (
     "model that produces a ~6 second SILENT clip. Given a b-roll scene "
     "description (plus optional context and overall topic), write ONE optimal "
     "generation prompt that yields a polished, professional clip.\n"
+    "SPECIFICITY (MOST IMPORTANT): Make the clip unmistakably about THIS exact "
+    "moment — never generic stock b-roll. When an EXACT SCRIPT MOMENT is given, "
+    "read it and depict a precise, literal visual of what is being said: the "
+    "specific subject, objects, on-screen action, real product/app/tool names, "
+    "numbers and setting it implies. BANNED as generic filler (unless that is "
+    "literally the scene): anonymous 'business people in a meeting', someone "
+    "vaguely 'typing on a laptop', generic city/highway timelapses, abstract "
+    "swirling particles or glowing networks, stock handshakes, faceless "
+    "silhouettes. Pick ONE concrete, particular, slightly unexpected image that "
+    "could only belong to this scene.\n"
     "STYLE (strict):\n"
     "- When people are involved, show REAL human actors — photorealistic skin, "
     "natural lighting, real-world settings. Never cartoon or illustrated "
@@ -7802,6 +7850,13 @@ GROK_CHALK_PROMPT_ENGINEER_SYSTEM = (
     "model that produces a ~4-6 second SILENT clip. Given a b-roll scene, write "
     "ONE prompt that depicts it as a ROUGH WHITE CHALK DRAWING on a BLACK "
     "background — a hand-sketched chalkboard look, as if drawn by hand.\n"
+    "SPECIFICITY (MOST IMPORTANT): the sketch must be unmistakably about THIS "
+    "exact moment, never generic. When an EXACT SCRIPT MOMENT is given, read it "
+    "and sketch a precise, literal depiction of what is being said — the specific "
+    "subject, objects and action it implies (real product/tool names, numbers, "
+    "the exact thing happening). No generic filler (vague figures 'in a meeting', "
+    "someone 'at a laptop', abstract swirls). Pick one concrete, particular image "
+    "that could only belong to this scene.\n"
     "STYLE (strict):\n"
     "- BEGIN the prompt with exactly: 'Rough white chalk drawing on black "
     "background, simple and clean, show ' and then describe the scene.\n"
@@ -7827,12 +7882,15 @@ def _grok_prompt_via_claude(
     theme: str = "",
     system: Optional[str] = None,
     max_len: int = 600,
+    script_excerpt: str = "",
 ) -> Optional[str]:
     """Ask Claude (Opus 4.8) to craft an optimal grok-imagine-video prompt from
     the b-roll description. ``system`` selects the style engine (default cinematic
     ``GROK_PROMPT_ENGINEER_SYSTEM``; pass ``GROK_CHALK_PROMPT_ENGINEER_SYSTEM``
-    for the chalk variant). Returns the prompt, or None if
-    ANTHROPIC_API_KEY / the SDK is missing or the call fails."""
+    for the chalk variant). ``script_excerpt`` is the actual script moment the
+    clip illustrates — passed so the visual is specific to the scene, not generic.
+    Returns the prompt, or None if ANTHROPIC_API_KEY / the SDK is missing or the
+    call fails."""
     api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
         return None
@@ -7845,6 +7903,12 @@ def _grok_prompt_via_claude(
             "B-ROLL SCENE DESCRIPTION (your prompt MUST depict exactly this, "
             f"keeping its specific subject and objects): {description}"
         ]
+        if (script_excerpt or "").strip():
+            parts.append(
+                "EXACT SCRIPT MOMENT this b-roll illustrates — ground the visual "
+                "in THIS specific content and show a precise, literal depiction "
+                "of what is being said here, NOT a generic stock version: "
+                f"\"{script_excerpt.strip()}\"")
         if (scene_context or "").strip():
             parts.append(
                 f"Why this scene appears in the video: {scene_context.strip()}")
@@ -7885,6 +7949,7 @@ def _grok_build_chalk_prompt(
     description: str,
     scene_context: str = "",
     theme: str = "",
+    script_excerpt: str = "",
 ) -> str:
     """Build a white-chalk-on-black Grok video prompt for a
     b-roll scene (the "Grok Chalk Prompt" table column). Returns "" when
@@ -7895,7 +7960,8 @@ def _grok_build_chalk_prompt(
         return ""
     out = _grok_prompt_via_claude(
         base, scene_context, theme,
-        system=GROK_CHALK_PROMPT_ENGINEER_SYSTEM, max_len=900)
+        system=GROK_CHALK_PROMPT_ENGINEER_SYSTEM, max_len=900,
+        script_excerpt=script_excerpt)
     return out or ""
 
 
@@ -7904,6 +7970,7 @@ def _grok_build_video_prompt(
     scene_context: str = "",
     theme: str = "",
     client=None,
+    script_excerpt: str = "",
 ) -> str:
     """Rewrite a stock-style b-roll description into a unique, theme-specific
     Grok video prompt (animation / diagram / artwork).
@@ -7920,7 +7987,8 @@ def _grok_build_video_prompt(
         return styled_fallback
 
     # 1) Preferred: Claude (Opus 4.8) writes the optimal grok-imagine prompt.
-    claude_out = _grok_prompt_via_claude(base, scene_context, theme)
+    claude_out = _grok_prompt_via_claude(
+        base, scene_context, theme, script_excerpt=script_excerpt)
     if claude_out:
         return claude_out
 
@@ -7935,6 +8003,11 @@ def _grok_build_video_prompt(
         parts.append(
             "SCENE TO DEPICT (most important — your prompt MUST show exactly "
             f"this, keeping its specific subject and objects): {base}")
+        if (script_excerpt or "").strip():
+            parts.append(
+                "EXACT SCRIPT MOMENT this b-roll illustrates — depict THIS "
+                "specific content literally, not a generic stock version: "
+                f"\"{script_excerpt.strip()}\"")
         if (scene_context or "").strip():
             parts.append(f"Why this scene appears in the video: {scene_context.strip()}")
         if (theme or "").strip():
