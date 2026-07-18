@@ -33,3 +33,6 @@ autogen-core>=0.4.0
 
 # X (Twitter) posting for @AIwithRoz promos/standalone posts
 tweepy>=4.14.0
+
+# Fetch transcripts of adjacency-target YouTube videos for the Idea Generator
+youtube-transcript-api>=1.0.0

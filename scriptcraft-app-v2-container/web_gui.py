@@ -51,6 +51,13 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# The Azure Storage SDK logs full HTTP request/response header dumps at INFO,
+# which floods the console (~40 lines per blob poll) and buries app logs. Quiet
+# it to WARNING so the polish/agent logs stay readable.
+for _noisy in ("azure.core.pipeline.policies.http_logging_policy",
+               "azure.storage", "azure"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 SCRIPTCRAFT_SETTINGS_PATH = Path.home() / ".scriptcraft" / \
     "web_gui_settings.json"
 DEFAULT_OUTPUT_PARENT = Path.home() / "Dev" / "Videos" / "Edited" / "Final"
@@ -263,6 +270,190 @@ def _save_broll_table_as_docx(broll_table_md: str, out_path: Path) -> bool:
     except Exception as e:
         logger.error(f"❌ Failed to save broll docx: {e}")
         return False
+
+
+def _grok_prompts_for_broll_rows(parsed_data, theme: str = "", max_workers: int = 8,
+                                 builder=None) -> dict:
+    """Generate a grok-imagine-friendly video prompt for every parsed b-roll row
+    via Claude (Opus 4.8), so the saved B-roll table carries a ready-to-use,
+    copy-paste prompt for regenerating any scene whose Grok clip didn't turn out.
+
+    ``builder`` picks the style: default ``_grok_build_video_prompt`` (cinematic /
+    photoreal-or-motion-graphics), or pass ``_grok_build_chalk_prompt`` for
+    the chalk column. Returns ``{row_index: prompt}``. Best-effort —
+    a failing row yields an empty string rather than breaking the batch.
+    """
+    prompts: dict = {}
+    if not parsed_data:
+        return prompts
+    _builder = builder or _grok_build_video_prompt
+
+    def _one(item):
+        idx, row = item
+        desc = (row.get("description") or "").strip()
+        if not desc:
+            return idx, ""
+        try:
+            return idx, (_builder(
+                desc, row.get("scene_context", ""), theme) or "")
+        except Exception as e:
+            logger.warning(f"⚠️ Grok table prompt failed (row {idx}): {e}")
+            return idx, ""
+
+    items = list(enumerate(parsed_data))
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        workers = max(1, min(max_workers, len(items)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for idx, prompt in ex.map(_one, items):
+                prompts[idx] = prompt
+    except Exception as e:
+        logger.warning(
+            f"⚠️ Grok prompt batch failed ({e}); running sequentially")
+        for item in items:
+            idx, prompt = _one(item)
+            prompts[idx] = prompt
+    return prompts
+
+
+def _save_broll_table_with_prompts_as_docx(
+    parsed_data,
+    grok_prompts: dict,
+    out_path: Path,
+    search_string: str = "",
+    chalk_prompts: "Optional[dict]" = None,
+) -> bool:
+    """Build a Word doc of the B-roll table with copy-paste Grok prompt columns:
+    a cinematic 'Grok Imagine Prompt' and a 'Grok Chalk Prompt' (clean 2D/3D
+    animated business graphic) for each scene. Returns True on success, False if
+    python-docx is missing or there are no rows.
+    """
+    try:
+        from docx import Document
+    except ImportError as e:
+        logger.error(f"❌ python-docx not available for broll docx: {e}")
+        return False
+    if not parsed_data:
+        return False
+    chalk_prompts = chalk_prompts or {}
+
+    has_timecode = any((r.get("timecode") or "").strip() for r in parsed_data)
+    headers = (["Timecode"] if has_timecode else []) + [
+        "Search Term", "Description", "Scene Context",
+        "Grok Imagine Prompt", "Grok Chalk Prompt"]
+
+    doc = Document()
+    doc.add_heading("B-Roll Table", level=1)
+    note = doc.add_paragraph()
+    note.add_run(
+        "'Grok Imagine Prompt' is a ready-to-use cinematic grok-imagine-video "
+        "prompt; 'Grok Chalk Prompt' is a rough white-chalk-on-black hand-drawn "
+        "sketch version of the same scene. Copy either cell to (re)generate "
+        "that clip."
+    ).italic = True
+
+    table = doc.add_table(rows=1 + len(parsed_data), cols=len(headers))
+    try:
+        table.style = 'Light Grid Accent 1'
+    except Exception:
+        pass
+    for c, h in enumerate(headers):
+        cell = table.rows[0].cells[c]
+        cell.text = h
+        for para in cell.paragraphs:
+            for run in para.runs:
+                run.bold = True
+    for r, row in enumerate(parsed_data, start=1):
+        vals = []
+        if has_timecode:
+            vals.append(row.get("timecode", "") or "")
+        vals.extend([
+            row.get("search_term", "") or "",
+            row.get("description", "") or "",
+            row.get("scene_context", "") or "",
+            grok_prompts.get(r - 1, "") or "",
+            chalk_prompts.get(r - 1, "") or "",
+        ])
+        for c, val in enumerate(vals):
+            if c < len(headers):
+                table.rows[r].cells[c].text = val
+
+    if (search_string or "").strip():
+        doc.add_paragraph()
+        p = doc.add_paragraph()
+        p.add_run("Stock Footage Search String: ").bold = True
+        p.add_run(search_string.strip())
+
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(out_path))
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to save broll docx: {e}")
+        return False
+
+
+def _persist_broll_table_artifacts(
+    broll_table: str,
+    parsed_data,
+    broll_dir: Path,
+    theme: str = "",
+) -> None:
+    """Persist the B-roll table into ``broll_dir`` as broll_table.md (raw) plus
+    broll_table.docx enriched with a Claude-generated 'Grok Imagine Prompt'
+    column. This is the same folder Grok videos are saved to, so the Word table
+    sits next to the clips and its prompts can be copied to regenerate any weak
+    scene. Best-effort — logs and swallows errors so generation never breaks.
+    """
+    # 1) Generate the Grok Imagine prompts and attach one to each row (in place)
+    #    FIRST, independent of any disk write. This runs even when local-fs
+    #    writes are disabled (e.g. the cloud container), so the UI still receives
+    #    a grok_prompt per row in the broll_rows payload to show + copy.
+    grok_prompts: dict = {}
+    chalk_prompts: dict = {}
+    if parsed_data:
+        try:
+            grok_prompts = _grok_prompts_for_broll_rows(parsed_data, theme)
+            chalk_prompts = _grok_prompts_for_broll_rows(
+                parsed_data, theme, builder=_grok_build_chalk_prompt)
+            for i, row in enumerate(parsed_data):
+                if not isinstance(row, dict):
+                    continue
+                if not (row.get("grok_prompt") or "").strip():
+                    row["grok_prompt"] = grok_prompts.get(i, "") or ""
+                if not (row.get("grok_chalk_prompt") or "").strip():
+                    row["grok_chalk_prompt"] = \
+                        chalk_prompts.get(i, "") or ""
+        except Exception as e:
+            logger.warning(f"⚠️ Grok prompt generation for broll rows failed: {e}")
+
+    # 2) Persist md + docx to disk (best-effort; may be a no-op in the container).
+    try:
+        broll_dir.mkdir(parents=True, exist_ok=True)
+        md_path = broll_dir / "broll_table.md"
+        md_path.write_text(broll_table or "", encoding="utf-8")
+        logger.info(f"💾 Saved broll table md → {md_path}")
+
+        docx_path = broll_dir / "broll_table.docx"
+        if parsed_data:
+            # Pull the "Stock Footage Search String" tail (if any) for the docx.
+            search_string = ""
+            m = re.search(
+                r"\*\*Stock Footage Search String:\*\*\s*(.+)",
+                broll_table or "", flags=re.DOTALL)
+            if m:
+                search_string = m.group(1).strip()
+            if _save_broll_table_with_prompts_as_docx(
+                    parsed_data, grok_prompts, docx_path, search_string,
+                    chalk_prompts=chalk_prompts):
+                logger.info(
+                    f"💾 Saved broll table docx (+Grok prompts) → {docx_path}")
+                return
+        # Fallback: no parsed rows — save the plain markdown table as docx.
+        if _save_broll_table_as_docx(broll_table, docx_path):
+            logger.info(f"💾 Saved broll table docx → {docx_path}")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to persist broll table artifacts: {e}")
 
 
 def _copy_to_output_subfolder(src, subfolder: str, script_title: Optional[str] = None) -> Optional[Path]:
@@ -1816,7 +2007,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                         script_content=final_script_content,
                         script_title=topic,
                         words_per_minute=150,  # Adjust based on speaking pace
-                        timeout=180
+                        timeout=300  # denser 48-60 row table needs more time
                     )
 
                     if broll_result.get("success", False):
@@ -1829,22 +2020,19 @@ async def process_script_creation(session_id, topic, audience, tone,
                         streamer.send_update(
                             "✅ B-roll table generated", 98.5)
 
-                        # Persist the raw broll table (md + docx) to {run}/broll/
+                        # Persist the broll table to {run}/broll/ (the same
+                        # folder Grok videos are saved to): broll_table.md (raw)
+                        # + broll_table.docx enriched with a Grok Imagine Prompt
+                        # column so weak clips can be regenerated by copying the
+                        # scene's prompt.
                         try:
-                            broll_dir = run_output_dir / "broll"
-                            broll_dir.mkdir(parents=True, exist_ok=True)
-                            broll_md_path = broll_dir / "broll_table.md"
-                            broll_md_path.write_text(
-                                broll_table, encoding="utf-8")
-                            print(
-                                f"💾 Saved broll table md → {broll_md_path}")
-                            broll_docx_path = broll_dir / "broll_table.docx"
-                            if _save_broll_table_as_docx(broll_table, broll_docx_path):
-                                print(
-                                    f"💾 Saved broll table docx → {broll_docx_path}")
-                        except Exception as save_err:
-                            print(
-                                f"⚠️ Failed to save broll table files: {save_err}")
+                            streamer.send_update(
+                                "🎨 Writing B-roll Word doc + Grok prompts...", 98.7)
+                        except Exception:
+                            pass
+                        _persist_broll_table_artifacts(
+                            broll_table, parsed_data,
+                            run_output_dir / "broll", theme=topic)
 
                         # Append B-roll table to script
                         broll_section = f"\n\n{'=' * 80}\n"
@@ -3332,6 +3520,14 @@ async def process_existing_script(
                             except Exception as edl_error:
                                 logger.error(f"❌ EDL error: {edl_error}")
 
+                        # Persist the B-roll table (md + Word doc with a Grok
+                        # Imagine Prompt column) into {run}/broll/, next to any
+                        # Grok videos, so weak clips can be regenerated by
+                        # copying the scene's prompt.
+                        _persist_broll_table_artifacts(
+                            broll_table, broll_rows,
+                            run_output_dir / "broll", theme=script_title)
+
                         completed_steps += 1
                         progress = 15 + (completed_steps * progress_per_step)
                         streamer.send_update(
@@ -4192,6 +4388,12 @@ def agent_mode_api():
 
 ANTHROPIC_MODEL = "claude-opus-4-8"
 
+# Model used for the optional "final polish" pass on a finished script. Claude
+# Fable 5 is Anthropic's newest storytelling-tuned model; it rewrites the script
+# to be punchier, more current, and more advanced without changing the format.
+# Falls back to ANTHROPIC_MODEL automatically if it isn't available on the key.
+POLISH_MODEL = "claude-fable-5"
+
 
 def _web_search_tool(max_uses: int = 4) -> dict:
     """Web search tool capped at `max_uses` calls to bound latency."""
@@ -4228,7 +4430,7 @@ IDEA_BRIEF_EXAMPLE = (
 )
 
 
-def _get_anthropic_client():
+def _get_anthropic_client(timeout: float = 60.0):
     """Return an Anthropic client, or None if the key/SDK is unavailable."""
     api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
@@ -4239,20 +4441,26 @@ def _get_anthropic_client():
     except ImportError:
         logger.error("anthropic SDK not installed — run: pip install anthropic")
         return None
-    # Short timeout + minimal retries so a stalled web-search call fails fast
-    # and we can fall back to a no-search generation instead of appearing hung.
-    return anthropic.Anthropic(api_key=api_key, timeout=60.0, max_retries=1)
+    # Minimal retries so a stalled web-search call fails fast and we can fall
+    # back to a no-search generation instead of appearing hung. `timeout` is
+    # tunable per caller: short for quick drafts, longer for a full-script
+    # polish where web search over a long input legitimately takes a while.
+    return anthropic.Anthropic(api_key=api_key, timeout=timeout, max_retries=1)
 
 
 def _anthropic_complete(system: str, user: str, max_tokens: int = 4000,
-                        use_web_search: bool = True, max_searches: int = 4) -> str:
-    """Run one Opus 4.8 turn, draining the server-side web_search loop.
+                        use_web_search: bool = True, max_searches: int = 4,
+                        model: str = None, timeout: float = 60.0) -> str:
+    """Run one Claude turn, draining the server-side web_search loop.
 
+    `model` defaults to ANTHROPIC_MODEL (Opus 4.8). `timeout` (seconds) bounds
+    each request — raise it for long inputs where web search takes a while.
     Returns the concatenated text of the final assistant message. If a request
     with web search fails (e.g. the tool isn't enabled on the account), it
     retries once without tools. Raises on hard failures.
     """
-    client = _get_anthropic_client()
+    _model = model or ANTHROPIC_MODEL
+    client = _get_anthropic_client(timeout=timeout)
     if client is None:
         raise RuntimeError(
             "Claude is not configured. Set ANTHROPIC_API_KEY in the root .env "
@@ -4267,11 +4475,11 @@ def _anthropic_complete(system: str, user: str, max_tokens: int = 4000,
         resp = None
         logger.info(
             "🤖 Claude %s | web_search=%s | calling…",
-            ANTHROPIC_MODEL, "on" if with_tools else "off",
+            _model, "on" if with_tools else "off",
         )
         for attempt in range(1, 7):
             kwargs = dict(
-                model=ANTHROPIC_MODEL,
+                model=_model,
                 max_tokens=max_tokens,
                 system=system,
                 messages=messages,
@@ -4436,6 +4644,93 @@ def _save_idea_batch(user_request: str, ideas: list) -> dict:
     return batch
 
 
+def _extract_youtube_id(url: str):
+    """Pull the 11-char video id out of any YouTube URL (or a bare id)."""
+    u = (url or "").strip()
+    if not u:
+        return None
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", u):
+        return u
+    m = re.search(r"(?:v=|/shorts/|youtu\.be/|/embed/|/live/)([A-Za-z0-9_-]{11})", u)
+    return m.group(1) if m else None
+
+
+def _youtube_adjacency_context(urls, limit: int = 4,
+                               transcript_chars: int = 2000) -> list:
+    """For each YouTube URL, fetch its title (oEmbed) + transcript excerpt.
+
+    These are the videos the user wants to be "the natural next watch" to. Used
+    to steer idea/title/description generation toward suggested-adjacency. Title
+    comes from oEmbed (no API key, works anywhere); transcript from
+    youtube-transcript-api (best-effort — YouTube often blocks datacenter IPs,
+    so cloud runs may get title-only). Returns [{url, video_id, title, channel,
+    transcript}]. Never raises.
+    """
+    out = []
+    seen = set()
+    for raw in (urls or []):
+        vid = _extract_youtube_id(raw)
+        if not vid or vid in seen:
+            continue
+        seen.add(vid)
+        watch = f"https://www.youtube.com/watch?v={vid}"
+        title, channel = "", ""
+        try:
+            import requests as _rq
+            r = _rq.get("https://www.youtube.com/oembed",
+                        params={"url": watch, "format": "json"}, timeout=10)
+            if r.status_code == 200:
+                j = r.json()
+                title = (j.get("title") or "").strip()
+                channel = (j.get("author_name") or "").strip()
+        except Exception as e:
+            logger.info("oEmbed failed for %s: %s", vid, e)
+        transcript = ""
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            snips = YouTubeTranscriptApi().fetch(vid, languages=["en"])
+            parts = []
+            for s in snips:
+                t = getattr(s, "text", None)
+                if t is None and isinstance(s, dict):
+                    t = s.get("text")
+                if t:
+                    parts.append(t)
+            transcript = " ".join(parts).strip()[:transcript_chars]
+        except Exception as e:
+            logger.info("transcript fetch failed for %s: %s", vid, e)
+        if title or transcript:
+            out.append({"url": watch, "video_id": vid, "title": title,
+                        "channel": channel, "transcript": transcript})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _adjacency_prompt_block(adj: list) -> str:
+    """Build the ADJACENCY TARGETS instruction block from fetched context."""
+    if not adj:
+        return ""
+    lines = []
+    for i, v in enumerate(adj, 1):
+        entry = f"  {i}. Title: \"{v.get('title') or '(untitled)'}\""
+        if v.get("channel"):
+            entry += f" — by {v['channel']}"
+        if v.get("transcript"):
+            entry += f"\n     Transcript excerpt: {v['transcript']}"
+        lines.append(entry)
+    return (
+        "ADJACENCY TARGETS — the creator specifically wants OUR video to be the "
+        "\"natural next watch\" to these videos, so YouTube suggests ours right "
+        "next to them and we inherit their audience. For each idea, take a "
+        "response / deeper-dive / specific-application / contrarian / \"part 2\" "
+        "angle on these; mirror their topic and title language (same semantic "
+        "cluster) WITHOUT copying, and keep our practical AI-for-everyday-life "
+        "voice. Prioritize these over the generic trending list below.\n"
+        + "\n".join(lines) + "\n\n"
+    )
+
+
 def _fetch_top_youtube_ai_titles(limit: int = 10) -> list:
     """Return the current top AI videos on YouTube as [{title, channel}].
 
@@ -4513,6 +4808,18 @@ def api_ideas_generate():
     data = request.get_json(silent=True) or {}
     user_request = (data.get("request") or "").strip()
 
+    # Optional adjacency targets: YouTube links the creator wants to be the
+    # "natural next watch" to. We fetch each title + transcript and steer the
+    # ideas to ride them (suggested-adjacency). Accept a list or newline string.
+    adj_raw = data.get("adjacency_urls")
+    if isinstance(adj_raw, str):
+        adj_urls = [u for u in re.split(r"[\s,]+", adj_raw) if u.strip()]
+    elif isinstance(adj_raw, list):
+        adj_urls = [str(u).strip() for u in adj_raw if str(u).strip()]
+    else:
+        adj_urls = []
+    adjacency = _youtube_adjacency_context(adj_urls) if adj_urls else []
+
     # By default, ground the brainstorm in the CURRENT top AI videos on YouTube
     # (pulled live at generation time). The request box is now optional.
     top_videos = _fetch_top_youtube_ai_titles(10)
@@ -4560,19 +4867,21 @@ def api_ideas_generate():
         "real, current 2026 events, products, and announcements."
     )
     user = (
+        _adjacency_prompt_block(adjacency) +
         trend_block +
         f"Request: {user_request}\n\n"
         "Generate exactly 10 video episode ideas. Map each to one of the "
         "breakout formats above, make the set genuinely diverse across formats "
         "and topics, and where it fits, ride the momentum of the current top AI "
-        "videos listed. Respond with ONLY a JSON array (no prose, no markdown "
-        "fences) of 10 objects, each with:\n"
+        "videos listed" + (" — and especially the ADJACENCY TARGETS above"
+                           if adjacency else "") + ". Respond with ONLY a JSON "
+        "array (no prose, no markdown fences) of 10 objects, each with:\n"
         '  "title": a scroll-stopping, click-worthy title (~50–60 chars, keep "AI" visible)\n'
         '  "angle": one sentence naming the format + the cold-open hook / why it earns the click\n'
         "Return only the JSON array."
     )
-    logger.info("💡 Idea generation requested: %r (top_youtube=%d)",
-                user_request, len(top_videos))
+    logger.info("💡 Idea generation requested: %r (top_youtube=%d, adjacency=%d)",
+                user_request, len(top_videos), len(adjacency))
     try:
         text = _anthropic_complete(system, user, max_tokens=4000,
                                    use_web_search=True, max_searches=4)
@@ -4597,8 +4906,14 @@ def api_ideas_generate():
     batch = _save_idea_batch(user_request, clean[:10])
     logger.info("✅ Idea generation produced %d ideas (saved batch %s)",
                 len(clean[:10]), batch["id"][:8])
-    return jsonify({"success": True, "ideas": clean[:10],
-                    "batch_id": batch["id"], "top_youtube": top_videos})
+    return jsonify({
+        "success": True, "ideas": clean[:10], "batch_id": batch["id"],
+        "top_youtube": top_videos,
+        "adjacency": [{"url": v["url"], "title": v["title"],
+                       "channel": v["channel"],
+                       "has_transcript": bool(v.get("transcript"))}
+                      for v in adjacency],
+    })
 
 
 @app.route("/api/ideas/history", methods=["GET"])
@@ -4628,6 +4943,17 @@ def api_ideas_describe():
     if not title:
         return jsonify({"success": False, "error": "Missing idea title."}), 400
 
+    # Optional adjacency targets carried over from generation, so the brief is
+    # also inspired by (and positioned next to) the videos the creator picked.
+    adj_raw = data.get("adjacency_urls")
+    if isinstance(adj_raw, str):
+        adj_urls = [u for u in re.split(r"[\s,]+", adj_raw) if u.strip()]
+    elif isinstance(adj_raw, list):
+        adj_urls = [str(u).strip() for u in adj_raw if str(u).strip()]
+    else:
+        adj_urls = []
+    adjacency = _youtube_adjacency_context(adj_urls) if adj_urls else []
+
     system = (
         "You are a creative director writing a production brief for an "
         "energizing, optimistic YouTube explainer video about AI/technology "
@@ -4635,6 +4961,7 @@ def api_ideas_describe():
         "and voice precisely."
     )
     user = (
+        _adjacency_prompt_block(adjacency) +
         f"Original request: {user_request}\n"
         f"Chosen episode title: {title}\n"
         f"Angle: {angle}\n\n"
@@ -4770,6 +5097,214 @@ def _generate_x_post(mode: str, title: str = "", youtube_url: str = "",
     if link:
         text = f"{text}\n{link}"
     return text
+
+
+# ---------------------------------------------------------------------------
+# Final polish pass — take the finished script from the Azure agents and run it
+# through Claude Fable 5 for one more spin: sharper hooks, current references,
+# punchier lines. The house format (chapters, Host:/VISUAL CUE:/HEYGEN blocks)
+# is preserved verbatim so all downstream tooling keeps working.
+# ---------------------------------------------------------------------------
+
+def _strip_reminder_tags(text: str) -> str:
+    """Remove injected reminder/warning XML blocks that occasionally leak into
+    web-search responses (e.g. <search_reminders>…</search_reminders>)."""
+    if not text:
+        return text
+    # Paired blocks whose tag name mentions "reminder" or "warning".
+    text = re.sub(
+        r"<([a-zA-Z_]*(?:reminder|warning)[a-zA-Z_]*)\b[^>]*>.*?</\1>",
+        "", text, flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Any stray self-closing / unpaired reminder-ish tags.
+    text = re.sub(
+        r"</?[a-zA-Z_]*(?:reminder|warning)[a-zA-Z_]*\b[^>]*>",
+        "", text, flags=re.IGNORECASE,
+    )
+    return text.strip()
+
+
+_POLISH_SYSTEM = (
+    "You are a senior script doctor for a high-energy AI/tech YouTube show. You "
+    "receive a COMPLETE, already-written video script and perform one final "
+    "polish-and-elevate pass. The draft is competent but vanilla — your job is "
+    "to make it noticeably sharper and more alive without changing its "
+    "substance or structure.\n\n"
+    "GOALS:\n"
+    "• Punchier — tighten flabby sentences, kill filler, vary rhythm (short "
+    "punchy lines against longer rhythmic ones), and make the hooks and "
+    "transitions land harder.\n"
+    "• More current — where the script references AI tools, models, products, "
+    "or trends, update them to what is actually true and notable right now "
+    "(use web search to verify). Replace stale or generic name-drops with "
+    "specific, real, 2026-accurate examples.\n"
+    "• More advanced — raise the ceiling of insight: add a sharper framing, a "
+    "non-obvious angle, or a crisper 'why this matters' where the draft is "
+    "surface-level. Sound like an expert, not a summarizer.\n"
+    "• More relevant — keep it tightly on-topic and speak to the audience.\n\n"
+    "HARD CONSTRAINTS — do not break these:\n"
+    "• Preserve the EXACT structure and formatting of the input: same chapters "
+    "and headings, same 'Host:', 'VISUAL CUE:', 'HEYGEN', b-roll, and any other "
+    "labeled sections, in the same order. Rewrite the words inside them; never "
+    "add, drop, reorder, or rename sections.\n"
+    "• Keep roughly the same length and pacing (±15%). This is a polish, not a "
+    "rewrite from scratch.\n"
+    "• Keep it truthful. Do not invent products, quotes, stats, or events. If "
+    "you can't verify a specific claim, keep it general rather than fabricate.\n"
+    "• Preserve the show's optimistic, energizing voice.\n\n"
+    "OUTPUT: Return ONLY the full polished script text, ready to drop back in. "
+    "No preamble, no commentary, no explanation of what you changed, no code "
+    "fences."
+)
+
+
+def _polish_script(script: str, title: str = "", audience: str = "",
+                   production_type: str = "") -> tuple:
+    """Run the finished script through Fable 5 for a final polish pass.
+
+    Returns (polished_text, model_used). Falls back to ANTHROPIC_MODEL if
+    POLISH_MODEL isn't available on the account.
+    """
+    ctx = []
+    if title:
+        ctx.append(f"SCRIPT TITLE: {title}")
+    if audience:
+        ctx.append(f"AUDIENCE: {audience}")
+    if production_type:
+        ctx.append(f"PRODUCTION TYPE: {production_type}")
+    header = ("\n".join(ctx) + "\n\n") if ctx else ""
+    user = (
+        f"{header}Here is the finished script to polish and elevate. Return the "
+        f"full polished script only:\n\n{script}"
+    )
+
+    # Single reliable pass: Opus 4.8, NO web search. A no-search polish is one
+    # bounded API call (~30-120s depending on length) with no multi-round pause
+    # loop — fast and predictable, which is what a background job needs. (Fable
+    # 5 and the web-search "make it current" pass were both too flaky/slow over
+    # the API and are intentionally not used here.)
+    logger.info("🪄 polish: calling %s (no web search)", ANTHROPIC_MODEL)
+    out = _anthropic_complete(
+        _POLISH_SYSTEM, user, max_tokens=16000,
+        use_web_search=False, model=ANTHROPIC_MODEL, timeout=200.0,
+    )
+    out = _strip_reminder_tags(out)
+    if not out:
+        raise RuntimeError("Script polish returned empty output.")
+    return out, ANTHROPIC_MODEL
+
+
+def _polish_job_blob(job_id: str) -> str:
+    return f"polish-jobs/{_safe_blob_id(job_id)}.json"
+
+
+def _polish_job_write(job_id: str, payload: dict) -> bool:
+    """Persist a polish job's state to blob storage (shared across workers)."""
+    return _artifacts_upload_bytes(
+        _polish_job_blob(job_id),
+        json.dumps(payload).encode("utf-8"),
+        "application/json",
+    )
+
+
+@app.route("/api/script/polish", methods=["POST"])
+def api_script_polish():
+    """Kick off a Fable-5 (fallback Opus) polish as a BACKGROUND job.
+
+    A polish over a full-length script with web search takes a few minutes.
+    Behind the cloud ingress a single long request gets cut off (~200s idle /
+    connection drop) and the result is lost even though the backend finished —
+    which is exactly what was happening. So we return a job_id immediately and
+    run the polish in a daemon thread that writes the result to BLOB storage.
+    Blob is shared across the 2 gunicorn workers, so the client can poll
+    GET /api/script/polish/result on any worker. Falls back to a synchronous
+    response when blob artifacts aren't configured (e.g. local dev)."""
+    data = request.get_json(silent=True) or {}
+    script = (data.get("script") or "").strip()
+    if not script:
+        return jsonify({
+            "success": False,
+            "error": "No script to polish — create a script first.",
+        }), 400
+    title = (data.get("title") or "").strip()
+    audience = (data.get("audience") or "").strip()
+    production_type = (data.get("production_type") or "").strip()
+
+    # No blob store (local dev) — just do it synchronously; there's no ingress
+    # in front to cut the connection.
+    if not _artifacts_enabled():
+        try:
+            polished, model = _polish_script(
+                script, title=title, audience=audience,
+                production_type=production_type)
+            return jsonify({"success": True, "polished_script": polished,
+                            "model": model})
+        except Exception as e:
+            logger.error(f"❌ Script polish failed: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    job_id = uuid.uuid4().hex
+    _polish_job_write(job_id, {"status": "running"})
+
+    def _work():
+        logger.info("🧵 polish worker ENTER job=%s (%d chars)",
+                    job_id, len(script))
+        # Checkpoint the phase into the blob itself so progress is observable via
+        # the poll endpoint even if the container logs are lagging/unavailable.
+        try:
+            _polish_job_write(job_id, {"status": "running",
+                                       "phase": "worker_entered"})
+        except BaseException:
+            pass
+        try:
+            polished, model = _polish_script(
+                script, title=title, audience=audience,
+                production_type=production_type)
+            logger.info("✨ Script polished with %s (%d → %d chars)",
+                        model, len(script), len(polished))
+            ok = _polish_job_write(job_id, {
+                "status": "done", "success": True,
+                "polished_script": polished, "model": model})
+            logger.info("🧵 polish worker WROTE result job=%s ok=%s", job_id, ok)
+            if not ok:
+                # Retry the result write once — a dropped write would strand the
+                # job at "running" forever.
+                _polish_job_write(job_id, {
+                    "status": "done", "success": True,
+                    "polished_script": polished, "model": model})
+        except BaseException as e:
+            logger.error("❌ Script polish failed job=%s: %r", job_id, e)
+            try:
+                _polish_job_write(job_id, {
+                    "status": "done", "success": False, "error": str(e)})
+            except BaseException as e2:
+                logger.error("❌ polish result write failed job=%s: %r",
+                             job_id, e2)
+
+    logger.info("🧵 polish job START job=%s (%d chars, artifacts=%s)",
+                job_id, len(script), _artifacts_enabled())
+    _threading.Thread(target=_work, daemon=True,
+                      name=f"polish-{job_id[:8]}").start()
+    return jsonify({"success": True, "job_id": job_id, "status": "running"})
+
+
+@app.route("/api/script/polish/result", methods=["GET"])
+def api_script_polish_result():
+    """Poll a background polish job's result by job_id (see api_script_polish)."""
+    job_id = (request.args.get("job_id") or "").strip()
+    if not job_id:
+        return jsonify({"success": False, "error": "missing job_id"}), 400
+    if not _artifacts_enabled():
+        return jsonify({"success": False,
+                        "error": "no artifact store for polish jobs"}), 400
+    try:
+        raw = _artifacts_container().download_blob(
+            _polish_job_blob(job_id)).readall()
+        payload = json.loads(raw)
+    except Exception:
+        # Not written yet / not found — treat as still running.
+        return jsonify({"status": "running"})
+    return jsonify(payload)
 
 
 @app.route("/api/x/status", methods=["GET"])
@@ -6448,13 +6983,20 @@ def api_extract_docx():
                     lines.append(sub)
                 first = False
 
-        # Append simple table extraction (tab-separated rows).
+        # Append tables as GitHub-flavored Markdown pipe tables (with a header
+        # separator row) so downstream parsers — the B-roll table renderer and
+        # parseBrollRowsFromTable — recognize them. (Previously emitted as
+        # tab-separated rows, which those parsers ignore, so a loaded B-roll
+        # Word doc produced "no selectable rows".)
         for table in doc.tables:
             lines.append("")
-            for row in table.rows:
-                cells = [(c.text or "").strip().replace("\n", " ")
+            for ri, row in enumerate(table.rows):
+                cells = [(c.text or "").strip().replace("\n", " ").replace("|", "/")
                          for c in row.cells]
-                lines.append("\t".join(cells))
+                lines.append("| " + " | ".join(cells) + " |")
+                if ri == 0:
+                    lines.append("| " + " | ".join(["---"] * len(cells)) + " |")
+            lines.append("")
 
         text = "\n".join(lines).strip() + "\n"
         # Robust server-side title (Title: line -> Direct Video -> Heading ->
@@ -7231,20 +7773,51 @@ GROK_PROMPT_ENGINEER_SYSTEM = (
     "- When people are involved, show REAL human actors — photorealistic skin, "
     "natural lighting, real-world settings. Never cartoon or illustrated "
     "characters.\n"
-    "- For data, systems, or abstract business concepts, use clean, modern, "
-    "professional motion graphics: 3D charts, animated diagrams, holographic "
-    "UI, sleek infographics — a corporate/editorial look, NOT cartoonish.\n"
+    "- For data, systems, processes, metrics, workflows, or ANY abstract / "
+    "business concept, render it as a CLEAN, MODERN ANIMATED BUSINESS "
+    "INFOGRAPHIC — flat 2D or subtle 3D motion graphics in a corporate "
+    "blue/green/teal palette on a light background with a subtle grid: animated "
+    "charts and graphs, spreadsheets/tables populating, KPI counters ticking up, "
+    "flow arrows, connected nodes, icons and checkmarks, with a smooth camera "
+    "zoom/pan onto the key element — a minimalist McKinsey/Gartner editorial "
+    "look. PREFER this infographic treatment whenever the scene is not centered "
+    "on a specific real person.\n"
     "- ALWAYS specify real motion and action — camera movement, gestures, "
-    "moving elements — so the clip feels alive.\n"
+    "moving/animating elements — so the clip feels alive.\n"
     "- ABSOLUTELY FORBIDDEN: cartoon, anime, comic, hand-drawn, children's "
-    "illustration, claymation, flat 2D character animation, stylized "
-    "Pixar/CGI-character looks.\n"
+    "illustration, claymation, mascots, stylized Pixar/CGI-character looks.\n"
     "FIDELITY: keep the description's concrete subject, setting, and action — "
     "set only the visual style, never swap the scene for an unrelated metaphor. "
     "Describe the subject, setting, action, MOTION, camera move, lighting, and "
-    "a photorealistic / cinematic art direction.\n"
+    "the art direction (photoreal/cinematic for people; infographic for data).\n"
     "Output ONLY the final prompt: 1-2 sentences, under ~60 words. No quotes, "
     "no preamble, no lists, no on-screen text or captions."
+)
+
+# A second, dedicated style for the b-roll table's "Grok Chalk Prompt" column:
+# ALWAYS a rough white-chalk-on-black hand-drawn sketch of the scene (a
+# chalkboard / whiteboard-animation look) so it reads as handwritten.
+GROK_CHALK_PROMPT_ENGINEER_SYSTEM = (
+    "You are an expert prompt engineer for grok-imagine-video, a text-to-video "
+    "model that produces a ~4-6 second SILENT clip. Given a b-roll scene, write "
+    "ONE prompt that depicts it as a ROUGH WHITE CHALK DRAWING on a BLACK "
+    "background — a hand-sketched chalkboard look, as if drawn by hand.\n"
+    "STYLE (strict):\n"
+    "- BEGIN the prompt with exactly: 'Rough white chalk drawing on black "
+    "background, simple and clean, show ' and then describe the scene.\n"
+    "- White chalk strokes only on a matte black chalkboard; sketchy, textured, "
+    "slightly loose and imperfect hand-drawn linework; simple and clean.\n"
+    "- Animate it like a chalkboard explainer: lines and shapes draw themselves "
+    "on progressively, simple hand-drawn icons, arrows and stick figures sketch "
+    "in, gentle motion.\n"
+    "- Translate the scene's concrete subject into a simple chalk sketch that "
+    "represents THAT subject — keep what it is about, rendered as handwritten "
+    "chalk art.\n"
+    "- ABSOLUTELY FORBIDDEN: photorealism, live action, color photography, 3D "
+    "renders, cartoon/anime characters, and any colored or non-black "
+    "background. It MUST read as white chalk on black.\n"
+    "Output ONLY the final prompt: 1-2 sentences, under ~70 words. No quotes, "
+    "no preamble, no lists, and no on-screen typed text or captions."
 )
 
 
@@ -7252,10 +7825,14 @@ def _grok_prompt_via_claude(
     description: str,
     scene_context: str = "",
     theme: str = "",
+    system: Optional[str] = None,
+    max_len: int = 600,
 ) -> Optional[str]:
     """Ask Claude (Opus 4.8) to craft an optimal grok-imagine-video prompt from
-    the b-roll description. Returns the prompt, or None if ANTHROPIC_API_KEY /
-    the SDK is missing or the call fails (caller then falls back to xAI)."""
+    the b-roll description. ``system`` selects the style engine (default cinematic
+    ``GROK_PROMPT_ENGINEER_SYSTEM``; pass ``GROK_CHALK_PROMPT_ENGINEER_SYSTEM``
+    for the chalk variant). Returns the prompt, or None if
+    ANTHROPIC_API_KEY / the SDK is missing or the call fails."""
     api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
         return None
@@ -7277,24 +7854,49 @@ def _grok_prompt_via_claude(
                 f"the scene with it): {theme.strip()}")
         user_msg = "\n".join(parts)
 
+        # Fail fast: the B-roll table now generates a cinematic AND an
+        # chalk prompt for every row (dozens of calls per table). When
+        # Anthropic is overloaded (HTTP 529), retrying turns that into a
+        # multi-minute stall that blocks the B-roll step from returning. With
+        # max_retries=0 an overloaded call falls straight through to the
+        # deterministic/xAI fallback (cinematic) or an empty cell (chalk)
+        # instead of hanging.
         client = anthropic.Anthropic(
-            api_key=api_key, timeout=60.0, max_retries=1)
+            api_key=api_key, timeout=45.0, max_retries=0)
         resp = client.messages.create(
             model="claude-opus-4-8",
-            max_tokens=400,
-            system=GROK_PROMPT_ENGINEER_SYSTEM,
+            max_tokens=500,
+            system=system or GROK_PROMPT_ENGINEER_SYSTEM,
             messages=[{"role": "user", "content": user_msg}],
         )
         out = "".join(
             b.text for b in resp.content
             if getattr(b, "type", None) == "text"
         ).strip().strip('"').strip()
-        if out and len(out) <= 600:
+        if out and len(out) <= max_len:
             logger.info(f"🎨 Grok prompt (Claude): {out[:140]}")
             return out
     except Exception as e:
         logger.warning(f"⚠️ Claude Grok-prompt rewrite failed: {e}")
     return None
+
+
+def _grok_build_chalk_prompt(
+    description: str,
+    scene_context: str = "",
+    theme: str = "",
+) -> str:
+    """Build a white-chalk-on-black Grok video prompt for a
+    b-roll scene (the "Grok Chalk Prompt" table column). Returns "" when
+    the LLM rewrite is disabled or Claude is unavailable — this column is a bonus
+    and has no deterministic fallback (unlike the cinematic prompt)."""
+    base = (description or "").strip()
+    if not base or not GROK_VISUAL_REWRITE_ENABLED:
+        return ""
+    out = _grok_prompt_via_claude(
+        base, scene_context, theme,
+        system=GROK_CHALK_PROMPT_ENGINEER_SYSTEM, max_len=900)
+    return out or ""
 
 
 def _grok_build_video_prompt(
@@ -7397,6 +7999,47 @@ def _grok_emit(session_id: str, payload: dict) -> None:
             pass
 
 
+def _upscale_video_to_1080p(path) -> bool:
+    """Best-effort upscale a Grok clip to 1080p via ffmpeg (grok-imagine-video
+    maxes out at 720p natively, and xAI has no upscale API). Re-encodes in place
+    with Lanczos scaling to 1080p height, preserving aspect ratio. On any problem
+    (ffmpeg missing, timeout, error) the original file is left untouched. Returns
+    True only if the file was actually replaced with the 1080p version."""
+    try:
+        import shutil
+        import subprocess
+        if shutil.which("ffmpeg") is None:
+            logger.info("ℹ️ ffmpeg not on PATH — keeping 720p Grok clip")
+            return False
+        src = Path(path)
+        if not src.exists() or src.stat().st_size == 0:
+            return False
+        tmp = src.with_name(src.stem + ".1080p" + src.suffix)
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+            "-vf", "scale=-2:1080:flags=lanczos",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-an", "-movflags", "+faststart",
+            str(tmp),
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if res.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+            tmp.replace(src)
+            logger.info(f"⬆️ Upscaled Grok clip to 1080p → {src.name}")
+            return True
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+        logger.warning(
+            f"⚠️ 1080p upscale failed (rc={res.returncode}): "
+            f"{(res.stderr or '')[:200]}")
+    except Exception as e:
+        logger.warning(f"⚠️ 1080p upscale error: {e}")
+    return False
+
+
 def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, script_title: str = "", script_id: str = "") -> None:
     """Background worker: generate Grok videos one-by-one, streaming progress and honoring cancel."""
     cancel_evt = grok_video_cancel_events.setdefault(
@@ -7404,7 +8047,9 @@ def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, sc
     out_dir = _grok_get_output_dir(script_title or None)
     videos: list = []
     failures: list = []
-    total = len(selected_rows)
+    # Each selected scene yields up to TWO clips — a cinematic take and a
+    # chalk-sketch take — so the total is ~2× the rows.
+    total = len(selected_rows) * 2
     cancelled = False
 
     try:
@@ -7432,116 +8077,151 @@ def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, sc
         "output_dir": str(out_dir),
     })
 
+    clip_no = 0
     for i, row in enumerate(selected_rows):
         if cancel_evt.is_set():
             cancelled = True
             break
 
-        prompt = (row.get("description") or row.get(
+        desc = (row.get("description") or row.get(
             "search_term") or "").strip()
         term = row.get("search_term", f"vid{i}") or f"vid{i}"
         timecode = row.get("timecode", "")
         scene_context = (row.get("scene_context") or "").strip()
 
-        if not prompt:
+        if not desc:
+            clip_no += 1
             failures.append(
                 {"index": i, "error": "Missing prompt", "row": row})
             _grok_emit(session_id, {
                 "type": "video_failed",
-                "index": i, "current": i + 1, "total": total,
+                "index": i, "current": clip_no, "total": total,
                 "search_term": term, "timecode": timecode,
                 "error": "Missing prompt",
-                "message": f"⚠️ [{i+1}/{total}] Skipped '{term}' — missing prompt",
+                "message": f"⚠️ [{clip_no}/{total}] Skipped '{term}' — missing prompt",
             })
             continue
 
-        # Turn the stock-style description into a unique, theme-specific visual
-        # (animation / diagram / artwork) rather than literal live-action.
-        gen_prompt = _grok_build_video_prompt(
-            prompt, scene_context, script_title, client=client)
+        # Pull MORE out of each scene: generate TWO clips — a cinematic take and
+        # a rough white-chalk-on-black hand-drawn take. Reuse the prompts already
+        # prepared on the row (from the B-roll table) when present; otherwise
+        # build them now (Claude, with xAI fallback for the cinematic one).
+        variants = []
+        cine = (row.get("grok_prompt") or "").strip() or _grok_build_video_prompt(
+            desc, scene_context, script_title, client=client)
+        if cine:
+            variants.append(("cinematic", cine))
+        chalk = (row.get("grok_chalk_prompt") or "").strip() or \
+            _grok_build_chalk_prompt(desc, scene_context, script_title)
+        if chalk:
+            variants.append(("chalk", chalk))
+        if not variants:
+            variants.append(("cinematic", desc))
 
-        _grok_emit(session_id, {
-            "type": "video_start",
-            "index": i, "current": i + 1, "total": total,
-            "search_term": term, "timecode": timecode, "description": prompt,
-            "generated_prompt": gen_prompt,
-            "message": f"🎨 [{i+1}/{total}] Generating unique visual for '{term}'…",
-        })
-
-        try:
-            response = client.video.generate(
-                prompt=_grok_prompt_no_audio(gen_prompt),
-                model="grok-imagine-video",
-                duration=6,
-                aspect_ratio="16:9",
-                resolution="480p",
-            )
-
+        for style, gen_prompt in variants:
             if cancel_evt.is_set():
                 cancelled = True
                 break
+            clip_no += 1
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_term = "".join(c if c.isalnum() else "_" for c in term)[:30]
-            filename = f"grok_{timestamp}_{i}_{safe_term}.mp4"
-            local_path = out_dir / filename
-
-            with requests.get(response.url, stream=True, timeout=180, verify=certifi.where()) as dl_resp:
-                dl_resp.raise_for_status()
-                with open(local_path, "wb") as out_file:
-                    for chunk in dl_resp.iter_content(chunk_size=8192):
-                        if cancel_evt.is_set():
-                            break
-                        if chunk:
-                            out_file.write(chunk)
-
-            if cancel_evt.is_set():
-                # Partial download — drop the incomplete file.
-                try:
-                    if local_path.exists():
-                        local_path.unlink()
-                except Exception:
-                    pass
-                cancelled = True
-                break
-
-            video_entry = {
-                "timecode": timecode,
-                "search_term": term,
-                "description": prompt,
+            _grok_emit(session_id, {
+                "type": "video_start",
+                "index": i, "current": clip_no, "total": total,
+                "search_term": term, "style": style,
+                "timecode": timecode, "description": desc,
                 "generated_prompt": gen_prompt,
-                "url": response.url,
-                "filename": str(local_path),
-            }
-            # Persist to Azure under the permanent Script-ID so the video is
-            # restored next time this script is loaded (survives refresh). The
-            # durable blob SAS URL replaces the short-lived xAI url for playback.
-            blob_url = _persist_grok_video(script_id, local_path, video_entry)
-            if blob_url:
-                video_entry["url"] = blob_url
-                video_entry["persisted"] = True
-            videos.append(video_entry)
+                "message": f"🎨 [{clip_no}/{total}] Generating {style} visual for '{term}'…",
+            })
 
-            _grok_emit(session_id, {
-                "type": "video_ready",
-                "index": i, "current": i + 1, "total": total,
-                "video": video_entry,
-                "message": f"✅ [{i+1}/{total}] Saved '{term}' → {local_path}",
-            })
-        except Exception as row_err:
-            failures.append({
-                "index": i,
-                "timecode": timecode,
-                "search_term": term,
-                "error": str(row_err),
-            })
-            _grok_emit(session_id, {
-                "type": "video_failed",
-                "index": i, "current": i + 1, "total": total,
-                "search_term": term, "timecode": timecode,
-                "error": str(row_err),
-                "message": f"❌ [{i+1}/{total}] Failed '{term}': {row_err}",
-            })
+            try:
+                # Generate at 720p — the highest resolution grok-imagine-video
+                # supports natively (its only options are 480p / 720p).
+                response = client.video.generate(
+                    prompt=_grok_prompt_no_audio(gen_prompt),
+                    model="grok-imagine-video",
+                    duration=6,
+                    aspect_ratio="16:9",
+                    resolution="720p",
+                )
+
+                if cancel_evt.is_set():
+                    cancelled = True
+                    break
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_term = "".join(
+                    c if c.isalnum() else "_" for c in term)[:30]
+                filename = f"grok_{timestamp}_{i}_{style}_{safe_term}.mp4"
+                local_path = out_dir / filename
+
+                with requests.get(response.url, stream=True, timeout=180, verify=certifi.where()) as dl_resp:
+                    dl_resp.raise_for_status()
+                    with open(local_path, "wb") as out_file:
+                        for chunk in dl_resp.iter_content(chunk_size=8192):
+                            if cancel_evt.is_set():
+                                break
+                            if chunk:
+                                out_file.write(chunk)
+
+                if cancel_evt.is_set():
+                    # Partial download — drop the incomplete file.
+                    try:
+                        if local_path.exists():
+                            local_path.unlink()
+                    except Exception:
+                        pass
+                    cancelled = True
+                    break
+
+                # Grok caps at 720p; upscale to full 1080p (best-effort, via
+                # ffmpeg) so clips drop crisply onto a 1080p timeline. Falls back
+                # to the 720p original if ffmpeg is unavailable or fails.
+                upscaled = _upscale_video_to_1080p(local_path)
+
+                video_entry = {
+                    "timecode": timecode,
+                    "search_term": term,
+                    "style": style,
+                    "description": desc,
+                    "generated_prompt": gen_prompt,
+                    "resolution": "1080p" if upscaled else "720p",
+                    "url": response.url,
+                    "filename": str(local_path),
+                }
+                # Persist to Azure under the permanent Script-ID so the video is
+                # restored next time this script is loaded (survives refresh). The
+                # durable blob SAS URL replaces the short-lived xAI url for playback.
+                blob_url = _persist_grok_video(
+                    script_id, local_path, video_entry)
+                if blob_url:
+                    video_entry["url"] = blob_url
+                    video_entry["persisted"] = True
+                videos.append(video_entry)
+
+                _grok_emit(session_id, {
+                    "type": "video_ready",
+                    "index": i, "current": clip_no, "total": total,
+                    "video": video_entry,
+                    "message": f"✅ [{clip_no}/{total}] Saved {style} '{term}' → {local_path}",
+                })
+            except Exception as row_err:
+                failures.append({
+                    "index": i,
+                    "timecode": timecode,
+                    "search_term": term,
+                    "style": style,
+                    "error": str(row_err),
+                })
+                _grok_emit(session_id, {
+                    "type": "video_failed",
+                    "index": i, "current": clip_no, "total": total,
+                    "search_term": term, "style": style, "timecode": timecode,
+                    "error": str(row_err),
+                    "message": f"❌ [{clip_no}/{total}] Failed {style} '{term}': {row_err}",
+                })
+
+        if cancelled:
+            break
 
     grok_video_results[session_id] = {
         "videos": videos,
@@ -11170,6 +11850,60 @@ def api_script_artifacts_version():
     return jsonify({"success": True, "found": True, "artifacts": data})
 
 
+def _read_latest_broll_table_for_script(script_id: str) -> "Optional[dict]":
+    """Newest persisted B-roll table for a Script-ID, across ALL versions.
+
+    Version artifacts are keyed by exact Script-Version, but every processing
+    run (including a standalone B-roll agent run) bumps the version — so a
+    script reloaded from an older file points at a version whose manifest
+    predates the table. This walks every version manifest for the Script-ID,
+    newest-written first, and returns the first B-roll table it finds — so the
+    table (and its Shutterstock links) come back on load without re-running the
+    agent. Restore-by-Script-ID, the same way Grok videos are restored.
+    Returns {"broll_table", "broll_rows", "version_id"} or None.
+    """
+    if not _artifacts_enabled() or not script_id:
+        return None
+    sid = _safe_blob_id(script_id)
+    try:
+        cc = _artifacts_container()
+        blobs = [
+            b for b in cc.list_blobs(name_starts_with=f"{sid}/versions/")
+            if b.name.endswith("/artifacts.json")
+            and getattr(b, "last_modified", None)
+        ]
+        # Version ids are random, not time-ordered — sort by blob write time.
+        blobs.sort(key=lambda b: b.last_modified, reverse=True)
+        for b in blobs:
+            try:
+                manifest = json.loads(cc.download_blob(b.name).readall())
+            except Exception:
+                continue
+            table = manifest.get("broll_table")
+            if table and str(table).strip():
+                return {
+                    "broll_table": table,
+                    "broll_rows": manifest.get("broll_rows"),
+                    "version_id": manifest.get("version_id"),
+                }
+    except Exception as e:
+        logger.warning(
+            f"⚠️ latest broll table lookup failed for {script_id}: {e}")
+    return None
+
+
+@app.route("/api/script-artifacts/latest-broll", methods=["GET"])
+def api_script_artifacts_latest_broll():
+    """Newest persisted B-roll table for a Script-ID (across versions)."""
+    script_id = (request.args.get("script_id") or "").strip()
+    if not script_id:
+        return jsonify({"success": False, "error": "script_id required"}), 400
+    data = _read_latest_broll_table_for_script(script_id)
+    if not data:
+        return jsonify({"success": True, "found": False})
+    return jsonify({"success": True, "found": True, **data})
+
+
 def _list_finished_videos_from_blob():
     """Returns (items, source_label) by listing blobs in the configured container.
 
@@ -11503,6 +12237,101 @@ def api_grok_video_delete():
     except Exception as e:  # noqa: BLE001
         logger.error(
             f"❌ /api/grok-videos/delete failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _video_height(path) -> int:
+    """Return the pixel height of a video's first stream via ffprobe, or 0."""
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=height", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=30)
+        return int((out.stdout or "0").strip().split("\n")[0] or 0)
+    except Exception:
+        return 0
+
+
+@app.route("/api/grok/upscale", methods=["POST"])
+def api_grok_upscale():
+    """Upscale ONE generated Grok video to 1080p (ffmpeg). The gallery calls this
+    once per checked video. Resolves a local copy (or pulls the blob down),
+    upscales in place, and re-persists to blob so the durable copy + gallery both
+    get the HD version. Skips re-encoding if the clip is already ≥1080p.
+
+    POST body: {"filename": "grok_..mp4", "script_id": "..", "blob_name": ".."}
+    """
+    try:
+        import shutil
+        import tempfile
+        data = request.get_json(silent=True) or {}
+        safe_name = Path((data.get("filename") or "").strip()).name
+        script_id = (data.get("script_id") or "").strip()
+        blob_name = (data.get("blob_name") or "").strip()
+        if not safe_name or not safe_name.lower().endswith(".mp4"):
+            return jsonify({"success": False,
+                            "error": "filename must be a .mp4"}), 400
+        if shutil.which("ffmpeg") is None:
+            return jsonify({"success": False,
+                            "error": "ffmpeg not available on the server"}), 500
+
+        derived_blob = blob_name or (
+            f"{_safe_blob_id(script_id)}/videos/{safe_name}"
+            if script_id else "")
+
+        # Resolve a local copy; otherwise pull the blob down to a temp file.
+        local = _resolve_media_file(safe_name, "video")
+        tmpdir = None
+        if local is None and _artifacts_enabled() and derived_blob:
+            try:
+                raw = _artifacts_container().download_blob(
+                    derived_blob).readall()
+                tmpdir = Path(tempfile.mkdtemp(prefix="grok_upscale_"))
+                local = tmpdir / safe_name
+                local.write_bytes(raw)
+            except Exception as e:
+                return jsonify({"success": False,
+                                "error": f"could not fetch video: {e}"}), 404
+        if local is None or not Path(local).exists():
+            return jsonify({"success": False,
+                            "error": "video file not found"}), 404
+
+        cur_h = _video_height(local)
+        already = bool(cur_h and cur_h >= 1080)
+        if not already:
+            if not _upscale_video_to_1080p(local):
+                if tmpdir:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                return jsonify({"success": False,
+                                "error": "upscale failed"}), 500
+            # Keep the durable blob copy in sync with the new HD file.
+            if _artifacts_enabled() and derived_blob:
+                try:
+                    _artifacts_upload_file(derived_blob, local, "video/mp4")
+                except Exception as e:
+                    logger.warning(f"⚠️ re-persist upscaled video failed: {e}")
+
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+        # Prefer the local serve URL when a local file exists (now HD); else blob.
+        if _resolve_media_file(safe_name, "video") is not None:
+            url = f"/broll-videos/{safe_name}"
+        elif _artifacts_enabled() and derived_blob:
+            try:
+                url = _artifacts_sas_url(derived_blob)
+            except Exception:
+                url = ""
+        else:
+            url = ""
+        return jsonify({
+            "success": True, "filename": safe_name,
+            "resolution": f"{cur_h}p" if already else "1080p",
+            "already": already, "url": url,
+        })
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"❌ /api/grok/upscale failed: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 

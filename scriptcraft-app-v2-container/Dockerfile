@@ -49,6 +49,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # 2 workers, 4 threads — tuned for moderate concurrent agent calls
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", \
      "--workers", "2", "--threads", "4", \
-     "--timeout", "300", "--graceful-timeout", "30", \
+     "--timeout", "600", "--graceful-timeout", "30", \
      "--access-logfile", "-", "--error-logfile", "-", \
      "container_app:app"]
