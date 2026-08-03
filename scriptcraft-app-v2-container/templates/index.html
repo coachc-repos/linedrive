@@ -613,7 +613,16 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        
+
+        /* Indeterminate progress bar for the Process Script "Load Script" stage,
+           shown while a script + its (potentially many) Grok videos load. */
+        @keyframes spsIndeterminate {
+            0%   { margin-left: -40%; }
+            100% { margin-left: 100%; }
+        }
+        /* Busy cursor while a script/media load is in flight. */
+        body.sps-loading, body.sps-loading * { cursor: progress !important; }
+
         .progress-log {
             max-height: 150px;
             overflow-y: auto;
@@ -3233,7 +3242,10 @@ Time management content here...`;
                 const res = await fetch('/api/grok-videos/delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filename: filename }),
+                    body: JSON.stringify({
+                        filename: filename,
+                        script_id: window.currentScriptId || '',
+                    }),
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok || !data.success) {
@@ -4384,6 +4396,13 @@ Time management content here...`;
             if (!text || typeof text !== 'string') {
                 return { words: 0, minutes: 0, label: '⏱ ~0:00 @ ' + rate + ' wpm' };
             }
+
+            // Never count production-only notes: strip every
+            // [PRODUCTION BEGIN]…[PRODUCTION END] block (the user's editing-only
+            // markers) BEFORE any Host/chapter extraction, so nothing inside them
+            // contributes to the spoken word count.
+            text = text.replace(
+                /\[PRODUCTION\s+BEGIN\][\s\S]*?\[PRODUCTION\s+END\]/gi, ' ');
 
             // Pull out every Host block. Accepts:
             //   **Host:**      (markdown-bold, original/processed scripts)
@@ -7379,9 +7398,15 @@ Thank you for watching!`;
             if (title) window.currentScriptTitle = title;
 
             // Restore Grok videos (by permanent Script-ID) and all other
-            // artifacts (by Script-Version) persisted in Azure.
+            // artifacts (by Script-Version) persisted in Azure. This is the slow
+            // part when a script has many Grok clips — keep the load bar posted.
+            if (typeof spsSetLoadStatus === 'function') spsSetLoadStatus('⏳ Restoring Grok videos…');
             const vids = await _restoreGrokVideos(window.currentScriptId, []);
             window.currentGrokVideos = vids;
+            if (typeof spsSetLoadStatus === 'function') {
+                spsSetLoadStatus('⏳ Restoring artifacts'
+                    + (vids && vids.length ? ' (' + vids.length + ' Grok video(s))' : '') + '…');
+            }
             const ver = await _restoreVersionArtifacts(
                 window.currentScriptId, window.currentScriptVersion);
 
@@ -7439,6 +7464,7 @@ Thank you for watching!`;
             };
             const p = window.currentResultPayload;
             window._currentBrollRows = p.brollRows || null;
+            if (typeof spsSetLoadStatus === 'function') spsSetLoadStatus('⏳ Rendering script & media…');
             const tabbedHTML = createTabbedInterface(
                 scriptText, p.demoPackages, p.thumbnails, p.chapterComparisons,
                 p.flowOriginal, p.flowImproved, p.flowAnalysis, p.edlContent,
@@ -7471,12 +7497,29 @@ Thank you for watching!`;
             }
         }
 
+        // Toggle the "Load Script" progress bar + a page-wide busy cursor while a
+        // script and its (potentially many) Grok videos load. `msg` optionally
+        // sets the status line.
+        function spsSetLoadBusy(on, msg) {
+            const wrap = document.getElementById('spsLoadProgress');
+            if (wrap) wrap.style.display = on ? 'block' : 'none';
+            if (on && msg) spsSetLoadStatus(msg);
+            document.body.classList.toggle('sps-loading', !!on);
+        }
+        // Update just the status line under the load progress bar (no-op if the
+        // bar isn't currently shown / present).
+        function spsSetLoadStatus(msg) {
+            const t = document.getElementById('spsLoadProgressText');
+            if (t && msg) t.textContent = msg;
+        }
+
         async function loadFile(event) {
             const file = event.target.files[0];
             if (!file) return;
             const lower = (file.name || '').toLowerCase();
             const isWord = lower.endsWith('.docx') || lower.endsWith('.doc');
 
+            spsSetLoadBusy(true, '⏳ Loading “' + (file.name || 'script') + '”…');
             try {
                 let text;
                 if (isWord) {
@@ -7532,7 +7575,9 @@ Thank you for watching!`;
             } catch (error) {
                 alert('❌ Error loading file: ' + error.message);
             } finally {
-                // Allow re-selecting the same file later.
+                // Clear the busy cursor + progress bar and allow re-selecting the
+                // same file later.
+                spsSetLoadBusy(false);
                 event.target.value = '';
             }
         }
@@ -10525,6 +10570,14 @@ Thank you for watching!`;
               <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button type="button" onclick="document.getElementById('fileInput').click()" style="background:#0ea5e9; color:#fff; border:none; padding:8px 14px; border-radius:5px; cursor:pointer; font-weight:600;">📂 Load a different file…</button>
               </div>
+              <!-- Load progress bar: shown while a script + its Grok videos load
+                   (restoring many clips from Azure can take several seconds). -->
+              <div id="spsLoadProgress" style="display:none; margin-top:12px;">
+                <div id="spsLoadProgressText" style="font-size:0.82em; color:#93c5fd; margin-bottom:6px;">⏳ Loading…</div>
+                <div style="height:8px; background:#0f172a; border:1px solid #334155; border-radius:999px; overflow:hidden;">
+                  <div style="height:100%; width:40%; border-radius:999px; background:linear-gradient(90deg,#0ea5e9,#38bdf8); animation:spsIndeterminate 1.1s ease-in-out infinite;"></div>
+                </div>
+              </div>
               <div data-sps-result="load" style="margin-top:10px; font-size:0.85em; color:#10b981; display:none;"></div>
             </div>
           </div>
@@ -11087,7 +11140,11 @@ Thank you for watching!`;
           res.style.display = 'block';
           res.style.color = '#10b981';
           const ta = document.getElementById('scriptInput');
-          const txt = (ta && ta.value) || (window.currentScript || '');
+          const rawTxt = (ta && ta.value) || (window.currentScript || '');
+          // Ignore production-only [PRODUCTION …] notes (the user's editing-only
+          // markers) in EVERY count — total words, Host words, and runtime.
+          const txt = rawTxt.replace(
+            /\[PRODUCTION\s+BEGIN\][\s\S]*?\[PRODUCTION\s+END\]/gi, ' ');
           const words = (txt.match(/\S+/g) || []).length;
           // Host-only word count drives the runtime estimate, matching the
           // shorten agent's target (150 wpm against Host: dialogue only).

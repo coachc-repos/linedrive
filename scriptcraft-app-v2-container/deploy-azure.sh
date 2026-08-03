@@ -180,6 +180,8 @@ if az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE
         --name "$CONTAINER_APP_NAME" \
         --resource-group "$RESOURCE_GROUP" \
         --image "$FULL_IMAGE" \
+        --min-replicas 1 \
+        --max-replicas 1 \
         --set-env-vars "${ENV_VARS_ARGS[@]}" \
         -o table
 
@@ -208,7 +210,7 @@ else
         --target-port "$TARGET_PORT" \
         --ingress external \
         --min-replicas 1 \
-        --max-replicas 3 \
+        --max-replicas 1 \
         --cpu 0.5 \
         --memory 1Gi \
         --env-vars "${ENV_VARS_ARGS[@]}" \

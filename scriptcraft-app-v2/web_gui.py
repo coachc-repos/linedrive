@@ -454,9 +454,9 @@ def _persist_broll_table_artifacts(
         try:
             grok_prompts = _grok_prompts_for_broll_rows(
                 parsed_data, theme, script=script)
-            chalk_prompts = _grok_prompts_for_broll_rows(
-                parsed_data, theme, builder=_grok_build_chalk_prompt,
-                script=script)
+            # Chalk = the SAME cinematic visual, redrawn in chalk, so the two
+            # columns always match (one idea, two styles).
+            chalk_prompts = _grok_chalk_prompts_from_cinematic(grok_prompts)
             for i, row in enumerate(parsed_data):
                 if not isinstance(row, dict):
                     continue
@@ -1931,6 +1931,8 @@ async def process_script_creation(session_id, topic, audience, tone,
                     _target_words = int(round(_target_minutes * _wpm))
 
                     def _host_word_count_create(text: str) -> int:
+                        # Ignore production-only [PRODUCTION …] notes entirely.
+                        text = _PRODUCTION_BLOCK_RE.sub(" ", text)
                         blocks = _re_short.findall(
                             r"(?:^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*\**\s*([\s\S]*?)(?="
                             r"\n\s*(?:#{1,6}\s+\S|(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|chapter\s+\d|visual\s+cue\s*:|b-?roll\s*:)|---+|===+)"
@@ -1962,8 +1964,11 @@ async def process_script_creation(session_id, topic, audience, tone,
                             ScriptShortenAgentClient,
                         )
                         _agent = ScriptShortenAgentClient()
+                        # Shield [PRODUCTION …] blocks from the shorten agent.
+                        _short_masked, _short_blocks = _mask_production_blocks(
+                            final_script_content)
                         _r = _agent.shorten_to_target(
-                            script_content=final_script_content,
+                            script_content=_short_masked,
                             target_minutes=_target_minutes,
                             wpm=_wpm,
                             timeout=600,
@@ -1976,7 +1981,8 @@ async def process_script_creation(session_id, topic, audience, tone,
                             _short = _re_short.sub(r"^```[a-zA-Z]*\n", "", _short)
                             _short = _re_short.sub(r"\n```\s*$", "", _short)
                             if _short:
-                                final_script_content = _short
+                                final_script_content = _restore_or_keep(
+                                    _short, _short_blocks, final_script_content)
                                 _after = _host_word_count_create(final_script_content)
                                 streamer.send_update(
                                     f"✅ Shortened: Host words {_before_host} → {_after}",
@@ -2271,15 +2277,17 @@ async def process_script_creation(session_id, topic, audience, tone,
                         scrub_heygen_text,
                     )
 
-                    heygen_script = extract_heygen_host_script(
-                        final_script_content)
+                    # Strip [PRODUCTION …] editing notes so the avatar never
+                    # narrates them.
+                    _hg_src = _strip_production_blocks(final_script_content)
+                    heygen_script = extract_heygen_host_script(_hg_src)
 
                     # Fallback: if no Host: markers found, scrub the raw script
                     # (strips title, metadata, chapter headings, stage directions, etc.)
                     if not heygen_script:
                         print(
                             "⚠️ No Host: markers found - scrubbing full script for HeyGen section")
-                        heygen_script = scrub_heygen_text(final_script_content)
+                        heygen_script = scrub_heygen_text(_hg_src)
 
                     if heygen_script:
                         heygen_section = f"\n\n{'=' * 80}\n"
@@ -2300,7 +2308,8 @@ async def process_script_creation(session_id, topic, audience, tone,
 
                                 print("\n🔨 Generating HeyGen curl commands...")
                                 curl_commands = generate_heygen_curl_commands(
-                                    final_script_with_tools,
+                                    _strip_production_blocks(
+                                        final_script_with_tools),
                                     topic,  # script_title
                                     heygen_api_key,
                                     heygen_template_id,
@@ -2401,8 +2410,11 @@ async def process_script_creation(session_id, topic, audience, tone,
                     from linedrive_azure.agents import ScriptRepeatAndFlowAgentClient
 
                     flow_agent = ScriptRepeatAndFlowAgentClient()
+                    # Shield [PRODUCTION …] blocks from the flow agent.
+                    _flow_masked, _flow_blocks = _mask_production_blocks(
+                        final_script_with_tools)
                     flow_result = flow_agent.analyze_and_improve_flow(
-                        script_content=final_script_with_tools,
+                        script_content=_flow_masked,
                         script_title=topic,
                         target_audience=audience,
                         timeout=300
@@ -2440,7 +2452,9 @@ async def process_script_creation(session_id, topic, audience, tone,
                             flow_analysis_report = analysis_section
 
                             # Update final_script_with_tools to improved version (WITHOUT analysis appended)
-                            final_script_with_tools = improved_script
+                            final_script_with_tools = _restore_or_keep(
+                                improved_script, _flow_blocks,
+                                final_script_with_tools)
 
                             streamer.send_update(
                                 f"✅ Flow analysis complete - script improved ({len(improved_script)} chars)",
@@ -3012,6 +3026,8 @@ async def process_existing_script(
                 _target_words = int(round(_target_minutes * _wpm))
 
                 def _host_word_count(text: str) -> int:
+                    # Ignore production-only [PRODUCTION …] notes entirely.
+                    text = _PRODUCTION_BLOCK_RE.sub(" ", text)
                     blocks = re.findall(
                         r"(?:^|\n)\s*(?:#{1,6}\s*)?\**\s*host\s*\**\s*:\s*\**\s*([\s\S]*?)(?="
                         r"\n\s*(?:#{1,6}\s+\S|(?:#{1,6}\s*)?(?:\*\*[^*\n]{1,40}\*\*\s*:|host\s*:|heading\s*:|chapter\s+\d|visual\s+cue\s*:|b-?roll\s*:)|---+|===+)"
@@ -3046,8 +3062,11 @@ async def process_existing_script(
                         ScriptShortenAgentClient,
                     )
                     _shorten_agent = ScriptShortenAgentClient()
+                    # Shield [PRODUCTION …] blocks from the shorten agent.
+                    _short_masked, _short_blocks = _mask_production_blocks(
+                        cleaned_script)
                     _short_result = _shorten_agent.shorten_to_target(
-                        script_content=cleaned_script,
+                        script_content=_short_masked,
                         target_minutes=_target_minutes,
                         wpm=_wpm,
                         timeout=600,
@@ -3061,7 +3080,8 @@ async def process_existing_script(
                         _shortened = re.sub(r"^```[a-zA-Z]*\n", "", _shortened)
                         _shortened = re.sub(r"\n```\s*$", "", _shortened)
                         if _shortened:
-                            cleaned_script = _shortened
+                            cleaned_script = _restore_or_keep(
+                                _shortened, _short_blocks, cleaned_script)
                             _after_host_words = _host_word_count(cleaned_script)
                             streamer.send_update(
                                 f"✅ Shortened: Host words {_before_host_words} → {_after_host_words} "
@@ -3786,15 +3806,17 @@ async def process_existing_script(
                 # Extract from the cleaned source script ONLY (not final_output) so the
                 # HeyGen text never includes the prepended OPENING HOOK OPTIONS block,
                 # the OPTION 1/2/3 "Host:" hooks, the opening statement, or any
-                # generated headers added below.
-                heygen_script = extract_heygen_host_script(cleaned_script)
+                # generated headers added below. Strip [PRODUCTION …] editing notes
+                # first so the avatar never narrates them.
+                _hg_src = _strip_production_blocks(cleaned_script)
+                heygen_script = extract_heygen_host_script(_hg_src)
                 # Fallback: if no Host: markers found, scrub the cleaned script
                 # down to dialogue-only (strip title, chapter headings, metadata,
                 # stage directions, hook/summary headers, separators).
                 if not heygen_script:
                     logger.info(
                         "⚠️ No Host: markers found - scrubbing cleaned script for HeyGen")
-                    heygen_script = scrub_heygen_text(cleaned_script)
+                    heygen_script = scrub_heygen_text(_hg_src)
                 if heygen_script:
                     heygen_section = f"\n\n{'=' * 80}\n"
                     heygen_section += "# 🎬 HEYGEN READY SCRIPT\n"
@@ -3822,14 +3844,17 @@ async def process_existing_script(
                     scrub_heygen_text,
                 )
 
+                # Strip [PRODUCTION …] editing notes so curl content the avatar
+                # reads never includes them.
+                _hg_curl_src = _strip_production_blocks(cleaned_script)
                 if not heygen_script:
-                    heygen_script = extract_heygen_host_script(cleaned_script)
+                    heygen_script = extract_heygen_host_script(_hg_curl_src)
 
                 # Fallback: if no Host: markers found, scrub for dialogue only.
                 if not heygen_script:
                     logger.info(
                         "⚠️ No Host: markers found - scrubbing cleaned script for curl generation")
-                    heygen_script = scrub_heygen_text(cleaned_script)
+                    heygen_script = scrub_heygen_text(_hg_curl_src)
 
                 if heygen_script:
                     heygen_with_header = (
@@ -3839,7 +3864,9 @@ async def process_existing_script(
                     # Extract a FINAL HOOK section (if present in cleaned_script
                     # or final_output) so we can emit a dedicated `{short}-hook`
                     # curl command alongside the chapter curls.
-                    _hook_search_text = f"{final_output}\n{cleaned_script}"
+                    _hook_search_text = (
+                        f"{_strip_production_blocks(final_output)}\n"
+                        f"{_hg_curl_src}")
                     _final_hook_text = ""
                     _hm = re.search(
                         r"\*{0,2}\s*(?:🎯\s*)?(?:FINAL\s+|OPENING\s+)?HOOK\s*:?\s*\*{0,2}\s*"
@@ -3966,7 +3993,7 @@ async def process_existing_script(
                     # and let the curl generator strip stage-direction lines
                     # from each chapter's content itself.
                     curl_source = (
-                        f"# 🎬 HEYGEN READY SCRIPT\n{'=' * 80}\n\n{cleaned_script}"
+                        f"# 🎬 HEYGEN READY SCRIPT\n{'=' * 80}\n\n{_hg_curl_src}"
                     )
 
                     curl_commands = generate_heygen_curl_commands(
@@ -4151,8 +4178,10 @@ async def process_existing_script(
                 from linedrive_azure.agents import ScriptRepeatAndFlowAgentClient
 
                 flow_agent = ScriptRepeatAndFlowAgentClient()
+                # Shield [PRODUCTION …] blocks from the flow agent.
+                _flow_masked, _flow_blocks = _mask_production_blocks(final_output)
                 flow_result = flow_agent.analyze_and_improve_flow(
-                    script_content=final_output,
+                    script_content=_flow_masked,
                     script_title=script_title,
                     target_audience=audience,
                     timeout=300
@@ -4186,7 +4215,9 @@ async def process_existing_script(
                             analysis_section += f"{flow_improvements}\n\n"
 
                         # Replace the script with improved version and add analysis at end
-                        final_output = improved_script + analysis_section
+                        final_output = _restore_or_keep(
+                            improved_script, _flow_blocks, final_output
+                        ) + analysis_section
 
                         completed_steps += 1
                         progress = 15 + (completed_steps * progress_per_step)
@@ -4445,7 +4476,7 @@ def agent_mode_api():
 
 
 # ---------------------------------------------------------------------------
-# Idea Generator (Claude Opus 4.8 + web search)
+# Idea Generator (Claude Opus 5 + web search)
 #
 # Brainstorm video-episode ideas from a free-text request, then expand the
 # chosen idea into a full creative brief in the channel's house format. Uses
@@ -4455,6 +4486,11 @@ def agent_mode_api():
 # ---------------------------------------------------------------------------
 
 ANTHROPIC_MODEL = "claude-opus-4-8"
+
+# Model used specifically by the Idea Generator (idea brainstorm + brief). Claude
+# Opus 5 — the newest Opus tier — for the strongest creative/title ideation.
+# Kept separate from ANTHROPIC_MODEL so other Claude features are unaffected.
+IDEA_MODEL = "claude-opus-5"
 
 # Model used for the optional "final polish" pass on a finished script. Claude
 # Fable 5 is Anthropic's newest storytelling-tuned model; it rewrites the script
@@ -4875,6 +4911,10 @@ def api_ideas_generate():
     current top AI videos on YouTube (request box optional)."""
     data = request.get_json(silent=True) or {}
     user_request = (data.get("request") or "").strip()
+    # Did the producer actually type a specific topic? If so it becomes the HARD
+    # anchor for all 10 ideas (vary angle/format, never the subject). If blank,
+    # we fall back to a trend-driven brainstorm.
+    has_request = bool(user_request)
 
     # Optional adjacency targets: YouTube links the creator wants to be the
     # "natural next watch" to. We fetch each title + transcript and steer the
@@ -4896,13 +4936,27 @@ def api_ideas_generate():
             f"  {i}. {v['title']}" + (f"  — {v['channel']}" if v.get('channel') else "")
             for i, v in enumerate(top_videos, 1)
         )
-        trend_block = (
-            "CURRENT TOP AI VIDEOS ON YOUTUBE (most-viewed recent uploads, "
-            "pulled just now):\n" + _listing + "\n\n"
-            "Treat these as a live signal of what's resonating right now. "
-            "Propose fresh, distinct episode ideas that ride these trends or "
-            "fill the gaps between them — do NOT simply restate these titles.\n\n"
-        )
+        if has_request:
+            # A topic was given — trends are CONTEXT ONLY (tone/timeliness), they
+            # must NOT pull ideas off the requested topic.
+            trend_block = (
+                "CURRENT TOP AI VIDEOS ON YOUTUBE (context only, pulled just "
+                "now):\n" + _listing + "\n\n"
+                "Use these ONLY to keep the framing timely and click-worthy. Do "
+                "NOT let them steer the ideas away from the requested topic "
+                "below — the topic wins.\n\n"
+            )
+        else:
+            trend_block = (
+                "CURRENT TOP AI VIDEOS ON YOUTUBE (most-viewed recent uploads, "
+                "pulled just now):\n" + _listing + "\n\n"
+                "Treat these as a live signal of what's resonating right now. "
+                "Propose fresh, distinct episode ideas that ride these trends or "
+                "fill the gaps between them — do NOT simply restate these "
+                "titles.\n\n"
+            )
+    elif has_request:
+        trend_block = ""
     else:
         trend_block = (
             "Use web search to find the CURRENT top/trending AI videos on "
@@ -4934,15 +4988,48 @@ def api_ideas_generate():
         "the others — no near-duplicates. Use web search to ground ideas in "
         "real, current 2026 events, products, and announcements."
     )
+    if has_request:
+        # Topic lock: the producer's topic is the subject of ALL ideas. The brand
+        # lane / formats / trends are only styling — never swap the subject.
+        system += (
+            "\n\nTOPIC LOCK: The producer has given a SPECIFIC TOPIC for this "
+            "batch (below). Every one of the 10 ideas MUST be directly and "
+            "obviously about THAT topic. The brand lane, breakout formats, and "
+            "trending videos are ONLY styling and framing — never swap the "
+            "subject for the generic career lane or for whatever is trending. "
+            "Vary the angle and format across the 10 ideas; never the subject. "
+            "If the topic is narrow, go DEEPER (sub-angles, objections, "
+            "use-cases, comparisons, step-by-steps, myths, mistakes) rather than "
+            "broadening into unrelated AI topics."
+        )
+
+    if has_request:
+        topic_directive = (
+            "TOPIC (REQUIRED — every one of the 10 ideas MUST be directly about "
+            f"this, and nothing else):\n{user_request}\n\n"
+        )
+        diversity_directive = (
+            "Generate exactly 10 video episode ideas, ALL squarely about the "
+            "topic above. Map each to one of the breakout formats and make the "
+            "set diverse across FORMATS and ANGLES (not subjects). Do not drift "
+            "to unrelated AI topics and do not replace the topic with a trending "
+            "one."
+        )
+    else:
+        topic_directive = f"Request: {user_request}\n\n"
+        diversity_directive = (
+            "Generate exactly 10 video episode ideas. Map each to one of the "
+            "breakout formats above, make the set genuinely diverse across "
+            "formats and topics, and where it fits, ride the momentum of the "
+            "current top AI videos listed"
+        )
     user = (
         _adjacency_prompt_block(adjacency) +
         trend_block +
-        f"Request: {user_request}\n\n"
-        "Generate exactly 10 video episode ideas. Map each to one of the "
-        "breakout formats above, make the set genuinely diverse across formats "
-        "and topics, and where it fits, ride the momentum of the current top AI "
-        "videos listed" + (" — and especially the ADJACENCY TARGETS above"
-                           if adjacency else "") + ". Respond with ONLY a JSON "
+        topic_directive +
+        diversity_directive
+        + (" — and especially the ADJACENCY TARGETS above"
+           if adjacency else "") + ". Respond with ONLY a JSON "
         "array (no prose, no markdown fences) of 10 objects, each with:\n"
         '  "title": a scroll-stopping, click-worthy title (~50–60 chars, keep "AI" visible)\n'
         '  "angle": one sentence naming the format + the cold-open hook / why it earns the click\n'
@@ -4952,7 +5039,8 @@ def api_ideas_generate():
                 user_request, len(top_videos), len(adjacency))
     try:
         text = _anthropic_complete(system, user, max_tokens=4000,
-                                   use_web_search=True, max_searches=4)
+                                   use_web_search=True, max_searches=4,
+                                   model=IDEA_MODEL)
         ideas = _parse_json_array(text)
     except Exception as e:
         logger.error(f"❌ Idea generation failed: {e}")
@@ -5051,7 +5139,7 @@ def api_ideas_describe():
     logger.info("✍️ Brief requested for: %r", title)
     try:
         text = _anthropic_complete(system, user, max_tokens=2000,
-                                   use_web_search=False)
+                                   use_web_search=False, model=IDEA_MODEL)
         text = _extract_brief(text)
     except Exception as e:
         logger.error(f"❌ Idea brief generation failed: {e}")
@@ -5219,7 +5307,19 @@ _POLISH_SYSTEM = (
     "• More advanced — raise the ceiling of insight: add a sharper framing, a "
     "non-obvious angle, or a crisper 'why this matters' where the draft is "
     "surface-level. Sound like an expert, not a summarizer.\n"
-    "• More relevant — keep it tightly on-topic and speak to the audience.\n\n"
+    "• More relevant — keep it tightly on-topic and speak to the audience.\n"
+    "• Voiceable by a HeyGen AI avatar — this script is READ ALOUD by a HeyGen "
+    "text-to-speech avatar, which struggles with intonation, emphasis, sarcasm, "
+    "and irony (it can't 'perform' a line the way a human would). Rewrite so the "
+    "MEANING lands from the words alone, not from vocal delivery: prefer short, "
+    "clear declarative sentences; put the emphasis in word choice and order "
+    "rather than relying on stressed words; avoid sarcasm, rhetorical irony, and "
+    "jokes that need a knowing tone; avoid tongue-twisters, hard consonant "
+    "clusters, and ambiguous phrasing the TTS may mispronounce or run together; "
+    "use punctuation (periods, commas, dashes) to build in natural pauses and "
+    "pacing; spell out or simplify things TTS mangles (symbols, unusual "
+    "acronyms, large numbers) into speakable form. The goal is a script that "
+    "sounds natural and clear when spoken by the avatar.\n\n"
     "HARD CONSTRAINTS — do not break these:\n"
     "• Preserve the EXACT structure and formatting of the input: same chapters "
     "and headings, same 'Host:', 'VISUAL CUE:', 'HEYGEN', b-roll, and any other "
@@ -5229,6 +5329,11 @@ _POLISH_SYSTEM = (
     "rewrite from scratch.\n"
     "• Keep it truthful. Do not invent products, quotes, stats, or events. If "
     "you can't verify a specific claim, keep it general rather than fabricate.\n"
+    "• NEVER touch production-only sections. Any content between a "
+    "'[PRODUCTION BEGIN]' and '[PRODUCTION END]' marker (and the markers "
+    "themselves) must be reproduced VERBATIM — do not polish, summarize, "
+    "reorder, or drop it. Only rewrite the Host narration OUTSIDE those "
+    "markers.\n"
     "• Preserve the show's optimistic, energizing voice.\n\n"
     "OUTPUT: Return ONLY the full polished script text, ready to drop back in. "
     "No preamble, no commentary, no explanation of what you changed, no code "
@@ -5236,35 +5341,117 @@ _POLISH_SYSTEM = (
 )
 
 
-def _polish_script(script: str, title: str = "", audience: str = "",
-                   production_type: str = "") -> tuple:
-    """Run the finished script through Fable 5 for a final polish pass.
+# Production-only blocks the polish pass must NEVER touch. Everything between
+# [PRODUCTION BEGIN] and [PRODUCTION END] (production notes, not spoken Host:
+# narration) is pulled out before polishing and restored verbatim afterward, so
+# only the host sections OUTSIDE these tags are ever rewritten. Case-insensitive
+# and tolerant of extra whitespace inside the tags; DOTALL so a block can span
+# many lines.
+_PRODUCTION_BLOCK_PATTERN = r"\[PRODUCTION\s+BEGIN\].*?\[PRODUCTION\s+END\]"
+_PRODUCTION_BLOCK_RE = re.compile(
+    _PRODUCTION_BLOCK_PATTERN, re.IGNORECASE | re.DOTALL)
+_PRODUCTION_BLOCK_SPLIT_RE = re.compile(
+    "(" + _PRODUCTION_BLOCK_PATTERN + ")", re.IGNORECASE | re.DOTALL)
 
-    Returns (polished_text, model_used). Falls back to ANTHROPIC_MODEL if
-    POLISH_MODEL isn't available on the account.
+
+def _strip_production_blocks(text: str) -> str:
+    """Remove every [PRODUCTION BEGIN]…[PRODUCTION END] block outright (the
+    user's editing-only notes) so downstream spoken output — the HeyGen narration
+    and the HeyGen curl `content` the avatar reads — never contains them.
+    Collapses the extra blank lines the removal leaves behind. Used at the HeyGen
+    call boundaries only, so the saved script itself keeps the blocks."""
+    if not text:
+        return text
+    out = _PRODUCTION_BLOCK_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", out)
+
+
+def _mask_production_blocks(script: str):
+    """Replace every [PRODUCTION BEGIN]…[PRODUCTION END] block with an opaque
+    ``[[PRODUCTION_BLOCK_N]]`` sentinel so the polish model never sees (or can
+    alter) it. Returns ``(masked_script, blocks)`` where ``blocks[i]`` is the
+    verbatim original for sentinel ``i``."""
+    blocks = []
+
+    def _repl(m):
+        idx = len(blocks)
+        blocks.append(m.group(0))
+        return f"[[PRODUCTION_BLOCK_{idx}]]"
+
+    return _PRODUCTION_BLOCK_RE.sub(_repl, script), blocks
+
+
+def _restore_production_blocks(text: str, blocks) -> tuple:
+    """Drop each verbatim production block back where its sentinel sits. Returns
+    ``(restored_text, missing_indices)``; ``missing_indices`` lists any sentinel
+    the model dropped/mangled so the caller can fall back."""
+    missing = []
+    for idx, block in enumerate(blocks):
+        token = f"[[PRODUCTION_BLOCK_{idx}]]"
+        if token in text:
+            text = text.replace(token, block)
+        else:
+            missing.append(idx)
+    return text, missing
+
+
+def _split_by_production(script: str):
+    """Split a script into ordered ``(kind, text)`` segments where ``kind`` is
+    ``'production'`` for a [PRODUCTION BEGIN]…[PRODUCTION END] block and
+    ``'host'`` for everything else. Concatenating the texts reproduces the input
+    exactly (no characters added or lost)."""
+    parts = _PRODUCTION_BLOCK_SPLIT_RE.split(script)
+    segs = []
+    for i, p in enumerate(parts):
+        if not p:
+            continue
+        # split() with one capturing group yields production blocks at odd idx.
+        segs.append(("production" if i % 2 == 1 else "host", p))
+    return segs
+
+
+def _restore_or_keep(rewritten: str, blocks, original: str) -> str:
+    """Put masked [PRODUCTION …] blocks back into an agent-rewritten script.
+
+    Used to shield the shorten/flow agent stages the same way polish is: the
+    script is masked before the agent runs, then blocks are restored here. If the
+    rewriter dropped any sentinel (LLM agents may not preserve them), return
+    ``original`` unchanged so a production block is NEVER lost — that stage just
+    becomes a safe no-op for that script. With no blocks, returns ``rewritten``.
     """
-    ctx = []
-    if title:
-        ctx.append(f"SCRIPT TITLE: {title}")
-    if audience:
-        ctx.append(f"AUDIENCE: {audience}")
-    if production_type:
-        ctx.append(f"PRODUCTION TYPE: {production_type}")
-    header = ("\n".join(ctx) + "\n\n") if ctx else ""
-    user = (
-        f"{header}Here is the finished script to polish and elevate. Return the "
-        f"full polished script only:\n\n{script}"
-    )
+    if not blocks:
+        return rewritten
+    restored, missing = _restore_production_blocks(rewritten, blocks)
+    if missing:
+        logger.warning(
+            "⚠️ script rewrite dropped %d [PRODUCTION …] block sentinel(s); "
+            "keeping the pre-rewrite script to preserve your editing notes",
+            len(missing))
+        return original
+    return restored
 
+
+def _call_polish_model(text_to_polish: str, header: str,
+                       extra: str = "") -> tuple:
+    """Run one Fable-5 (fallback Opus) polish pass over ``text_to_polish``.
+    ``extra`` prepends run-specific instructions (e.g. the sentinel rule).
+    Returns ``(polished_text, model_used)``; raises if no model responds.
+
+    NO web search: the "make it current" web-search pass was the slow/flaky part
+    (a full-script polish with search ran ~2-5 min and could stall). A no-search
+    Fable pass is one bounded API call (~10-60s), fast and predictable.
+    """
+    user = (
+        f"{header}{extra}Here is the finished script to polish and elevate. "
+        f"Return the full polished script only:\n\n{text_to_polish}"
+    )
     import anthropic
     for model in (POLISH_MODEL, ANTHROPIC_MODEL):
         try:
+            logger.info("🪄 polish: calling %s (no web search)", model)
             out = _anthropic_complete(
                 _POLISH_SYSTEM, user, max_tokens=16000,
-                use_web_search=True, max_searches=4, model=model,
-                # A full-script polish with web search is much heavier than a
-                # short draft; give it real headroom before falling back.
-                timeout=300.0,
+                use_web_search=False, model=model, timeout=200.0,
             )
             out = _strip_reminder_tags(out)
             if out:
@@ -5274,6 +5461,62 @@ def _polish_script(script: str, title: str = "", audience: str = "",
             logger.warning("Polish model %s not available; falling back", model)
             continue
     raise RuntimeError("Script polish failed — no usable Claude model responded.")
+
+
+def _polish_script(script: str, title: str = "", audience: str = "",
+                   production_type: str = "") -> tuple:
+    """Run the finished script through Fable 5 for a final polish pass.
+
+    Only the Host narration OUTSIDE [PRODUCTION BEGIN]…[PRODUCTION END] blocks is
+    ever rewritten: production blocks are extracted, the surrounding script is
+    polished, then the blocks are restored byte-for-byte. Returns
+    (polished_text, model_used). Falls back to ANTHROPIC_MODEL if POLISH_MODEL
+    isn't available on the account.
+    """
+    ctx = []
+    if title:
+        ctx.append(f"SCRIPT TITLE: {title}")
+    if audience:
+        ctx.append(f"AUDIENCE: {audience}")
+    if production_type:
+        ctx.append(f"PRODUCTION TYPE: {production_type}")
+    header = ("\n".join(ctx) + "\n\n") if ctx else ""
+
+    masked, blocks = _mask_production_blocks(script)
+    if not blocks:
+        # No production blocks — polish the whole script as before.
+        return _call_polish_model(script, header)
+
+    logger.info("🪄 polish: shielding %d [PRODUCTION …] block(s) from the pass",
+                len(blocks))
+    sentinel_note = (
+        "IMPORTANT — PRESERVE PLACEHOLDERS: The script contains placeholder "
+        "tokens of the form [[PRODUCTION_BLOCK_N]] (e.g. [[PRODUCTION_BLOCK_0]]). "
+        "Each stands in for a production-only section you must NOT alter. Leave "
+        "every such token EXACTLY as written, on its own line, in the same order "
+        "— do not modify, remove, reorder, translate, or add commentary around "
+        "them. Polish ONLY the surrounding host narration.\n\n"
+    )
+    polished, model = _call_polish_model(masked, header, extra=sentinel_note)
+    restored, missing = _restore_production_blocks(polished, blocks)
+    if not missing:
+        return restored, model
+
+    # The model dropped/mangled a sentinel — fall back to the bulletproof path:
+    # polish each host segment on its own and stitch the verbatim production
+    # blocks back between them, so nothing inside the tags can be lost.
+    logger.warning(
+        "⚠️ polish: %d production sentinel(s) missing from output; "
+        "using per-segment fallback", len(missing))
+    out_parts = []
+    model_used = model
+    for kind, text in _split_by_production(script):
+        if kind == "production" or not text.strip():
+            out_parts.append(text)
+        else:
+            polished_seg, model_used = _call_polish_model(text, header)
+            out_parts.append(polished_seg)
+    return "".join(out_parts), model_used
 
 
 @app.route("/api/script/polish", methods=["POST"])
@@ -5362,7 +5605,7 @@ def _linkedin_token():
 
 
 def _linkedin_api_version():
-    return (os.getenv("LINKEDIN_API_VERSION") or "").strip() or "202506"
+    return (os.getenv("LINKEDIN_API_VERSION") or "").strip() or "202607"
 
 
 def _linkedin_resolve_author(token: str):
@@ -7819,76 +8062,55 @@ GROK_REWRITE_SYSTEM = (
 # style rules as the xAI rewrite. Requires ANTHROPIC_API_KEY; falls back to xAI
 # (then the deterministic directive) when unavailable.
 GROK_PROMPT_ENGINEER_SYSTEM = (
-    "You are an expert prompt engineer for grok-imagine-video, a text-to-video "
-    "model that produces a ~6 second SILENT clip. Given a b-roll scene "
-    "description (plus optional context and overall topic), write ONE optimal "
-    "generation prompt that yields a polished, professional clip.\n"
-    "SPECIFICITY (MOST IMPORTANT): Make the clip unmistakably about THIS exact "
-    "moment — never generic stock b-roll. When an EXACT SCRIPT MOMENT is given, "
-    "read it and depict a precise, literal visual of what is being said: the "
-    "specific subject, objects, on-screen action, real product/app/tool names, "
-    "numbers and setting it implies. BANNED as generic filler (unless that is "
-    "literally the scene): anonymous 'business people in a meeting', someone "
-    "vaguely 'typing on a laptop', generic city/highway timelapses, abstract "
-    "swirling particles or glowing networks, stock handshakes, faceless "
-    "silhouettes. Pick ONE concrete, particular, slightly unexpected image that "
-    "could only belong to this scene.\n"
-    "STYLE (strict):\n"
-    "- When people are involved, show REAL human actors — photorealistic skin, "
-    "natural lighting, real-world settings. Never cartoon or illustrated "
-    "characters.\n"
-    "- For data, systems, processes, metrics, workflows, or ANY abstract / "
-    "business concept, render it as a CLEAN, MODERN ANIMATED BUSINESS "
-    "INFOGRAPHIC — flat 2D or subtle 3D motion graphics in a corporate "
-    "blue/green/teal palette on a light background with a subtle grid: animated "
-    "charts and graphs, spreadsheets/tables populating, KPI counters ticking up, "
-    "flow arrows, connected nodes, icons and checkmarks, with a smooth camera "
-    "zoom/pan onto the key element — a minimalist McKinsey/Gartner editorial "
-    "look. PREFER this infographic treatment whenever the scene is not centered "
-    "on a specific real person.\n"
-    "- ALWAYS specify real motion and action — camera movement, gestures, "
-    "moving/animating elements — so the clip feels alive.\n"
-    "- ABSOLUTELY FORBIDDEN: cartoon, anime, comic, hand-drawn, children's "
-    "illustration, claymation, mascots, stylized Pixar/CGI-character looks.\n"
-    "FIDELITY: keep the description's concrete subject, setting, and action — "
-    "set only the visual style, never swap the scene for an unrelated metaphor. "
-    "Describe the subject, setting, action, MOTION, camera move, lighting, and "
-    "the art direction (photoreal/cinematic for people; infographic for data).\n"
-    "Output ONLY the final prompt: 1-2 sentences, under ~60 words. No quotes, "
-    "no preamble, no lists, no on-screen text or captions."
+    "You are a prompt engineer for grok-imagine-video (ONE short ~6s SILENT "
+    "clip). You are given the SCRIPT LINE this b-roll illustrates. Create ONE "
+    "simple animated EXPLAINER scene that conveys the POINT of that line — like a "
+    "clean whiteboard / motion-graphic explainer.\n"
+    "HOW (the whole job is translating the words into simple symbols):\n"
+    "- Turn the key elements of the line into a few CLEAR, SIMPLE visual symbols "
+    "and short labels, combined into ONE cohesive scene with gentle motion and a "
+    "small setup->payoff arc. Labels and short on-screen text ARE encouraged when "
+    "they make the meaning obvious.\n"
+    "- Represent named things as simple labeled figures/objects; represent "
+    "abstract ideas as simple icons; show the conclusion, using a text label if "
+    "it is the punchline.\n"
+    "- WORKED EXAMPLE. Line: 'every month a Yale team checks the entire US labor "
+    "market for AI damage and finds no disruption.' Good prompt: 'a small "
+    "research team labeled Yale Research examines a cluster of little factories "
+    "through a big magnifying glass as calendar months fly past, then a large "
+    "label reading No AI Disruption stamps onto the scene.'\n"
+    "- Keep it SIMPLE and readable — a few symbols in ONE scene. NOT a photoreal "
+    "literal shot ('a person at a laptop' is boring filler), and NOT a montage of "
+    "several separate shots.\n"
+    "STYLE: clean, modern, simple 2D animated motion-graphic look — simple line "
+    "icons/symbols and labels, minimal flat color, plain background, light gentle "
+    "motion.\n"
+    "- FORBIDDEN: cartoon/anime characters, claymation, mascots, busy cluttered "
+    "compositions.\n"
+    "Output ONLY the final prompt: 1-2 short sentences, ~20-45 words, naming the "
+    "symbols, labels, and gentle motion. No quotes, no preamble, no lists."
 )
 
-# A second, dedicated style for the b-roll table's "Grok Chalk Prompt" column:
-# ALWAYS a rough white-chalk-on-black hand-drawn sketch of the scene (a
-# chalkboard / whiteboard-animation look) so it reads as handwritten.
+# The "Grok Chalk Prompt" column is the SAME visual as the cinematic prompt,
+# redrawn as rough white chalk on black — so the two columns always match, just
+# in different styles. It is given the already-chosen cinematic prompt as input.
 GROK_CHALK_PROMPT_ENGINEER_SYSTEM = (
-    "You are an expert prompt engineer for grok-imagine-video, a text-to-video "
-    "model that produces a ~4-6 second SILENT clip. Given a b-roll scene, write "
-    "ONE prompt that depicts it as a ROUGH WHITE CHALK DRAWING on a BLACK "
-    "background — a hand-sketched chalkboard look, as if drawn by hand.\n"
-    "SPECIFICITY (MOST IMPORTANT): the sketch must be unmistakably about THIS "
-    "exact moment, never generic. When an EXACT SCRIPT MOMENT is given, read it "
-    "and sketch a precise, literal depiction of what is being said — the specific "
-    "subject, objects and action it implies (real product/tool names, numbers, "
-    "the exact thing happening). No generic filler (vague figures 'in a meeting', "
-    "someone 'at a laptop', abstract swirls). Pick one concrete, particular image "
-    "that could only belong to this scene.\n"
-    "STYLE (strict):\n"
-    "- BEGIN the prompt with exactly: 'Rough white chalk drawing on black "
-    "background, simple and clean, show ' and then describe the scene.\n"
-    "- White chalk strokes only on a matte black chalkboard; sketchy, textured, "
-    "slightly loose and imperfect hand-drawn linework; simple and clean.\n"
-    "- Animate it like a chalkboard explainer: lines and shapes draw themselves "
-    "on progressively, simple hand-drawn icons, arrows and stick figures sketch "
-    "in, gentle motion.\n"
-    "- Translate the scene's concrete subject into a simple chalk sketch that "
-    "represents THAT subject — keep what it is about, rendered as handwritten "
-    "chalk art.\n"
-    "- ABSOLUTELY FORBIDDEN: photorealism, live action, color photography, 3D "
-    "renders, cartoon/anime characters, and any colored or non-black "
-    "background. It MUST read as white chalk on black.\n"
-    "Output ONLY the final prompt: 1-2 sentences, under ~70 words. No quotes, "
-    "no preamble, no lists, and no on-screen typed text or captions."
+    "You are a prompt engineer for grok-imagine-video (ONE short ~4-6s SILENT "
+    "clip). You are GIVEN a visual scene that has already been chosen. Redraw "
+    "that SAME scene — the same subject, symbol, and action — as ONE simple "
+    "ROUGH WHITE CHALK DRAWING on a BLACK background (hand-sketched chalkboard "
+    "look). Do NOT invent a different subject; keep the given visual, only change "
+    "the style to chalk.\n"
+    "STYLE:\n"
+    "- BEGIN with exactly: 'Rough white chalk drawing on black background, simple "
+    "and clean, show ' then the same subject/action from the given scene.\n"
+    "- White chalk strokes only on matte black; loose, hand-drawn; the lines "
+    "draw themselves on with gentle motion. Keep it one simple sketch.\n"
+    "- FORBIDDEN: photorealism, live action, color, 3D renders, cartoon/anime "
+    "characters, any colored or non-black background.\n"
+    "Output ONLY the final prompt: 1-2 short sentences, ~20-45 words (starting "
+    "with the required phrase), keeping the same symbols and labels. No quotes, "
+    "no preamble, no lists."
 )
 
 
@@ -7915,23 +8137,22 @@ def _grok_prompt_via_claude(
     except ImportError:
         return None
     try:
-        parts = [
-            "B-ROLL SCENE DESCRIPTION (your prompt MUST depict exactly this, "
-            f"keeping its specific subject and objects): {description}"
-        ]
-        if (script_excerpt or "").strip():
-            parts.append(
-                "EXACT SCRIPT MOMENT this b-roll illustrates — ground the visual "
-                "in THIS specific content and show a precise, literal depiction "
-                "of what is being said here, NOT a generic stock version: "
-                f"\"{script_excerpt.strip()}\"")
+        parts = []
         if (scene_context or "").strip():
             parts.append(
-                f"Why this scene appears in the video: {scene_context.strip()}")
+                "SCRIPT LINE this clip must make the point of — anchor the visual "
+                f"to THIS: {scene_context.strip()}")
+        if (script_excerpt or "").strip():
+            parts.append(
+                f"Surrounding script (context only): \"{script_excerpt.strip()}\"")
+        parts.append(
+            "Scene / suggested visual (a starting idea — it may be over-elaborate; "
+            "simplify it into ONE clear symbolic shot, don't copy it literally): "
+            f"{description}")
         if (theme or "").strip():
             parts.append(
-                "Overall video topic (for flavor/detail only, do NOT replace "
-                f"the scene with it): {theme.strip()}")
+                "Overall video topic (flavor only, do NOT replace the scene): "
+                f"{theme.strip()}")
         user_msg = "\n".join(parts)
 
         # Fail fast: the B-roll table now generates a cinematic AND an
@@ -7961,24 +8182,144 @@ def _grok_prompt_via_claude(
     return None
 
 
-def _grok_build_chalk_prompt(
+def _resolve_xai_api_key() -> str:
+    """Resolve the xAI/Grok API key from saved server settings first, then the
+    XAI_API_KEY env var. Returns "" when neither is set (or is the placeholder)."""
+    key = ""
+    try:
+        key = (_load_scriptcraft_settings().get("grok_api_key") or "").strip()
+    except Exception:
+        key = ""
+    if not key:
+        key = (os.getenv("XAI_API_KEY") or "").strip()
+    if key == "your-xai-api-key-here":
+        return ""
+    return key
+
+
+def _grok_prompt_via_xai(
     description: str,
+    scene_context: str = "",
+    theme: str = "",
+    system: Optional[str] = None,
+    max_len: int = 600,
+    script_excerpt: str = "",
+) -> Optional[str]:
+    """Ask Grok (xAI ``GROK_REWRITE_MODEL``) to craft a grok-imagine-video prompt,
+    using the SAME engineer/chalk system prompts as ``_grok_prompt_via_claude`` so
+    the visual style is identical — this is the fallback used when the Anthropic
+    key is missing or failing. Returns the prompt, or None when the xAI key/SDK is
+    unavailable or the call fails."""
+    api_key = _resolve_xai_api_key()
+    if not api_key:
+        return None
+    try:
+        import xai_sdk
+        from xai_sdk.chat import system as _xai_system, user as _xai_user
+    except ImportError:
+        return None
+    try:
+        parts = []
+        if (scene_context or "").strip():
+            parts.append(
+                "SCRIPT LINE this clip must make the point of — anchor the visual "
+                f"to THIS: {scene_context.strip()}")
+        if (script_excerpt or "").strip():
+            parts.append(
+                f"Surrounding script (context only): \"{script_excerpt.strip()}\"")
+        parts.append(
+            "Scene / suggested visual (a starting idea — it may be over-elaborate; "
+            "simplify it into ONE clear symbolic shot, don't copy it literally): "
+            f"{description}")
+        if (theme or "").strip():
+            parts.append(
+                "Overall video topic (flavor only, do NOT replace the scene): "
+                f"{theme.strip()}")
+        user_msg = "\n".join(parts)
+
+        client = xai_sdk.Client(api_key=api_key)
+        chat = client.chat.create(model=GROK_REWRITE_MODEL, temperature=0.6)
+        chat.append(_xai_system(system or GROK_PROMPT_ENGINEER_SYSTEM))
+        chat.append(_xai_user(user_msg))
+        resp = chat.sample()
+        out = (getattr(resp, "content", "") or "").strip().strip('"').strip()
+        if out and len(out) <= max_len:
+            logger.info(f"🎨 Grok prompt (xAI): {out[:140]}")
+            return out
+    except Exception as e:
+        logger.warning(f"⚠️ xAI Grok-prompt rewrite failed: {e}")
+    return None
+
+
+def _grok_prompt_via_llm(
+    description: str,
+    scene_context: str = "",
+    theme: str = "",
+    system: Optional[str] = None,
+    max_len: int = 600,
+    script_excerpt: str = "",
+) -> Optional[str]:
+    """Craft a grok-imagine-video prompt via Claude (Opus 4.8) when available,
+    falling back to Grok (xAI) with the SAME system prompt when the Anthropic key
+    is missing/failing. Returns None only if BOTH providers are unavailable."""
+    out = _grok_prompt_via_claude(
+        description, scene_context, theme, system=system, max_len=max_len,
+        script_excerpt=script_excerpt)
+    if out:
+        return out
+    return _grok_prompt_via_xai(
+        description, scene_context, theme, system=system, max_len=max_len,
+        script_excerpt=script_excerpt)
+
+
+def _grok_build_chalk_prompt(
+    base_visual: str,
     scene_context: str = "",
     theme: str = "",
     script_excerpt: str = "",
 ) -> str:
-    """Build a white-chalk-on-black Grok video prompt for a
-    b-roll scene (the "Grok Chalk Prompt" table column). Returns "" when
-    the LLM rewrite is disabled or Claude is unavailable — this column is a bonus
-    and has no deterministic fallback (unlike the cinematic prompt)."""
-    base = (description or "").strip()
+    """Redraw an already-chosen visual (the cinematic Grok prompt) as its white-
+    chalk-on-black twin, so the "Grok Imagine" and "Grok Chalk" table columns show
+    the SAME scene in two styles. Uses Claude when available, falling back to Grok
+    (xAI). Returns "" when the rewrite is disabled or BOTH providers are
+    unavailable (this column is a bonus, no deterministic fallback)."""
+    base = (base_visual or "").strip()
     if not base or not GROK_VISUAL_REWRITE_ENABLED:
         return ""
-    out = _grok_prompt_via_claude(
-        base, scene_context, theme,
-        system=GROK_CHALK_PROMPT_ENGINEER_SYSTEM, max_len=900,
-        script_excerpt=script_excerpt)
+    out = _grok_prompt_via_llm(
+        base, system=GROK_CHALK_PROMPT_ENGINEER_SYSTEM, max_len=900)
     return out or ""
+
+
+def _grok_chalk_prompts_from_cinematic(grok_prompts: dict, max_workers: int = 8) -> dict:
+    """Redraw each cinematic Grok prompt as its white-chalk twin (same visual, two
+    styles) so the two b-roll table columns always match. Returns
+    ``{row_index: chalk_prompt}``. Best-effort — a failing row yields ""."""
+    out: dict = {}
+    items = [(i, p) for i, p in (grok_prompts or {}).items() if (p or "").strip()]
+    if not items:
+        return out
+
+    def _one(item):
+        i, cine = item
+        try:
+            return i, (_grok_build_chalk_prompt(cine) or "")
+        except Exception as e:
+            logger.warning(f"⚠️ Chalk-from-cinematic failed (row {i}): {e}")
+            return i, ""
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        workers = max(1, min(max_workers, len(items)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for i, p in ex.map(_one, items):
+                out[i] = p
+    except Exception as e:
+        logger.warning(f"⚠️ Chalk batch failed ({e}); running sequentially")
+        for item in items:
+            i, p = _one(item)
+            out[i] = p
+    return out
 
 
 def _grok_build_video_prompt(
@@ -8002,13 +8343,15 @@ def _grok_build_video_prompt(
     if not GROK_VISUAL_REWRITE_ENABLED:
         return styled_fallback
 
-    # 1) Preferred: Claude (Opus 4.8) writes the optimal grok-imagine prompt.
-    claude_out = _grok_prompt_via_claude(
+    # 1) Preferred: Claude (Opus 4.8) writes the optimal grok-imagine prompt;
+    #    falls back to Grok (xAI) with the same engineer system prompt when the
+    #    Anthropic key is missing/failing.
+    llm_out = _grok_prompt_via_llm(
         base, scene_context, theme, script_excerpt=script_excerpt)
-    if claude_out:
-        return claude_out
+    if llm_out:
+        return llm_out
 
-    # 2) Fallback: xAI grok-3-mini rewrite (needs the xAI client).
+    # 2) Fallback: xAI grok-3-mini rewrite (needs an explicitly-passed xAI client).
     if client is None:
         return styled_fallback
 
@@ -8200,8 +8543,9 @@ def _grok_generate_worker(session_id: str, selected_rows: list, api_key: str, sc
             desc, scene_context, script_title, client=client)
         if cine:
             variants.append(("cinematic", cine))
+        # Chalk is the SAME visual as the cinematic prompt, redrawn in chalk.
         chalk = (row.get("grok_chalk_prompt") or "").strip() or \
-            _grok_build_chalk_prompt(desc, scene_context, script_title)
+            _grok_build_chalk_prompt(cine or desc)
         if chalk:
             variants.append(("chalk", chalk))
         if not variants:
@@ -12317,12 +12661,33 @@ def api_grok_video_delete():
             except Exception as e:  # noqa: BLE001
                 logger.error(f"❌ grok-video delete failed for {path}: {e}")
 
-        if not deleted:
-            return jsonify({"success": False,
-                            "error": "File not found in any broll directory",
-                            "filename": safe_name}), 404
+        # Also delete the DURABLE blob copy (mp4 + sidecar .json) under
+        # <script_id>/videos/. Without this the video reappears from Azure on the
+        # next load as a dead grey card (local file gone, blob entry still there).
+        blob_deleted = []
+        script_id = (data.get("script_id") or "").strip()
+        if script_id and _artifacts_enabled():
+            try:
+                cc = _artifacts_container()
+                sid = _safe_blob_id(script_id)
+                for bn in (f"{sid}/videos/{safe_name}",
+                           f"{sid}/videos/{safe_name}.json"):
+                    try:
+                        cc.delete_blob(bn)
+                        blob_deleted.append(bn)
+                    except Exception as be:  # noqa: BLE001
+                        # Missing blob (already gone) is fine — anything else logs.
+                        logger.info(
+                            f"grok-video blob delete skipped {bn}: {be}")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"❌ grok-video blob delete failed: {e}")
+
+        # Idempotent: even if the file was already gone locally AND in blob, the
+        # desired end state (not present anywhere) is met — return success so the
+        # gallery always removes the card. This is what clears the leftover grey
+        # boxes for blob-only videos that have no local file to unlink.
         return jsonify({"success": True, "deleted": deleted,
-                        "filename": safe_name})
+                        "blob_deleted": blob_deleted, "filename": safe_name})
     except Exception as e:  # noqa: BLE001
         logger.error(
             f"❌ /api/grok-videos/delete failed: {e}", exc_info=True)
@@ -13127,4 +13492,10 @@ if __name__ == "__main__":
     else:
         logger.info("💻 Running in Local mode")
 
-    app.run(host="0.0.0.0", port=port, debug=False)
+    # threaded=True is REQUIRED: the app uses long-lived SSE progress streams
+    # (/progress/<id>). Werkzeug's dev server is single-threaded by default, so an
+    # open SSE connection occupies the ONLY worker thread and blocks every other
+    # request (e.g. /api/script/polish) until it closes — the browser just spins
+    # forever. Threading lets concurrent requests (SSE + polish + polling) be
+    # served at once, matching the gunicorn thread pool used in the container.
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
