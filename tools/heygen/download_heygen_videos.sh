@@ -16,7 +16,7 @@
 # ==============================================================================
 
 # Configuration
-API_KEY="${HEYGEN_API_KEY:-ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==}"
+API_KEY="${HEYGEN_API_KEY:?HEYGEN_API_KEY is required}"
 OUTPUT_DIR="${HEYGEN_OUTPUT_DIR:-$HOME/Dev/Videos/Edited/Final}"
 DEFAULT_PROJECT="HeyGen_Downloads"
 

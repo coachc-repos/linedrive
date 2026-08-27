@@ -700,15 +700,16 @@ def scrub_heygen_text(text: str) -> str:
 def generate_heygen_curl_commands(
     script_content: str,
     script_title: str,
-    api_key: str = "sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC",
+    api_key: str = "",
     template_id: str = "92c09f8e9a1c4f078f7ae53886b7ad80",
     voice_id: str = "",
     final_hook_text: str = ""
 ) -> str:
     """
     Generate HeyGen API curl commands from script content.
-    Uses the v2 template generate endpoint per:
-    https://docs.heygen.com/reference/generate-from-template-v2
+    Uses the V3 (New AI Studio) template generate endpoint per:
+    https://developers.heygen.com/reference/generate-video-from-template
+    (the legacy V2 /v2/template/{id}/generate endpoint is being deprecated).
 
     Args:
         script_content: Full script markdown content
@@ -955,17 +956,22 @@ def generate_heygen_curl_commands(
 
     # Build the curl with json.dumps for bullet-proof JSON escaping,
     # then shell-escape the resulting payload for bash single quotes.
+    # HeyGen template variable name — must match the text variable defined in
+    # the Studio template. Keep in sync with the frontend "test generate" form.
+    heygen_var_name = "script"
+
     def build_curl(title_text: str, content_text: str) -> str:
+        # HeyGen V3 (New AI Studio) template generate payload. The text variable
+        # is flattened to {type, content} — the legacy V2 wrapper
+        # ({name, properties:{content}}) is gone. `variables` is keyed by the
+        # template's variable name.
         payload = {
             "caption": False,
             "title": title_text,
             "variables": {
-                "script": {
-                    "name": "script",
+                heygen_var_name: {
                     "type": "text",
-                    "properties": {
-                        "content": content_text,
-                    },
+                    "content": content_text,
                 }
             },
         }
@@ -973,7 +979,7 @@ def generate_heygen_curl_commands(
         data_for_bash = shell_single_quote(data_json)
         return (
             "curl --request POST \\\n"
-            f"     --url 'https://api.heygen.com/v2/template/{template_id}/generate' \\\n"
+            f"     --url 'https://api.heygen.com/v3/templates/{template_id}' \\\n"
             "     --header 'accept: application/json' \\\n"
             "     --header 'content-type: application/json' \\\n"
             f"     --header 'x-api-key: {api_key}' \\\n"

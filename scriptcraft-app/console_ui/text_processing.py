@@ -601,7 +601,7 @@ def extract_heygen_host_script(script_content: str) -> str:
 def generate_heygen_curl_commands(
     script_content: str,
     script_title: str,
-    api_key: str = "sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC",
+    api_key: str = "",
     template_id: str = "92c09f8e9a1c4f078f7ae53886b7ad80",
     voice_id: str = ""
 ) -> str:

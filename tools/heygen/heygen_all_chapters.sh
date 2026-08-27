@@ -5,7 +5,7 @@
 
 # Chapter 1: Direct Video - AI at the beach
 curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7ad80/generate' \
-     --header 'X-Api-Key: ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==' \
+     --header "X-Api-Key: ${HEYGEN_API_KEY}" \
      --header 'Content-Type: application/json' \
      --data '{
   "caption": false,
@@ -24,7 +24,7 @@ curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7
 
 # Chapter 2: Direct Video - AI at the beach - How AI Sees the Shoreline — Detection, Segmentation, and ID
 curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7ad80/generate' \
-     --header 'X-Api-Key: ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==' \
+     --header "X-Api-Key: ${HEYGEN_API_KEY}" \
      --header 'Content-Type: application/json' \
      --data '{
   "caption": false,
@@ -43,7 +43,7 @@ curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7
 
 # Chapter 3: Direct Video - AI at the beach - See → Act: Turning Detection into Rescue
 curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7ad80/generate' \
-     --header 'X-Api-Key: ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==' \
+     --header "X-Api-Key: ${HEYGEN_API_KEY}" \
      --header 'Content-Type: application/json' \
      --data '{
   "caption": false,
@@ -62,7 +62,7 @@ curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7
 
 # Chapter 4: Direct Video - AI at the beach - Saving Lives — Drones, Rip Warnings, and Real-Time Alerts
 curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7ad80/generate' \
-     --header 'X-Api-Key: ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==' \
+     --header "X-Api-Key: ${HEYGEN_API_KEY}" \
      --header 'Content-Type: application/json' \
      --data '{
   "caption": false,
@@ -81,7 +81,7 @@ curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7
 
 # Chapter 5: Direct Video - AI at the beach - Cleaner Coasts — How AI Finds Plastic, Oil, and Habitat Damage
 curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7ad80/generate' \
-     --header 'X-Api-Key: ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==' \
+     --header "X-Api-Key: ${HEYGEN_API_KEY}" \
      --header 'Content-Type: application/json' \
      --data '{
   "caption": false,
@@ -100,7 +100,7 @@ curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7
 
 # Chapter 6: Direct Video - AI at the beach - Your Beach Day, Supercharged — Trip Planning, AR Safety, and Photo AI
 curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7ad80/generate' \
-     --header 'X-Api-Key: ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==' \
+     --header "X-Api-Key: ${HEYGEN_API_KEY}" \
      --header 'Content-Type: application/json' \
      --data '{
   "caption": false,
@@ -119,7 +119,7 @@ curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7
 
 # Chapter 7: Direct Video - AI at the beach - Under the Hood — Sensors, Edge Models, and the Data Loop
 curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7ad80/generate' \
-     --header 'X-Api-Key: ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==' \
+     --header "X-Api-Key: ${HEYGEN_API_KEY}" \
      --header 'Content-Type: application/json' \
      --data '{
   "caption": false,
@@ -138,7 +138,7 @@ curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7
 
 # Chapter 8: Direct Video - AI at the beach - What Comes Next — Ethics, Jobs, and Practical Takeaways
 curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7ad80/generate' \
-     --header 'X-Api-Key: ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==' \
+     --header "X-Api-Key: ${HEYGEN_API_KEY}" \
      --header 'Content-Type: application/json' \
      --data '{
   "caption": false,

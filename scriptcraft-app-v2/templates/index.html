@@ -1637,6 +1637,20 @@
                 </div>
                 <div id="xPostSubtitle" style="color:#94a3b8; font-size:0.85em; margin-bottom:12px;"></div>
 
+                <!-- Browse & promote any previously-published AIwithRoz video -->
+                <div style="border:1px solid #334155; border-radius:8px; padding:10px 12px; margin-bottom:12px; background:#0b1220;">
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <span style="color:#cbd5e1; font-size:0.88em; font-weight:600;">📺 Promote a published video</span>
+                        <button id="xBrowseBtn" onclick="toggleXVideoBrowser()" style="margin-left:auto; padding:6px 12px; background:#1d4ed8; color:#fff; border:none; border-radius:6px; font-size:0.85em; font-weight:600; cursor:pointer;">Browse published videos</button>
+                    </div>
+                    <div id="xVideoBrowser" style="display:none; margin-top:10px;">
+                        <input id="xVideoSearch" type="text" oninput="renderXVideoList()" placeholder="🔎 Filter by title…" style="width:100%; box-sizing:border-box; padding:8px 10px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.9em; margin-bottom:8px;">
+                        <div id="xVideoList" style="max-height:230px; overflow:auto; border:1px solid #1e293b; border-radius:6px;"></div>
+                        <div id="xVideoBrowserStatus" style="color:#94a3b8; font-size:0.8em; margin-top:6px;"></div>
+                    </div>
+                    <div id="xSelectedVideo" style="display:none; margin-top:8px; color:#93c5fd; font-size:0.85em;"></div>
+                </div>
+
                 <div id="xPostTopicRow" style="display:none; margin-bottom:12px;">
                     <label style="color:#cbd5e1; font-size:0.88em; display:block; margin-bottom:4px;">What should this post be about?</label>
                     <textarea id="xPostTopic" rows="2" placeholder="e.g. our video on AI meeting notes; a tip about prompt writing" style="width:100%; box-sizing:border-box; padding:10px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.95em; resize:vertical;"></textarea>
@@ -1661,6 +1675,97 @@
         </div>
         <script>
             let _xPostCtx = { mode: 'random', title: '', youtube_url: '' };
+            let _xPublishedVideos = null;   // cached list from the API
+            let _xVideosLoading = false;
+
+            // Toggle the "Browse published videos" panel; lazy-load on first open.
+            async function toggleXVideoBrowser() {
+                const panel = document.getElementById('xVideoBrowser');
+                const showing = panel.style.display !== 'none';
+                if (showing) { panel.style.display = 'none'; return; }
+                panel.style.display = 'block';
+                if (_xPublishedVideos === null && !_xVideosLoading) {
+                    await loadXPublishedVideos();
+                } else {
+                    renderXVideoList();
+                }
+            }
+
+            // Fetch the channel's published videos once and cache them.
+            async function loadXPublishedVideos() {
+                _xVideosLoading = true;
+                const status = document.getElementById('xVideoBrowserStatus');
+                const list = document.getElementById('xVideoList');
+                status.textContent = 'Loading published videos…';
+                list.innerHTML = '';
+                try {
+                    const r = await fetch('/api/youtube/published-videos').then(x => x.json());
+                    if (!r.success) throw new Error(r.error || 'Failed to load videos');
+                    if (r.authorized === false) {
+                        _xPublishedVideos = [];
+                        status.innerHTML = '⚠️ ' + (r.message || 'YouTube not connected yet.');
+                        return;
+                    }
+                    _xPublishedVideos = r.videos || [];
+                    status.textContent = _xPublishedVideos.length + ' videos loaded.';
+                    renderXVideoList();
+                } catch (e) {
+                    status.textContent = '❌ ' + (e.message || e);
+                } finally {
+                    _xVideosLoading = false;
+                }
+            }
+
+            // Render the (optionally filtered) list of published videos.
+            function renderXVideoList() {
+                const list = document.getElementById('xVideoList');
+                if (!_xPublishedVideos) { list.innerHTML = ''; return; }
+                const q = (document.getElementById('xVideoSearch').value || '').trim().toLowerCase();
+                const rows = _xPublishedVideos.filter(v => !q || (v.title || '').toLowerCase().includes(q));
+                if (!rows.length) {
+                    list.innerHTML = '<div style="padding:10px; color:#94a3b8; font-size:0.85em;">No matching videos.</div>';
+                    return;
+                }
+                list.innerHTML = rows.map((v, i) => {
+                    const idx = _xPublishedVideos.indexOf(v);
+                    const date = (v.published_at || '').slice(0, 10);
+                    const priv = v.privacy_status && v.privacy_status !== 'public'
+                        ? ' <span style="color:#fca5a5;">(' + v.privacy_status + ')</span>' : '';
+                    const thumb = v.thumbnail
+                        ? '<img src="' + v.thumbnail + '" alt="" style="width:64px; height:36px; object-fit:cover; border-radius:3px; flex-shrink:0;">'
+                        : '<div style="width:64px; height:36px; background:#1e293b; border-radius:3px; flex-shrink:0;"></div>';
+                    return '<div onclick="selectXVideo(' + idx + ')" style="display:flex; gap:9px; align-items:center; padding:7px 9px; cursor:pointer; border-bottom:1px solid #1e293b;" onmouseover="this.style.background=\'#111c33\'" onmouseout="this.style.background=\'transparent\'">'
+                        + thumb
+                        + '<div style="min-width:0;"><div style="color:#e2e8f0; font-size:0.86em; line-height:1.25; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">' + (v.title || '(untitled)') + priv + '</div>'
+                        + '<div style="color:#64748b; font-size:0.76em;">' + date + '</div></div></div>';
+                }).join('');
+            }
+
+            // Pick a published video: switch to episode-promo mode and auto-draft.
+            function selectXVideo(idx) {
+                const v = (_xPublishedVideos || [])[idx];
+                if (!v) return;
+                _xPostCtx = { mode: 'episode', title: v.title || '', youtube_url: v.url || '' };
+                document.getElementById('xPostTopicRow').style.display = 'none';
+                document.getElementById('xVideoBrowser').style.display = 'none';
+                const sel = document.getElementById('xSelectedVideo');
+                sel.style.display = 'block';
+                sel.innerHTML = '✅ Promoting: <strong style="color:#dbeafe;">' + (v.title || '(untitled)')
+                    + '</strong> — <a href="' + v.url + '" target="_blank" style="color:#60a5fa;">' + v.url + '</a>'
+                    + '<br><span style="color:#94a3b8;">Link is appended automatically. Drafting a promo…</span>';
+                document.getElementById('xPostSubtitle').innerHTML =
+                    'Promoting a published video. The YouTube link is appended automatically.';
+                regenerateXPost();
+            }
+
+            // Reset the video-browser UI to its collapsed, unselected state.
+            function resetXVideoBrowser() {
+                document.getElementById('xVideoBrowser').style.display = 'none';
+                document.getElementById('xSelectedVideo').style.display = 'none';
+                const search = document.getElementById('xVideoSearch');
+                if (search) search.value = '';
+                renderXVideoList();
+            }
 
             // Open the X compose modal. mode 'episode' prefills from a just-
             // published video {title, youtube_url} and auto-drafts; mode
@@ -1674,6 +1779,7 @@
                 document.getElementById('xPostStatus').textContent = '';
                 textEl.value = '';
                 updateXCharCount();
+                resetXVideoBrowser();
                 if (_xPostCtx.mode === 'episode') {
                     document.getElementById('xPostTopicRow').style.display = 'none';
                     sub.innerHTML = 'Promoting: <strong style="color:#e2e8f0;">' + (_xPostCtx.title || 'your new video') + '</strong><br>The YouTube link is appended automatically.';
@@ -1701,10 +1807,19 @@
                 // the first version for episode promos.
                 const _seed = (seedText || '').trim();
                 if (_seed) {
-                    textEl.value = _seed;
+                    // Generation appends the video link server-side; since we're
+                    // skipping generation here, append it to the seed ourselves
+                    // (unless the seed already contains it).
+                    let seeded = _seed;
+                    const _url = (_xPostCtx.youtube_url || '').trim();
+                    if (_url && seeded.indexOf(_url) === -1) {
+                        seeded = seeded + '\n' + _url;
+                    }
+                    textEl.value = seeded;
                     updateXCharCount();
-                    document.getElementById('xPostStatus').textContent =
-                        '✅ Seeded from your YouTube Community Post — edit, or ✨ regenerate with Claude.';
+                    document.getElementById('xPostStatus').textContent = _url
+                        ? '✅ Seeded from your YouTube Community Post (link added) — edit, or ✨ regenerate with Claude.'
+                        : '✅ Seeded from your YouTube Community Post — edit, or ✨ regenerate with Claude.';
                 } else if (_xPostCtx.mode === 'episode') {
                     regenerateXPost();
                 }
@@ -1877,10 +1992,20 @@
                 // the first version for episode promos.
                 const _seed = (seedText || '').trim();
                 if (_seed) {
-                    textEl.value = _seed;
+                    // Generation appends the video link server-side; since we're
+                    // skipping generation here, append it to the seed ourselves
+                    // (unless the seed already contains it) so LinkedIn renders
+                    // the video preview card.
+                    let seeded = _seed;
+                    const _url = (_liPostCtx.youtube_url || '').trim();
+                    if (_url && seeded.indexOf(_url) === -1) {
+                        seeded = seeded + '\n' + _url;
+                    }
+                    textEl.value = seeded;
                     updateLiCharCount();
-                    document.getElementById('liPostStatus').textContent =
-                        '✅ Seeded from your YouTube Community Post — edit, or ✨ regenerate with Claude.';
+                    document.getElementById('liPostStatus').textContent = _url
+                        ? '✅ Seeded from your YouTube Community Post (link added) — edit, or ✨ regenerate with Claude.'
+                        : '✅ Seeded from your YouTube Community Post — edit, or ✨ regenerate with Claude.';
                 } else if (_liPostCtx.mode === 'episode') {
                     regenerateLinkedInPost();
                 }
@@ -2520,7 +2645,7 @@
                 <!-- HeyGen config (moves into modal in Phase 2) -->
                 <input type="text" id="heygenTemplateId" value="92c09f8e9a1c4f078f7ae53886b7ad80">
                 <input type="text" id="heygenVoiceId" value="{{ saved_heygen_voice_id or '' }}">
-                <input type="hidden" id="heygenApiKey" value="{{ saved_heygen_api_key or 'sk_V2_hgu_kQ2qXUuyF7P_nNPQcfSV1C9zRHlrLiWfDrHoiwaOouVC' }}">
+                <input type="hidden" id="heygenApiKey" value="{{ saved_heygen_api_key or '' }}">
 
                 <!-- Script Input (moves into modal Load Script stage in Phase 2) -->
                 <div id="scriptInputSection">
@@ -6680,8 +6805,10 @@ Time management content here...`;
         // at the new template ID. Called from selectHeyGenTemplate().
         function applyTemplateIdToCurls(newTemplateId) {
             if (!newTemplateId) return;
-            const re = /\/v2\/template\/[A-Za-z0-9_-]+\/generate/g;
-            const replacement = '/v2/template/' + newTemplateId + '/generate';
+            // Match the V3 endpoint (/v3/templates/{id}) as well as any lingering
+            // legacy V2 URL (/v2/template/{id}/generate); rewrite both to V3.
+            const re = /\/v2\/template\/[A-Za-z0-9_-]+\/generate|\/v3\/templates\/[A-Za-z0-9_-]+/g;
+            const replacement = '/v3/templates/' + newTemplateId;
             const pres = document.querySelectorAll('pre[id^="curlCmd"]');
             pres.forEach(p => {
                 const original = p.textContent || '';
@@ -10349,24 +10476,23 @@ Thank you for watching!`;
         if (!apiKey) { resultEl.textContent = '❌ API Key is required'; return; }
         if (!scriptText) { resultEl.textContent = '❌ Script text is required'; return; }
 
-        // Build the request body exactly as sent to HeyGen
+        // Build the request body exactly as sent to HeyGen (V3 New AI Studio).
+        // Text variables are flattened to {type, content}; the legacy V2
+        // {name, properties:{content}} wrapper is gone.
         var requestBody = {
             caption: false,
             title: title || 'Test Video',
             variables: {
                 script: {
-                    name: 'script',
                     type: 'text',
-                    properties: {
-                        content: scriptText
-                    }
+                    content: scriptText
                 }
             }
         };
 
-        // Show the equivalent curl command
+        // Show the equivalent curl command (V3 endpoint: /v3/templates/{id}).
         var curlCmd = 'curl --request POST \\\n' +
-            "     --url 'https://api.heygen.com/v2/template/" + templateId + "/generate' \\\n" +
+            "     --url 'https://api.heygen.com/v3/templates/" + templateId + "' \\\n" +
             "     --header 'accept: application/json' \\\n" +
             "     --header 'content-type: application/json' \\\n" +
             "     --header 'x-api-key: " + apiKey + "' \\\n" +

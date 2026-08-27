@@ -1,7 +1,7 @@
 #!/bin/bash
 
 curl --location 'https://api.heygen.com/v2/template/92c09f8e9a1c4f078f7ae53886b7ad80/generate' \
-     --header 'X-Api-Key: ZmExMjJmMTY2NmZmNGI4NDhiYjM3ZWViYzgyYmE3ZWItMTc1MzQ4OTA1Mw==' \
+     --header "X-Api-Key: ${HEYGEN_API_KEY}" \
      --header 'Content-Type: application/json' \
      --data '{
   "caption": false,

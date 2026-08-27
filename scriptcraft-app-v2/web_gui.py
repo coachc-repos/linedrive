@@ -7009,7 +7009,10 @@ def heygen_test_generate():
         if not template_id:
             return jsonify({"error": "No template ID provided"}), 400
 
-        url = f"https://api.heygen.com/v2/template/{template_id}/generate"
+        # HeyGen V3 (New AI Studio) template generate endpoint. The request_body
+        # is built V3-shaped by the frontend (variables flattened to
+        # {type, content}); the legacy V2 /v2/template/{id}/generate is deprecated.
+        url = f"https://api.heygen.com/v3/templates/{template_id}"
         headers = {
             "accept": "application/json",
             "content-type": "application/json",
@@ -9456,6 +9459,41 @@ def youtube_recent_videos():
         })
     except Exception as e:
         logger.error(f"❌ youtube_recent_videos error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/youtube/published-videos", methods=["GET"])
+def youtube_published_videos():
+    """List the @AIwithRoz channel's published (uploaded) videos, newest first.
+
+    Powers the "Promote a published video" browser in the Post to X composer so
+    any older episode can be turned into a promo at any time. Returns an empty
+    list (not an error) when YouTube isn't authorized yet, so the composer can
+    show a friendly hint instead of failing.
+    """
+    try:
+        import youtube_publisher as yp
+        if not yp.is_authorized():
+            return jsonify({
+                "success": True,
+                "authorized": False,
+                "videos": [],
+                "message": ("Connect the YouTube account first (Publish tab) "
+                            "to browse published videos."),
+            })
+        try:
+            max_results = int(request.args.get("max", 100))
+        except (TypeError, ValueError):
+            max_results = 100
+        max_results = max(1, min(max_results, 200))
+        videos = yp.list_published_videos(max_results=max_results)
+        return jsonify({
+            "success": True,
+            "authorized": True,
+            "videos": videos,
+        })
+    except Exception as e:
+        logger.error(f"❌ youtube_published_videos error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
