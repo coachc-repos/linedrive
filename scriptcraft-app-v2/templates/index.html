@@ -1192,7 +1192,7 @@
                     <span class="toolbar-icon">🧪</span>
                     <span class="toolbar-text">Test Generate</span>
                 </button>
-                <button class="toolbar-btn" onclick="toggleIdeaGenPanel()" title="Brainstorm episode ideas with Claude Opus 4.8, then turn one into a script">
+                <button class="toolbar-btn" onclick="toggleIdeaGenPanel()" title="Brainstorm episode ideas with Claude Opus 5, then turn one into a script">
                     <span class="toolbar-icon">💡</span>
                     <span class="toolbar-text">Idea Generator</span>
                 </button>
@@ -1282,7 +1282,7 @@
         </div>
 
         <!-- ============================================================
-             💡 Idea Generator (Claude Opus 4.8 + web search)
+             💡 Idea Generator (Claude Opus 5 + web search)
              Brainstorm episode ideas from a free-text request, pick one, and
              send a full creative brief into the Create Script dialog.
              ============================================================ -->
@@ -1290,7 +1290,7 @@
             <div onclick="toggleIdeaGenPanel()" style="display:flex; align-items:center; gap:10px; padding:14px 18px; cursor:pointer; user-select:none; background:linear-gradient(90deg,#1e1b4b,#0f172a);">
                 <span style="font-size:1.2em;">💡</span>
                 <span style="font-weight:700; color:#e2e8f0; font-size:1.02em;">Idea Generator</span>
-                <span style="color:#94a3b8; font-size:0.82em;">— brainstorm episode ideas with Claude Opus 4.8, then turn one into a script</span>
+                <span style="color:#94a3b8; font-size:0.82em;">— brainstorm episode ideas with Claude Opus 5, then turn one into a script</span>
                 <span id="ideaGenChevron" style="margin-left:auto; color:#94a3b8; font-size:1.1em;">▸</span>
             </div>
             <div id="ideaGenBody" style="display:none; padding:16px 18px 20px;">
@@ -1300,8 +1300,19 @@
                     <button onclick="clearIdeaHistory()" title="Delete all saved idea sets" style="padding:6px 10px; background:#374151; color:#cbd5e1; border:none; border-radius:6px; font-size:0.8em; cursor:pointer; white-space:nowrap;">Clear</button>
                 </div>
                 <div style="display:flex; gap:10px; align-items:flex-start;">
-                    <textarea id="ideaGenRequest" rows="2" placeholder="Optional — leave blank to use the current top 10 AI videos on YouTube, or steer it (e.g. 'focus on AI agents')" style="flex:1; padding:10px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.95em; resize:vertical; box-sizing:border-box;"></textarea>
+                    <textarea id="ideaGenRequest" rows="2" placeholder="Optional — leave blank to use the current top 10 AI videos on YouTube, or steer it (e.g. 'Elon Musk's AI posts on X this week')" style="flex:1; padding:10px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.95em; resize:vertical; box-sizing:border-box;"></textarea>
                     <button id="ideaGenBtn" onclick="generateIdeas()" style="white-space:nowrap; padding:10px 16px; background:#6366f1; color:#fff; border:none; border-radius:6px; font-weight:600; cursor:pointer;">Generate 10 Ideas</button>
+                </div>
+                <div style="margin-top:10px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <label for="ideaGenLane" style="color:#cbd5e1; font-size:0.85em; white-space:nowrap;">🎚️ Content lane</label>
+                    <select id="ideaGenLane" style="padding:7px 10px; background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; font-size:0.85em;">
+                        <option value="auto" selected>Auto — no bias (let the topic/trends decide)</option>
+                        <option value="news">AI news &amp; big moves (launches, announcements, key figures)</option>
+                        <option value="everyday">Everyday life (home, money, family, health, travel)</option>
+                        <option value="tools">Tools &amp; how-to (demos, comparisons, workflows)</option>
+                        <option value="careers">Careers &amp; work (resumes, interviews, layoffs)</option>
+                    </select>
+                    <span style="color:#94a3b8; font-size:0.8em;">Auto no longer forces career/resume ideas.</span>
                 </div>
                 <div style="margin-top:10px;">
                     <label style="display:block; color:#cbd5e1; font-size:0.85em; margin-bottom:4px;">🎯 Be adjacent to these videos <span style="color:#94a3b8;">(optional — paste YouTube links, one per line; I'll pull each title + transcript so your ideas ride their audience)</span></label>
@@ -1486,6 +1497,7 @@
                 const inp = document.getElementById('ideaGenRequest');
                 const req = (inp.value || '').trim();
                 const adjUrls = ((document.getElementById('ideaGenAdjacency') || {}).value || '').trim();
+                const lane = ((document.getElementById('ideaGenLane') || {}).value || 'auto');
                 const statusEl = document.getElementById('ideaGenStatus');
                 const listEl = document.getElementById('ideaGenList');
                 const btn = document.getElementById('ideaGenBtn');
@@ -1493,15 +1505,15 @@
                 _ideaGenState.adjacencyUrls = adjUrls;
                 const timer = _startBtnTimer(btn, 'Generating');
                 statusEl.innerHTML = (adjUrls
-                    ? '🎯 Fetching your adjacency videos (title + transcript) &amp; brainstorming with Claude Opus 4.8 (~20-40s)…'
-                    : '🔎 Pulling the top AI videos on YouTube &amp; brainstorming with Claude Opus 4.8 (~15-30s)…');
+                    ? '🎯 Fetching your adjacency videos (title + transcript) &amp; brainstorming with Claude Opus 5 (~20-40s)…'
+                    : '🔎 Pulling the top AI videos on YouTube &amp; brainstorming with Claude Opus 5 (~15-30s)…');
                 listEl.innerHTML = '';
                 document.getElementById('ideaGenUseRow').style.display = 'none';
                 try {
                     const r = await fetch('/api/ideas/generate', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ request: req, adjacency_urls: adjUrls })
+                        body: JSON.stringify({ request: req, adjacency_urls: adjUrls, lane: lane })
                     });
                     const data = await r.json();
                     if (!data.success) { statusEl.textContent = '❌ ' + (data.error || 'Failed to generate ideas'); return; }

@@ -4492,6 +4492,41 @@ ANTHROPIC_MODEL = "claude-opus-4-8"
 # Kept separate from ANTHROPIC_MODEL so other Claude features are unaffected.
 IDEA_MODEL = "claude-opus-5"
 
+# --- Idea Generator content lanes -------------------------------------------
+# Historically the Idea Generator hard-coded a "careers / resumes / layoffs"
+# weighting into its system prompt, so *every* batch drifted back to job-hunting
+# ideas no matter what was asked. The lane is now a per-request choice. "auto"
+# (the default) applies NO thematic weighting at all — the topic box and the
+# live trend signal decide the subject.
+IDEA_LANES = {
+    "auto": "",
+    "careers": (
+        "CONTENT LANE — CAREERS & WORK: weight ideas toward helping regular "
+        "people AI-proof and accelerate their careers (avoid layoffs, better "
+        "interviews/resumes, earn more, save time), while keeping range.\n\n"
+    ),
+    "everyday": (
+        "CONTENT LANE — EVERYDAY LIFE: weight ideas toward using AI in daily "
+        "life outside of work — home, money, family, health, travel, learning, "
+        "hobbies, admin drudgery. Do NOT default to job/resume/career ideas.\n\n"
+    ),
+    "news": (
+        "CONTENT LANE — AI NEWS & BIG MOVES: weight ideas toward reacting to "
+        "real, current, named AI events — launches, announcements, public "
+        "statements by major figures, industry shake-ups. Anchor every idea in "
+        "a specific verifiable thing that actually happened, name the people "
+        "and products involved, and explain what it means for a normal viewer. "
+        "Do NOT default to job/resume/career ideas.\n\n"
+    ),
+    "tools": (
+        "CONTENT LANE — TOOLS & HOW-TO: weight ideas toward hands-on demos, "
+        "comparisons, workflows and step-by-steps with specific named AI "
+        "tools. Do NOT default to job/resume/career ideas.\n\n"
+    ),
+}
+IDEA_LANE_DEFAULT = "auto"
+
+
 # Model used for the optional "final polish" pass on a finished script. Claude
 # Fable 5 is Anthropic's newest storytelling-tuned model; it rewrites the script
 # to be punchier, more current, and more advanced without changing the format.
@@ -4916,6 +4951,14 @@ def api_ideas_generate():
     # we fall back to a trend-driven brainstorm.
     has_request = bool(user_request)
 
+    # Content lane — which thematic bucket to weight toward. Defaults to "auto"
+    # (no weighting) so the generator no longer silently drags every batch back
+    # to the careers/resume lane.
+    lane_key = (data.get("lane") or IDEA_LANE_DEFAULT).strip().lower()
+    if lane_key not in IDEA_LANES:
+        lane_key = IDEA_LANE_DEFAULT
+    lane_block = IDEA_LANES[lane_key]
+
     # Optional adjacency targets: YouTube links the creator wants to be the
     # "natural next watch" to. We fetch each title + transcript and steer the
     # ideas to ride them (suggested-adjacency). Accept a list or newline string.
@@ -4968,19 +5011,17 @@ def api_ideas_generate():
 
     system = (
         "You are the creative producer for @AIwithRoz, a YouTube channel of "
-        "punchy, optimistic explainer videos about using AI to improve everyday "
-        "life and careers (2026, general audience). The brand is broad — 'AI for "
-        "everyday life' — but the strongest emotional lane is helping regular "
-        "people AI-proof and accelerate their careers (avoid layoffs, better "
-        "interviews/resumes, earn more, save time); weight ideas toward that "
-        "lane while keeping range.\n\n"
+        "punchy, optimistic explainer videos about using AI in real life "
+        "(2026, general audience). The brand is broad — 'AI for "
+        "everyday life'.\n\n"
+        + lane_block +
         "Bias every idea toward one of these PROVEN breakout formats:\n"
         "  • 'I Let AI ___ for a Week' (experiment/challenge — built-in suspense)\n"
-        "  • 'AI Teardown' (rebuild a viewer's resume/email/budget/plan, before→after)\n"
+        "  • 'AI Teardown' (rebuild something of the viewer's, before→after)\n"
         "  • 'What This Means for YOU' (react to a fresh AI drop, everyday-life lens)\n"
         "  • 'The 5-Minute AI Fix' (one annoying problem solved fast)\n"
         "  • 'Can AI Actually Do This?' (skeptic tests a bold claim)\n"
-        "  • 'AI Did My Job for a Day' (immersive, per role/vertical)\n\n"
+        "  • 'Who Actually Wins/Loses' (follow the consequences of a real AI move)\n\n"
         "TITLE CRAFT (this is what drives clicks): open a curiosity gap or real "
         "stakes, be specific, use a number when natural, keep the word 'AI' "
         "visible, aim for ~50–60 characters, and front-load the benefit. Every "
@@ -4996,7 +5037,7 @@ def api_ideas_generate():
             "batch (below). Every one of the 10 ideas MUST be directly and "
             "obviously about THAT topic. The brand lane, breakout formats, and "
             "trending videos are ONLY styling and framing — never swap the "
-            "subject for the generic career lane or for whatever is trending. "
+            "subject for a different lane or for whatever is trending. "
             "Vary the angle and format across the 10 ideas; never the subject. "
             "If the topic is narrow, go DEEPER (sub-angles, objections, "
             "use-cases, comparisons, step-by-steps, myths, mistakes) rather than "
@@ -5035,8 +5076,8 @@ def api_ideas_generate():
         '  "angle": one sentence naming the format + the cold-open hook / why it earns the click\n'
         "Return only the JSON array."
     )
-    logger.info("💡 Idea generation requested: %r (top_youtube=%d, adjacency=%d)",
-                user_request, len(top_videos), len(adjacency))
+    logger.info("💡 Idea generation requested: %r (lane=%s, top_youtube=%d, adjacency=%d)",
+                user_request, lane_key, len(top_videos), len(adjacency))
     try:
         text = _anthropic_complete(system, user, max_tokens=4000,
                                    use_web_search=True, max_searches=4,
