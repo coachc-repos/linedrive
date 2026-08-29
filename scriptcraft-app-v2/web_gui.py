@@ -1770,7 +1770,8 @@ async def process_script_creation(session_id, topic, audience, tone,
                                   video_length, production_type, goals,
                                   quick_test=False, checkboxes=None,
                                   heygen_template_id="", heygen_api_key="",
-                                  heygen_voice_id="", grok_api_key=""):
+                                  heygen_voice_id="", grok_api_key="",
+                                  description=""):
     """Clean script creation with only console capture"""
     logger.info(f"🎬 SCRIPT CREATION STARTED: session={session_id}")
     if quick_test:
@@ -1835,7 +1836,7 @@ async def process_script_creation(session_id, topic, audience, tone,
                 result = await asyncio.wait_for(
                     system.run_complete_script_workflow_sequential(
                         script_topic=topic,
-                        topic_description="",
+                        topic_description=description,
                         audience=audience,
                         tone=tone,
                         script_length=video_length,
@@ -6091,6 +6092,11 @@ def create():
     # Get form data
     data = request.get_json() or {}
     topic = data.get("topic", "AI in daily life")
+    # The creative brief from the Create Script dialog. This is the single most
+    # important steering input the workflow gets — without it the Topic
+    # Assistant and Script Writer fall back to "use the topic title as a guide"
+    # and invent an episode from the title alone.
+    description = (data.get("description") or "").strip()
     audience = data.get("audience", "general")
     tone = data.get("tone", "professional")
     video_length = data.get("video_length", "medium")
@@ -6135,6 +6141,12 @@ def create():
 
     logger.info(f"🎬 Starting script creation: {session_id}")
     logger.info(f"📝 Topic: {topic}, Audience: {audience}, Tone: {tone}")
+    if description:
+        logger.info(f"📋 Brief: {len(description)} chars — steering the "
+                    f"Topic Assistant and Script Writer")
+    else:
+        logger.warning("⚠️ NO BRIEF SUPPLIED — the workflow will invent an "
+                       "episode from the topic title alone")
     logger.info(f"📋 Checkboxes: {checkboxes}")
     if quick_test:
         logger.info(f"⚡ QUICK TEST MODE: 1 chapter only")
@@ -6159,6 +6171,7 @@ def create():
                         production_type, goals, quick_test, checkboxes,
                         heygen_template_id, heygen_api_key,
                         heygen_voice_id, grok_api_key,
+                        description=description,
                     ),
                 )
         except Exception as e:
