@@ -1049,10 +1049,24 @@ Required Output:
 1. LOGICAL chapter breakdown (5-8 chapters maximum for {script_length})
 2. Each chapter must have a SPECIFIC, DESCRIPTIVE title that reflects 
    the user's description requirements
-3. Key points and learning objectives per chapter (aligned with description)
+3. Key points per chapter, drawn from the description (aligned with description)
 4. Content flow and timing guidance
 5. Specific examples suitable for {audience}
 6. Tone guidelines to achieve {tone} style
+
+FIDELITY RULES (these override every other instruction):
+- If the description names specific events, products, people, companies,
+  quotes, dates or URLs, those are the SUBJECT of the script. Build the
+  chapters around THEM. Carry the specific names through into the chapter
+  titles and key points — do not abstract them into generic themes.
+- Do NOT convert the description into a generic "practical guide", "how-to",
+  tutorial, tips listicle, or business-strategy explainer unless the
+  description explicitly asks for one. If the description is a set of news
+  events, the script is about those events.
+- Do NOT introduce statistics, studies, surveys, reports or expert quotes that
+  are absent from the description. Never invent a source or a number.
+- If the description contains a block of constraints (for example
+  "NON-NEGOTIABLE FACTS"), treat every line of it as a hard requirement.
 
 CHAPTER STRUCTURE REQUIREMENTS:
 - Chapter 1: Introduction/Overview (hook the audience based on description)
@@ -1261,6 +1275,16 @@ Write a detailed script for CHAPTER {i} ONLY: "{chapter_topic}"
 
 CRITICAL REQUIREMENTS:
 1. Follow the USER'S DESCRIPTION above for tone, depth, and approach
+1a. FACTUAL FIDELITY — the description is the source of truth. Use the specific
+    events, products, people, companies, quotes, dates and URLs it names, by
+    name. Do NOT replace them with generic framing, a "practical guide", a
+    how-to, or business-strategy commentary. Do NOT introduce statistics,
+    studies, surveys, reports or expert quotes that are absent from the
+    description — if you need a number or a quote, it must come from the
+    description. Never invent or paraphrase-into-quotes a statement attributed
+    to a real person. If the description marks a quote as unavailable, describe
+    the event in your own words instead. If the description includes a
+    constraints block (e.g. "NON-NEGOTIABLE FACTS"), obey every line of it.
 2. Minimum {minutes_per_chapter} minutes of content ({words_per_chapter}+ words)
 3. Use {tone} tone appropriate for {audience}
 4. Include detailed, specific host dialogue (not summaries)
