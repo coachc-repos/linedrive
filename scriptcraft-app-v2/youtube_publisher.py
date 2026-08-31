@@ -45,7 +45,8 @@ TOKEN_PATH = SCRIPTCRAFT_DIR / "youtube_token.json"
 # scope is required to read and modify playlists (add the new video to one
 # or more of the channel's playlists).
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
-          "https://www.googleapis.com/auth/youtube"]
+          "https://www.googleapis.com/auth/youtube",
+          "https://www.googleapis.com/auth/youtube.force-ssl"]
 
 # YouTube category ID lookup (US defaults). We default to Science & Tech (28)
 # for the AI for Roz channel if the agent's recommendation is missing.
